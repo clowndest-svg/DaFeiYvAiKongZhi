@@ -55,6 +55,7 @@ function mockJson(mockKind) {
         memories: [],
         profile_updates: [],
         intentions: [],
+        senses: [],
       };
     case 'post:qzone':
       return { content: '今天心情不错，想出去走走。', tags: [] };

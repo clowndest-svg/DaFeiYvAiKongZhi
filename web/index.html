@@ -28,6 +28,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H9l-5 4V6Z"/></svg>
           <span>聊天</span>
         </button>
+        <button class="rail-btn" data-view="presence" title="陪伴">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4.5 21c1.2-3.6 4-5.5 7.5-5.5s6.3 1.9 7.5 5.5"/><path d="M9 7.5h.01M15 7.5h.01"/></svg>
+          <span>陪伴</span>
+        </button>
         <button class="rail-btn" data-view="memory" title="记忆">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4c-3 0-5 1.8-5 4.2 0 1.4.7 2.5 1.6 3.3-.7.8-1.1 1.8-1.1 2.9 0 2.6 2 4.6 4.5 4.6.7 0 1.3-.1 1.9-.4.6.3 1.2.4 1.9.4 2.5 0 4.5-2 4.5-4.6 0-1.1-.4-2.1-1.1-2.9.9-.8 1.6-1.9 1.6-3.3C19 5.8 17 4 14 4c-.7 0-1.4.1-2 .4-.6-.3-1.3-.4-2-.4Z"/></svg>
           <span>记忆</span>
@@ -137,6 +141,73 @@
                 <div><span class="muted">当前上下文 tokens</span><strong id="sessionTokens">--</strong></div>
                 <div><span class="muted">QQ</span><strong id="qqState">未连接</strong></div>
               </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-presence">
+          <div class="presence-grid">
+            <section class="pet-panel">
+              <div class="pet-stage" id="petStage">
+                <div class="pet-inner" id="petInner">
+                  <img class="pet-figure" id="petFigure" src="/char/normal.png" alt="小知">
+                  <img class="pet-figure pet-next" id="petFigureNext" src="/char/normal.png" alt="">
+                </div>
+                <span class="pet-tag" id="petTag">她在看你</span>
+                <div class="pet-pip hidden" id="camPip">
+                  <video id="camVideo" playsinline muted></video>
+                  <canvas id="camCanvas" width="640" height="480"></canvas>
+                </div>
+              </div>
+              <div class="caption-bar" id="captionBar" aria-live="polite">她还没开口</div>
+              <div class="presence-row">
+                <button type="button" class="icon-btn" id="camToggleBtn">打开摄像头</button>
+                <button type="button" class="icon-btn" id="camLookBtn">让她看一眼</button>
+                <button type="button" class="icon-btn" id="micBtn">点一下开始说</button>
+                <button type="button" class="icon-btn" id="speakBtn">用她的声音念：关</button>
+                <button type="button" class="icon-btn" id="petWindowBtn">桌宠小窗</button>
+              </div>
+              <div class="presence-row">
+                <label class="inline-label" for="camDeviceSelect">摄像头</label>
+                <select id="camDeviceSelect"><option value="">先打开摄像头才有列表</option></select>
+              </div>
+              <div class="presence-row">
+                <label class="check"><input type="checkbox" id="camAutoToggle"> 过一会儿自己看一眼</label>
+              </div>
+              <div class="chip-row" id="quickChips"></div>
+              <p class="muted small" id="presenceHint">正在检查这台设备能不能用摄像头和麦克风…</p>
+              <audio id="presenceAudio" class="hidden" preload="auto"></audio>
+            </section>
+
+            <aside class="presence-side">
+              <section class="card">
+                <h3>情绪基础（神经递质）</h3>
+                <div class="neuro-list" id="neuroList"><p class="muted small">没开：设置页「陪伴与感官」里打开「神经递质情绪底座」。</p></div>
+                <p class="muted small" id="neuroHint"></p>
+              </section>
+              <section class="card">
+                <h3>她的大脑（真实计数）</h3>
+                <canvas id="brainCanvas" width="520" height="220" aria-label="大脑连接示意"></canvas>
+                <div class="brain-stats" id="brainStats"><p class="muted small">正在数…</p></div>
+                <p class="muted small" id="brainNote"></p>
+              </section>
+              <section class="card">
+                <h3>拟人遗忘曲线</h3>
+                <div class="forget-list" id="forgetList"><p class="muted small">还没有可测的记忆。</p></div>
+                <canvas id="forgetCanvas" width="520" height="180" aria-label="遗忘曲线"></canvas>
+                <p class="muted small" id="forgetNote"></p>
+              </section>
+              <section class="card">
+                <h3>感官记忆</h3>
+                <div class="sense-list" id="senseList"><p class="muted small">还没记过味道、气味或画面。</p></div>
+                <div class="btn-row">
+                  <button type="button" class="icon-btn" id="clearSensesBtn">清空感官记忆</button>
+                </div>
+              </section>
+              <section class="card">
+                <h3>人格锚与配额</h3>
+                <div class="kv-lines" id="presenceBudget"><p class="muted small">正在读…</p></div>
+              </section>
             </aside>
           </div>
         </section>
@@ -285,6 +356,7 @@
               <a href="#set-card-model">模型</a>
               <a href="#set-card-memory">记忆</a>
               <a href="#set-card-proactive">主动</a>
+              <a href="#set-card-presence">陪伴</a>
               <a href="#set-card-qq">QQ</a>
               <a href="#set-card-qq-login">QQ 登录</a>
               <a href="#set-card-social">社交</a>
@@ -356,6 +428,32 @@
                 <label>连着几次他不回就先不打扰（1–5）<input id="setMaxUnanswered" type="number" min="1" max="5"></label>
                 <p class="muted small" id="proactiveHint">正在读取她的打算…</p>
                 <p class="muted small">她不是定时器：你每发一条消息，她会在“最短–最长”之间重新抽一个时间点想起你；到点才发。发完你没回，连着几次（上面那个数）之后她会停手，等你先开口。</p>
+              </section>
+
+              <section class="card" id="set-card-presence">
+                <h3>陪伴与感官</h3>
+                <p class="muted small">这一页的东西默认都是关的：会动设备、会花钱、会改情绪口径的，都要你明确打开。关掉时她的行为和以前一模一样。</p>
+                <label class="check"><input type="checkbox" id="setGaze"> 陪伴页：她的头和身体跟着你的鼠标（视差，不是骨骼跟踪）</label>
+                <label class="check"><input type="checkbox" id="setExpression"> 陪伴页：按心情和表情标记换立绘</label>
+                <label class="check"><input type="checkbox" id="setBreathing"> 陪伴页：呼吸和随机眨眼</label>
+                <label class="check"><input type="checkbox" id="setSubtitles"> 陪伴页：说话时显示字幕</label>
+                <label class="check"><input type="checkbox" id="setCameraEnabled"> 允许她看摄像头（只在打开陪伴页时取画面，不后台偷拍）</label>
+                <div class="row">
+                  <label>一天最多让她看几次 <input id="setCameraDailyMax" type="number" min="0" max="200"></label>
+                  <label>两次之间至少隔几秒（30–3600）<input id="setCameraInterval" type="number" min="30" max="3600"></label>
+                </div>
+                <label class="check"><input type="checkbox" id="setMicEnabled"> 允许网页麦克风：你说的话在本机用 SenseVoice 转字</label>
+                <label class="check"><input type="checkbox" id="setSpeakReplies"> 用她的声音念出来（走服务端 TTS，和 QQ 语音分开算额度）</label>
+                <label>控制台一天最多念几句 <input id="setSpeakDailyMax" type="number" min="0" max="200"></label>
+                <label>快捷回话（逗号分隔，最多 12 个）<input id="setQuickChips" maxlength="80" placeholder="哼,好,哦"></label>
+                <details class="settings-group">
+                  <summary>内在模型（会改她的状态口径，默认关）</summary>
+                  <label class="check"><input type="checkbox" id="setNeuroEnabled"> 神经递质情绪底座：多巴胺/血清素/催产素/皮质醇/去甲肾上腺素</label>
+                  <label>递质对心情的影响强度（0–1）<input id="setNeuroStrength" type="number" min="0" max="1" step="0.05"></label>
+                  <label class="check"><input type="checkbox" id="setForgettingCurve"> 拟人遗忘曲线：想不起来的事在检索里往后排</label>
+                  <label class="check"><input type="checkbox" id="setSensesEnabled"> 感官记忆：她记住尝到/闻到/看到的东西（必须有你的原话做证据）</label>
+                </details>
+                <p class="muted small">摄像头和麦克风只在 <code>127.0.0.1</code> 或 HTTPS 下能用；外网用 HTTP 打开时这两个按钮会直接说明用不了，不会点了没反应。</p>
               </section>
 
               <section class="card" id="set-card-qq">

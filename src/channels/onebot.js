@@ -9,6 +9,7 @@ import { costBlocked, noteCostSkip } from '../budget.js';
 import { getLearnedImageBase64, lastLearnedImage, learnImage, listLearnedImages, randomLearnedImage } from '../learned-images.js';
 import { logger } from '../logger.js';
 import { getMood } from '../mood.js';
+import { applyNeuroEvent } from '../neuro.js';
 import { synthesizeSpeech } from '../tts.js';
 import { transcribeRecord, transcribeWav } from '../asr.js';
 import { buildSelfFollowUpPrompt } from '../prompt.js';
@@ -220,6 +221,7 @@ export class OneBotChannel {
     if (now - this.lastDownEventAt > 15 * 60000) {
       this.lastDownEventAt = now;
       addEvent('qq_down', `QQ 通道断了 ${Math.round(downMinutes)} 分钟，她收不到你的消息`, { downMinutes: Math.round(downMinutes) });
+      applyNeuroEvent('channel_down');
     }
     if (!settings.qq.autoRecover || !this.onNeedRecover) return { downMinutes, recovered: false };
     this.recoverTimestamps = this.recoverTimestamps.filter((t) => now - t < 3600000);

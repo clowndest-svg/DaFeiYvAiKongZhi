@@ -221,6 +221,8 @@ function switchView(name) {
     loadStickerStatus().catch(() => {});
     loadQzoneStatus().catch(() => {});
   }
+  if (previousView === 'presence' && name !== 'presence') leavePresenceView();
+  if (name === 'presence') enterPresenceView();
 }
 
 function bindNavigation() {
@@ -435,6 +437,8 @@ async function liveRefresh() {
         state.memoryRefreshAt = now;
         await loadMemory();
       }
+    } else if (state.view === 'presence') {
+      await loadPresenceState();
     }
   } catch (error) {
     if (!state.loginRequired && !state.offline) toast(`实时刷新失败：${error.message}`, 'error');
@@ -571,6 +575,11 @@ function appendMessage(message, { images = [] } = {}) {
   node.appendChild(wrap);
   box.appendChild(node);
   scrollMessages(false);
+  if (message.role === 'assistant' && presenceVisible()) {
+    const hint = message.meta?.stickerHint;
+    if (hint && PET_FIGURES[hint]) setPetExpression(hint);
+    showCaption(message.content, { speak: true });
+  }
   return bubble;
 }
 
@@ -1640,6 +1649,22 @@ function fillSettings() {
   $('#setMaxDailyCostCny').value = settings.cost?.maxDailyCostCny ?? 3;
   $('#setAutoSpeak').checked = Boolean(settings.ui?.autoSpeak);
   $('#setShowThought').checked = settings.ui?.showInnerThought !== false;
+  const presence = settings.presence || {};
+  $('#setGaze').checked = presence.gaze !== false;
+  $('#setExpression').checked = presence.expression !== false;
+  $('#setBreathing').checked = presence.breathing !== false;
+  $('#setSubtitles').checked = presence.subtitles !== false;
+  $('#setCameraEnabled').checked = Boolean(presence.cameraEnabled);
+  $('#setCameraDailyMax').value = presence.cameraDailyMax ?? 20;
+  $('#setCameraInterval').value = presence.cameraIntervalSeconds ?? 90;
+  $('#setMicEnabled').checked = Boolean(presence.micEnabled);
+  $('#setSpeakReplies').checked = Boolean(presence.speakReplies);
+  $('#setSpeakDailyMax').value = presence.speakDailyMax ?? 40;
+  $('#setQuickChips').value = presence.quickChips ?? '';
+  $('#setNeuroEnabled').checked = Boolean(presence.neuroEnabled);
+  $('#setNeuroStrength').value = presence.neuroStrength ?? 0.35;
+  $('#setForgettingCurve').checked = Boolean(presence.forgettingCurve);
+  $('#setSensesEnabled').checked = Boolean(presence.sensesEnabled);
   $('#setPersona').value = state.persona || '';
 }
 
@@ -1774,6 +1799,24 @@ function collectSettings() {
       ...(prev.ui || {}),
       autoSpeak: $('#setAutoSpeak').checked,
       showInnerThought: $('#setShowThought').checked,
+    },
+    presence: {
+      ...(prev.presence || {}),
+      gaze: $('#setGaze').checked,
+      expression: $('#setExpression').checked,
+      breathing: $('#setBreathing').checked,
+      subtitles: $('#setSubtitles').checked,
+      cameraEnabled: $('#setCameraEnabled').checked,
+      cameraDailyMax: Number($('#setCameraDailyMax').value) || 0,
+      cameraIntervalSeconds: Number($('#setCameraInterval').value) || 90,
+      micEnabled: $('#setMicEnabled').checked,
+      speakReplies: $('#setSpeakReplies').checked,
+      speakDailyMax: Number($('#setSpeakDailyMax').value) || 0,
+      quickChips: String($('#setQuickChips').value || '').trim(),
+      neuroEnabled: $('#setNeuroEnabled').checked,
+      neuroStrength: Number($('#setNeuroStrength').value) || 0,
+      forgettingCurve: $('#setForgettingCurve').checked,
+      sensesEnabled: $('#setSensesEnabled').checked,
     },
   };
 }
@@ -2703,9 +2746,911 @@ function bindLogin() {
   });
 }
 
+/* ---------------- presence（陪伴：立绘 / 摄像头 / 麦克风 / 字幕 / 身体状态） ---------------- */
+
+const PET_FIGURES = {
+  normal: '/char/normal.png',
+  happy: '/char/happy.png',
+  shy: '/char/shy.png',
+  surprised: '/char/surprised.png',
+  blink: '/char/blink.png',
+};
+
+const pet = {
+  stream: null,
+  track: null,
+  devices: [],
+  autoTimer: null,
+  blinkTimer: null,
+  expression: 'normal',
+  busy: false,
+  recording: false,
+  audio: null,
+  audioCtx: null,
+  source: null,
+  processor: null,
+  samples: [],
+  recordStartAt: 0,
+  lastLookAt: 0,
+  data: null,
+};
+
+const voice = { seq: 0, running: false, wanted: null };
+
+function presenceSettings() {
+  return (pet.data && pet.data.presence) || (state.settings && state.settings.presence) || {};
+}
+
+function petModeOn() {
+  return document.body.classList.contains('mode-pet');
+}
+
+function presenceVisible() {
+  return state.view === 'presence' || petModeOn();
+}
+
+function setPresenceHint(text, kind = '') {
+  const node = $('#presenceHint');
+  if (!node) return;
+  node.textContent = text;
+  node.classList.toggle('warn', kind === 'warn');
+  node.classList.toggle('ok', kind === 'ok');
+}
+
+function setPetExpression(name, { blink = false } = {}) {
+  const cfg = presenceSettings();
+  const src = PET_FIGURES[name] || PET_FIGURES.normal;
+  const current = $('#petFigure');
+  const next = $('#petFigureNext');
+  if (!current || !next) return;
+  if (blink) {
+    if (current.getAttribute('src') !== src) current.setAttribute('src', src);
+    return;
+  }
+  if (!cfg.expression) return;
+  if (current.getAttribute('src') === src) {
+    pet.expression = name;
+    return;
+  }
+  next.setAttribute('src', src);
+  next.classList.add('fading');
+  current.classList.add('hidden-layer');
+  window.setTimeout(() => {
+    current.setAttribute('src', src);
+    current.classList.remove('hidden-layer');
+    next.classList.remove('fading');
+  }, 240);
+  pet.expression = name;
+  const tag = $('#petTag');
+  if (tag) tag.textContent = { happy: '她挺开心', shy: '她有点闷', surprised: '她来精神了', normal: '她在看你' }[name] || '她在看你';
+}
+
+function applyBreathing() {
+  const inner = $('#petInner');
+  if (inner) inner.classList.toggle('breathing', presenceSettings().breathing !== false);
+}
+
+function expressionForMood(mood) {
+  const valence = Number(mood?.valence ?? 0);
+  const energy = Number(mood?.energy ?? 0.5);
+  if (valence >= 0.45 && energy >= 0.55) return 'happy';
+  if (valence <= -0.25) return 'shy';
+  if (valence <= 0.05 && energy >= 0.6) return 'surprised';
+  return 'normal';
+}
+
+function startBlinkLoop() {
+  if (pet.blinkTimer) return;
+  const tick = () => {
+    if (!presenceVisible() || document.hidden) {
+      pet.blinkTimer = window.setTimeout(tick, 4000);
+      return;
+    }
+    if (presenceSettings().breathing !== false) {
+      setPetExpression('blink', { blink: true });
+      window.setTimeout(() => setPetExpression(pet.expression, { blink: true }), 150);
+    }
+    pet.blinkTimer = window.setTimeout(tick, 2400 + Math.random() * 4200);
+  };
+  pet.blinkTimer = window.setTimeout(tick, 2600);
+}
+
+function bindPetGaze() {
+  const stage = $('#petStage');
+  if (!stage || stage.dataset.gaze === '1') return;
+  stage.dataset.gaze = '1';
+  const figure = $('#petFigure');
+  const next = $('#petFigureNext');
+  const apply = (dx, dy) => {
+    const cfg = presenceSettings();
+    const on = cfg.gaze !== false;
+    const tx = on ? dx * 14 : 0;
+    const ty = on ? dy * 9 : 0;
+    const rot = on ? dx * 2.2 : 0;
+    const transform = `translate3d(${tx}px, ${ty}px, 0) rotate(${rot}deg)`;
+    if (figure) figure.style.transform = transform;
+    if (next) next.style.transform = transform;
+    stage.classList.toggle('looking', Math.abs(dx) + Math.abs(dy) > 0.12);
+  };
+  stage.addEventListener('pointermove', (event) => {
+    const box = stage.getBoundingClientRect();
+    if (!box.width || !box.height) return;
+    apply(((event.clientX - box.left) / box.width) * 2 - 1, ((event.clientY - box.top) / box.height) * 2 - 1);
+  });
+  stage.addEventListener('pointerleave', () => apply(0, 0));
+}
+
+function mediaCapability() {
+  if (!window.isSecureContext) return { ok: false, reason: '现在不是安全上下文：用 http://127.0.0.1 或 HTTPS 打开才能用摄像头和麦克风' };
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return { ok: false, reason: '这个浏览器没有 getUserMedia，换 Chrome 或 Edge' };
+  return { ok: true, reason: '' };
+}
+
+async function listCameras() {
+  const select = $('#camDeviceSelect');
+  if (!select) return;
+  try {
+    const all = await navigator.mediaDevices.enumerateDevices();
+    pet.devices = all.filter((d) => d.kind === 'videoinput');
+    select.innerHTML = '';
+    if (!pet.devices.length) {
+      const option = document.createElement('option');
+      option.textContent = '没找到摄像头';
+      select.appendChild(option);
+      return;
+    }
+    for (const [index, device] of pet.devices.entries()) {
+      const option = document.createElement('option');
+      option.value = device.deviceId;
+      option.textContent = device.label || `摄像头 ${index + 1}`;
+      if (pet.track && pet.track.getSettings().deviceId === device.deviceId) option.selected = true;
+      select.appendChild(option);
+    }
+  } catch (error) {
+    setPresenceHint(`摄像头列表读不出来：${error.message}`, 'warn');
+  }
+}
+
+async function openCamera() {
+  const cap = mediaCapability();
+  if (!cap.ok) {
+    setPresenceHint(cap.reason, 'warn');
+    return;
+  }
+  if (!presenceSettings().cameraEnabled) {
+    setPresenceHint('摄像头是关的：到设置页「陪伴与感官」打开「允许她看摄像头」', 'warn');
+    return;
+  }
+  closeCamera();
+  const wanted = $('#camDeviceSelect') ? $('#camDeviceSelect').value : '';
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: wanted ? { deviceId: { exact: wanted }, width: { ideal: 1280 } } : { width: { ideal: 1280 } },
+      audio: false,
+    });
+    pet.stream = stream;
+    pet.track = stream.getVideoTracks()[0] || null;
+    const video = $('#camVideo');
+    video.srcObject = stream;
+    await video.play().catch(() => {});
+    $('#camPip').classList.remove('hidden');
+    $('#camToggleBtn').textContent = '关掉摄像头';
+    await listCameras();
+    setPresenceHint('画面只在你打开这一页时才取；关掉这页或切走就断流。', 'ok');
+  } catch (error) {
+    const reason = error && error.name === 'NotAllowedError' ? '你（或系统）没给摄像头权限' : error && error.name === 'NotFoundError' ? '这台机器没有可用摄像头' : error.message;
+    setPresenceHint(`摄像头打不开：${reason}`, 'warn');
+    $('#camPip').classList.add('hidden');
+  }
+}
+
+function closeCamera() {
+  if (pet.stream) {
+    for (const track of pet.stream.getTracks()) track.stop();
+  }
+  pet.stream = null;
+  pet.track = null;
+  const video = $('#camVideo');
+  if (video) video.srcObject = null;
+  const pip = $('#camPip');
+  if (pip) pip.classList.add('hidden');
+  const btn = $('#camToggleBtn');
+  if (btn) btn.textContent = '打开摄像头';
+  stopAutoLook();
+}
+
+function captureFrame() {
+  const video = $('#camVideo');
+  const canvas = $('#camCanvas');
+  if (!video || !canvas || !video.videoWidth) return '';
+  const max = 960;
+  const scale = Math.min(1, max / Math.max(video.videoWidth, video.videoHeight));
+  canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+  canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  try {
+    return canvas.toDataURL('image/jpeg', 0.82);
+  } catch {
+    return '';
+  }
+}
+
+async function lookNow(caption = '') {
+  if (pet.busy) return;
+  const cfg = presenceSettings();
+  if (!cfg.cameraEnabled) {
+    setPresenceHint('摄像头是关的：设置页「陪伴与感官」里打开', 'warn');
+    return;
+  }
+  const image = captureFrame();
+  if (!image) {
+    setPresenceHint('还没拿到画面：先点「打开摄像头」，等画面出来再让她看', 'warn');
+    return;
+  }
+  pet.busy = true;
+  setPresenceHint('她在看…');
+  try {
+    const result = await api('/api/presence/look', { method: 'POST', body: { image, caption } });
+    pet.lastLookAt = Date.now();
+    setPresenceHint(`看过了（今天 ${result.budget?.cameraToday ?? '?'}/${result.budget?.cameraMax ?? '?'}）`, 'ok');
+    if (result.message) appendMessage(result.message);
+    else showCaption(result.text || '', { speak: true });
+    await loadPresenceState();
+  } catch (error) {
+    setPresenceHint(`她没看成：${error.message}`, 'warn');
+    if (/次数用完|再等|到线|关的/.test(error.message)) stopAutoLook();
+  } finally {
+    pet.busy = false;
+  }
+}
+
+function startAutoLook() {
+  stopAutoLook();
+  const seconds = Math.max(30, Number(presenceSettings().cameraIntervalSeconds) || 90);
+  pet.autoTimer = window.setInterval(() => {
+    if (document.hidden || !presenceVisible() || pet.busy || pet.recording) return;
+    lookNow('');
+  }, seconds * 1000);
+  setPresenceHint(`她会每 ${seconds} 秒自己看一眼（切走页面或关掉摄像头就停）`, 'ok');
+}
+
+function stopAutoLook() {
+  if (pet.autoTimer) window.clearInterval(pet.autoTimer);
+  pet.autoTimer = null;
+  const box = $('#camAutoToggle');
+  if (box) box.checked = false;
+}
+
+/* ---- 麦克风：浏览器采集 → 本地重采样成 16k 单声道 WAV → 交给本机 SenseVoice ---- */
+
+function resampleTo16k(float32, sourceRate) {
+  const target = 16000;
+  if (!float32.length) return new Float32Array(0);
+  if (sourceRate === target) return float32;
+  const ratio = sourceRate / target;
+  const length = Math.max(1, Math.floor(float32.length / ratio));
+  const out = new Float32Array(length);
+  for (let i = 0; i < length; i += 1) {
+    const at = i * ratio;
+    const left = Math.floor(at);
+    const right = Math.min(float32.length - 1, left + 1);
+    const mix = at - left;
+    out[i] = float32[left] * (1 - mix) + float32[right] * mix;
+  }
+  return out;
+}
+
+function encodeWav(samples, sampleRate) {
+  const buffer = new ArrayBuffer(44 + samples.length * 2);
+  const view = new DataView(buffer);
+  const text = (offset, value) => {
+    for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
+  };
+  text(0, 'RIFF');
+  view.setUint32(4, 36 + samples.length * 2, true);
+  text(8, 'WAVE');
+  text(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * 2, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  text(36, 'data');
+  view.setUint32(40, samples.length * 2, true);
+  for (let i = 0; i < samples.length; i += 1) {
+    const clamped = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(44 + i * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
+  }
+  return buffer;
+}
+
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+async function startMic() {
+  const cap = mediaCapability();
+  if (!cap.ok) {
+    setPresenceHint(cap.reason, 'warn');
+    return;
+  }
+  if (!presenceSettings().micEnabled) {
+    setPresenceHint('麦克风输入是关的：设置页「陪伴与感官」里打开', 'warn');
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
+    });
+    pet.audioCtx = new AudioContext();
+    if (pet.audioCtx.state === 'suspended') await pet.audioCtx.resume();
+    pet.source = pet.audioCtx.createMediaStreamSource(stream);
+    pet.processor = pet.audioCtx.createScriptProcessor(4096, 1, 1);
+    pet.samples = [];
+    pet.processor.onaudioprocess = (event) => {
+      if (!pet.recording) return;
+      pet.samples.push(new Float32Array(event.inputBuffer.getChannelData(0)));
+    };
+    pet.source.connect(pet.processor);
+    pet.processor.connect(pet.audioCtx.destination);
+    pet.micStream = stream;
+    pet.recording = true;
+    pet.recordStartAt = Date.now();
+    const btn = $('#micBtn');
+    if (btn) {
+      btn.classList.add('recording');
+      btn.textContent = '说完了，点一下发送';
+    }
+    setPresenceHint('在录了（只走本机识别，不上传录音）', 'ok');
+  } catch (error) {
+    const reason = error && error.name === 'NotAllowedError' ? '没给麦克风权限' : error.message;
+    setPresenceHint(`麦克风开不了：${reason}`, 'warn');
+  }
+}
+
+async function stopMicAndSend() {
+  if (!pet.recording) return;
+  pet.recording = false;
+  const seconds = (Date.now() - pet.recordStartAt) / 1000;
+  const btn = $('#micBtn');
+  if (btn) {
+    btn.classList.remove('recording');
+    btn.textContent = '点一下开始说';
+  }
+  const chunks = pet.samples.slice();
+  pet.samples = [];
+  try {
+    if (pet.processor) pet.processor.disconnect();
+    if (pet.source) pet.source.disconnect();
+  } catch {
+    // 已经断开了
+  }
+  pet.processor = null;
+  pet.source = null;
+  if (pet.micStream) {
+    for (const track of pet.micStream.getTracks()) track.stop();
+    pet.micStream = null;
+  }
+  const rate = pet.audioCtx ? pet.audioCtx.sampleRate : 48000;
+  const total = chunks.reduce((sum, c) => sum + c.length, 0);
+  const merged = new Float32Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.length;
+  }
+  if (seconds < 0.4 || total < rate * 0.3) {
+    setPresenceHint('太短了，没听到什么', 'warn');
+    return;
+  }
+  const wav = encodeWav(resampleTo16k(merged, rate), 16000);
+  setPresenceHint(`转了 ${seconds.toFixed(1)} 秒的录音，正在听…`);
+  try {
+    const result = await api('/api/presence/hear', { method: 'POST', body: { audio: bufferToBase64(wav) } });
+    const spoken = String(result.text || '').replace(/[\s，。！？、,.!?~～：:；;“”“‘’（）()【】\[\]]/g, '');
+    if (!spoken) {
+      setPresenceHint('她听了，但没听出字来——环境太吵或太短', 'warn');
+      return;
+    }
+    setPresenceHint(`听到了：${result.text}`, 'ok');
+    const input = $('#chatInput');
+    if (input) input.value = result.text;
+    sendMessage();
+  } catch (error) {
+    setPresenceHint(`没听清：${error.message}`, 'warn');
+  }
+}
+
+/* ---- 字幕与她的声音 ---- */
+
+function splitSentences(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[。！？!?~；;])/u)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function showCaption(text, { speak = false } = {}) {
+  const cfg = presenceSettings();
+  const bar = $('#captionBar');
+  const clean = String(text || '').trim();
+  if (!bar) return;
+  const sentences = splitSentences(clean);
+  voice.seq += 1;
+  if (!cfg.subtitles || !sentences.length) {
+    bar.textContent = '';
+    return;
+  }
+  if (!speak || !cfg.speakReplies) {
+    bar.textContent = clean.slice(0, 220);
+    return;
+  }
+  queueSpeech(sentences, voice.seq, bar);
+}
+
+/**
+ * 念话一次只跑一条链：新的台词会顶掉还没念完的旧台词。
+ * 服务端 /api/presence/speak 上了互斥锁（合成要拉起 python），并发点只会撞成 409。
+ */
+async function queueSpeech(lines, seq, bar) {
+  voice.wanted = { lines, seq, bar };
+  if (voice.running) return;
+  voice.running = true;
+  try {
+    while (voice.wanted) {
+      const job = voice.wanted;
+      voice.wanted = null;
+      await speakJob(job);
+    }
+  } finally {
+    voice.running = false;
+  }
+}
+
+async function speakJob({ lines, seq, bar }) {
+  const audio = $('#presenceAudio');
+  if (!audio) return;
+  for (const line of lines) {
+    if (seq !== voice.seq || !presenceVisible() || document.hidden) return;
+    bar.textContent = line;
+    await playOneLine(audio, line);
+  }
+}
+
+function playOneLine(audio, line) {
+  return new Promise((resolve) => {
+    api('/api/presence/speak', { method: 'POST', body: { text: line } })
+      .then((result) => {
+        let settled = false;
+        const done = () => {
+          if (settled) return;
+          settled = true;
+          audio.onended = null;
+          audio.onerror = null;
+          pet.speaking = false;
+          resolve();
+        };
+        pet.speaking = true;
+        audio.onended = done;
+        audio.onerror = done;
+        window.setTimeout(done, 20000);
+        audio.src = withToken(result.url);
+        audio.play().catch(done);
+      })
+      .catch((error) => {
+        setPresenceHint(`念不出来：${error.message}（先用系统声音顶上）`, 'warn');
+        speak(line);
+        window.setTimeout(resolve, Math.min(9000, 1600 + line.length * 180));
+      });
+  });
+}
+
+function renderQuickChips() {
+  const box = $('#quickChips');
+  if (!box) return;
+  const raw = String(presenceSettings().quickChips || '');
+  const chips = raw.split(/[,，\s]+/).map((s) => s.trim()).filter(Boolean).slice(0, 12);
+  // 状态每 4 秒轮询一次，按钮不能每次都重建：重建会把正在点的按钮换掉，点击永远落空。
+  if (box.dataset.signature === chips.join('|')) return;
+  box.dataset.signature = chips.join('|');
+  box.innerHTML = '';
+  for (const chip of chips) {
+    const btn = el('button', 'chip');
+    btn.type = 'button';
+    btn.textContent = chip;
+    btn.addEventListener('click', () => {
+      const input = $('#chatInput');
+      if (!input) return;
+      input.value = chip;
+      sendMessage();
+    });
+    box.appendChild(btn);
+  }
+}
+
+/* ---- 身体状态 / 大脑 / 遗忘曲线 ---- */
+
+async function loadPresenceState() {
+  if (!presenceVisible()) return;
+  try {
+    const data = await api('/api/presence/state');
+    pet.data = data;
+    renderNeuro(data);
+    renderBrain(data);
+    renderSenses(data);
+    renderPresenceBudget(data);
+    renderForgetting(data);
+    renderQuickChips();
+    updatePetFromState(data);
+  } catch (error) {
+    if (!state.offline) setPresenceHint(`状态没读到：${error.message}`, 'warn');
+  }
+}
+
+function updatePetFromState(data) {
+  if (pet.speaking) return;
+  const tag = $('#petTag');
+  const mood = data.mood || {};
+  setPetExpression(expressionForMood(mood));
+  if (tag && data.neuro?.enabled && data.neuro.dominant) {
+    const item = (data.neuro.items || []).find((i) => i.key === data.neuro.dominant);
+    if (item) tag.textContent = `${item.label} ${item.delta > 0 ? '偏高' : '偏低'}`;
+  }
+}
+
+function renderNeuro(data) {
+  const box = $('#neuroList');
+  const hint = $('#neuroHint');
+  if (!box) return;
+  const neuro = data.neuro || {};
+  if (!neuro.enabled) {
+    box.innerHTML = '';
+    box.appendChild(el('p', 'muted small', '没开：设置页「陪伴与感官」里打开「神经递质情绪底座」。'));
+    if (hint) hint.textContent = '';
+    return;
+  }
+  box.innerHTML = '';
+  for (const item of neuro.items || []) {
+    const row = el('div', 'neuro-row');
+    row.appendChild(el('span', 'neuro-name', item.label));
+    const bar = el('span', 'neuro-bar');
+    const fill = el('i');
+    fill.style.width = `${Math.max(2, Math.min(100, Math.round(item.value * 100)))}%`;
+    fill.className = item.delta >= 0 ? 'up' : 'down';
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    row.appendChild(el('span', 'neuro-value', `${Math.round(item.value * 100)}%`));
+    row.title = item.note || '';
+    box.appendChild(row);
+  }
+  if (hint) {
+    const tone = neuro.tone || {};
+    hint.textContent = `对心情的影响：愉悦 ${(tone.valenceBias ?? 0) >= 0 ? '+' : ''}${(tone.valenceBias ?? 0).toFixed(2)}，精力 ${(tone.energyBias ?? 0) >= 0 ? '+' : ''}${(tone.energyBias ?? 0).toFixed(2)}（${neuro.ageMinutes ?? 0} 分钟前有过一次波动）`;
+  }
+}
+
+function fmtOr(value, unit = '') {
+  return value === null || value === undefined ? '无读数' : `${value}${unit}`;
+}
+
+function renderBrain(data) {
+  const box = $('#brainStats');
+  const note = $('#brainNote');
+  if (!box) return;
+  const brain = data.brain || {};
+  const nodes = brain.nodes || {};
+  const links = brain.links || {};
+  box.innerHTML = '';
+  const grid = el('div', 'brain-grid');
+  const cell = (label, value) => {
+    const item = el('div', 'brain-cell');
+    item.appendChild(el('b', '', fmtOr(value)));
+    item.appendChild(el('span', '', label));
+    grid.appendChild(item);
+  };
+  cell('核心档案', nodes.core);
+  cell('重点记忆', nodes.mid);
+  cell('长期记忆', nodes.long);
+  cell('说过的话', nodes.messages);
+  cell('日记', nodes.diaries);
+  cell('周记', nodes.weeklies);
+  cell('信', nodes.letters);
+  cell('感官', nodes.senses);
+  box.appendChild(grid);
+  const linkLine = el('p', 'muted small');
+  linkLine.textContent = `真实连接：检索 ${(links.recall ?? 0)} · 原话 ${(links.quote ?? 0)} · 压缩 ${(links.compaction ?? 0)} · 交接 ${(links.handover ?? 0)} · 反思 ${(links.reflect ?? 0)} · 惦记 ${(links.intention ?? 0)} · 感官 ${(links.sense ?? 0)} · 看过 ${(links.look ?? 0)}`;
+  box.appendChild(linkLine);
+  const mix = brain.moodMix;
+  if (Array.isArray(mix) && mix.length) {
+    const line = el('p', 'muted small');
+    line.textContent = `她这段时间的情绪构成：${mix.map((m) => `${m.group} ${m.count}`).join(' · ')}`;
+    box.appendChild(line);
+  }
+  const persona = brain.personality;
+  const anchor = el('p', 'muted small');
+  anchor.textContent = persona
+    ? `人格锚：人设 ${persona.file}（校验 ${persona.sha256}，${persona.chars} 字）· 妈妈信 ${persona.momLetter ? '在' : '没有'} · 备份 ${persona.backups} 份`
+    : '人格锚：读不到人设文件';
+  box.appendChild(anchor);
+  if (note) note.textContent = '这些数字全部来自库里的真实计数，画出来的点是抽样，不是全量。';
+  drawBrain($('#brainCanvas'), nodes, links);
+}
+
+function drawBrain(canvas, nodes, links) {
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  const total = ['core', 'mid', 'long', 'messages'].reduce((sum, key) => sum + (Number(nodes[key]) || 0), 0);
+  const drawn = Math.max(6, Math.min(90, total || 6));
+  const points = [];
+  for (let i = 0; i < drawn; i += 1) {
+    const angle = (i / drawn) * Math.PI * 2;
+    const radius = 40 + ((i * 37) % 60);
+    points.push({ x: width / 2 + Math.cos(angle) * radius * 1.9, y: height / 2 + Math.sin(angle) * radius * 0.72 });
+  }
+  ctx.strokeStyle = 'rgba(120,190,255,0.16)';
+  ctx.lineWidth = 1;
+  const edgeCount = Math.min(points.length, Math.max(4, Number(links.total) || 4));
+  for (let i = 0; i < edgeCount; i += 1) {
+    const a = points[i % points.length];
+    const b = points[(i * 7 + 3) % points.length];
+    ctx.beginPath();
+    ctx.moveTo(a.x, a.y);
+    ctx.lineTo(b.x, b.y);
+    ctx.stroke();
+  }
+  for (const [index, point] of points.entries()) {
+    ctx.fillStyle = index % 5 === 0 ? 'rgba(255,205,120,0.9)' : 'rgba(120,200,255,0.85)';
+    ctx.beginPath();
+    ctx.arc(point.x, point.y, index % 5 === 0 ? 3.2 : 2.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.fillStyle = 'rgba(220,235,255,0.75)';
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.fillText(total ? `画的是 ${drawn} 个点（真实节点 ${total} 个）` : '还没有可画的节点', 10, height - 10);
+}
+
+function renderForgetting(data) {
+  const box = $('#forgetList');
+  if (!box) return;
+  const samples = data.brain?.forgetting?.samples || [];
+  const signature = samples.map((item) => `${item.id}:${Math.round(item.strength * 100)}`).join(',');
+  if (box.dataset.signature === signature) return;
+  box.dataset.signature = signature;
+  box.innerHTML = '';
+  if (!samples.length) {
+    box.appendChild(el('p', 'muted small', '还没有可测的记忆。'));
+    drawForgetting($('#forgetCanvas'), null);
+    return;
+  }
+  for (const item of samples.slice(0, 6)) {
+    const row = el('button', 'forget-row');
+    row.type = 'button';
+    const bar = el('span', 'forget-bar');
+    const fill = el('i');
+    fill.style.width = `${Math.max(2, Math.min(100, Math.round(item.strength * 100)))}%`;
+    bar.appendChild(fill);
+    row.appendChild(el('span', 'forget-text', item.content || '（空）'));
+    row.appendChild(bar);
+    row.appendChild(el('span', 'forget-value', `${Math.round(item.strength * 100)}%`));
+    row.title = `重要度 ${item.importance} · 想起过 ${item.useCount} 次 · 半衰期 ${item.halfLifeDays} 天`;
+    row.addEventListener('click', () => {
+      api(`/api/presence/curve?id=${item.id}`)
+        .then((result) => drawForgetting($('#forgetCanvas'), result.curve))
+        .catch((error) => toast(error.message, 'error'));
+    });
+    box.appendChild(row);
+  }
+  const note = $('#forgetNote');
+  if (note) {
+    note.textContent = data.presence?.forgettingCurve
+      ? '遗忘曲线已生效：想不起来的事在检索里会往后排。'
+      : '曲线只是给你看；打开「拟人遗忘曲线」才会真的影响她想起东西的顺序。';
+  }
+  drawForgetting($('#forgetCanvas'), null, samples[0]);
+}
+
+function drawForgetting(canvas, curve, sample) {
+  if (!canvas || !canvas.getContext) return;
+  const ctx = canvas.getContext('2d');
+  const width = canvas.width;
+  const height = canvas.height;
+  ctx.clearRect(0, 0, width, height);
+  const points = curve || (sample ? syntheticCurve(sample) : null);
+  ctx.strokeStyle = 'rgba(150,180,220,0.25)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(34, 10);
+  ctx.lineTo(34, height - 22);
+  ctx.lineTo(width - 10, height - 22);
+  ctx.stroke();
+  if (!points || !points.length) {
+    ctx.fillStyle = 'rgba(200,215,240,0.6)';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText('点一条记忆看它往后怎么淡', 40, height / 2);
+    return;
+  }
+  const maxX = points[points.length - 1].ageDays || 1;
+  const maxY = Math.max(1, ...points.map((p) => p.strength));
+  ctx.strokeStyle = 'rgba(120,200,255,0.95)';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  points.forEach((point, index) => {
+    const x = 34 + (point.ageDays / maxX) * (width - 48);
+    const y = height - 22 - (point.strength / maxY) * (height - 36);
+    if (index === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+  ctx.fillStyle = 'rgba(220,235,255,0.75)';
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText('强度', 6, 16);
+  ctx.fillText(`0 天`, 34, height - 8);
+  ctx.fillText(`${Math.round(maxX)} 天`, width - 56, height - 8);
+}
+
+function syntheticCurve(sample) {
+  const half = Math.max(1, Number(sample.halfLifeDays) || 20);
+  const out = [];
+  for (let i = 0; i <= 12; i += 1) {
+    const ageDays = (90 * i) / 12;
+    out.push({ ageDays, strength: Math.round(Math.exp(-ageDays / half) * 1000) / 1000 });
+  }
+  return out;
+}
+
+function renderSenses(data) {
+  const box = $('#senseList');
+  if (!box) return;
+  const items = data.senses?.items || [];
+  box.innerHTML = '';
+  if (!items.length) {
+    box.appendChild(el('p', 'muted small', data.senses?.enabled ? '还没记过味道、气味或画面。' : '没开：设置页「陪伴与感官」里打开「感官记忆」。'));
+    return;
+  }
+  for (const item of items) {
+    const row = el('div', 'sense-row');
+    row.appendChild(el('b', '', item.kindLabel));
+    row.appendChild(el('span', '', item.text + (item.detail ? `（${item.detail}）` : '')));
+    row.appendChild(el('span', 'muted small', `${String(item.at || '').slice(5, 16).replace('T', ' ')} · ${item.source === 'camera' ? '摄像头' : '他说的'}`));
+    box.appendChild(row);
+  }
+}
+
+function renderPresenceBudget(data) {
+  const box = $('#presenceBudget');
+  if (!box) return;
+  const budget = data.budget || {};
+  box.innerHTML = '';
+  const line = (label, value) => {
+    const row = el('div', 'kv-row');
+    row.appendChild(el('span', '', label));
+    row.appendChild(el('b', '', value));
+    box.appendChild(row);
+  };
+  line('今天让她看过', `${budget.cameraToday ?? 0} / ${budget.cameraMax ?? 0}`);
+  line('今天念过', `${budget.speakToday ?? 0} / ${budget.speakMax ?? 0}`);
+  line('两次之间至少隔', `${budget.lookIntervalSeconds ?? 90} 秒`);
+  line('设备能力', mediaCapability().ok ? '这个页面可以用摄像头和麦克风' : mediaCapability().reason);
+  line('本机识别', data.asrReady ? 'SenseVoice 就绪' : '没就绪（识别模型没装上）');
+}
+
+function openPetWindow() {
+  const url = `${location.origin}/?view=pet`;
+  const win = window.open(url, 'bizhi-pet', 'width=380,height=560,menubar=no,toolbar=no,location=no,status=no');
+  if (!win) setPresenceHint('小窗被浏览器拦了：允许这个站点弹窗再点一次', 'warn');
+}
+
+function bindPresence() {
+  bindPetGaze();
+  startBlinkLoop();
+  $('#camToggleBtn')?.addEventListener('click', () => {
+    if (pet.stream) closeCamera();
+    else openCamera();
+  });
+  $('#camLookBtn')?.addEventListener('click', () => lookNow(''));
+  $('#camDeviceSelect')?.addEventListener('change', () => {
+    if (pet.stream) openCamera();
+  });
+  $('#camAutoToggle')?.addEventListener('change', (event) => {
+    if (event.target.checked) startAutoLook();
+    else stopAutoLook();
+  });
+  $('#micBtn')?.addEventListener('click', () => {
+    if (pet.recording) stopMicAndSend();
+    else startMic();
+  });
+  $('#speakBtn')?.addEventListener('click', () => {
+    const cfg = presenceSettings();
+    savePresenceToggle({ speakReplies: !cfg.speakReplies });
+  });
+  $('#petWindowBtn')?.addEventListener('click', openPetWindow);
+  $('#clearSensesBtn')?.addEventListener('click', async () => {
+    try {
+      await api('/api/presence/senses', { method: 'DELETE' });
+      toast('她清空了自己的感官记忆。');
+      await loadPresenceState();
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+  });
+  renderQuickChips();
+}
+
+async function savePresenceToggle(patch) {
+  try {
+    const collected = collectSettings();
+    const next = await api('/api/settings', { method: 'PUT', body: { presence: { ...collected.presence, ...patch } } });
+    state.settings = next.settings;
+    fillSettings();
+    await loadPresenceState();
+    updatePresenceButtons();
+  } catch (error) {
+    toast(error.message, 'error');
+  }
+}
+
+function updatePresenceButtons() {
+  const cfg = presenceSettings();
+  applyBreathing();
+  const speak = $('#speakBtn');
+  if (speak) {
+    speak.textContent = `用她的声音念：${cfg.speakReplies ? '开' : '关'}`;
+    speak.classList.toggle('active', Boolean(cfg.speakReplies));
+  }
+  const auto = $('#camAutoToggle');
+  if (auto && !pet.autoTimer) auto.checked = false;
+}
+
+function enterPresenceView() {
+  updatePresenceButtons();
+  loadPresenceState().catch(() => {});
+  const cap = mediaCapability();
+  if (!cap.ok) setPresenceHint(cap.reason, 'warn');
+  else if (!presenceSettings().cameraEnabled && !presenceSettings().micEnabled) {
+    setPresenceHint('摄像头和麦克风都还没打开——在设置页「陪伴与感官」里勾一下。');
+  }
+}
+
+function leavePresenceView() {
+  stopAutoLook();
+  closeCamera();
+  if (pet.recording) {
+    pet.recording = false;
+    if (pet.micStream) {
+      for (const track of pet.micStream.getTracks()) track.stop();
+      pet.micStream = null;
+    }
+  }
+  const audio = $('#presenceAudio');
+  if (audio) {
+    audio.pause();
+    audio.src = '';
+  }
+  voice.seq += 1;
+  voice.wanted = null;
+  pet.speaking = false;
+}
+
 /* ---------------- init ---------------- */
 
 async function init() {
+  const params = new URLSearchParams(location.search);
+  const initialView = params.get('view') || String(location.hash || '').replace(/^#/, '');
+  if (initialView === 'pet') document.body.classList.add('mode-pet');
   bindLogin();
   bindNavigation();
   bindChat();
@@ -2713,6 +3658,7 @@ async function init() {
   bindSocial();
   bindSettings();
   bindModal();
+  bindPresence();
   try {
     await loadSettings();
     await Promise.all([
@@ -2729,9 +3675,9 @@ async function init() {
     if (state.status && !state.status.keyConfigured) {
       toast('还没有配置 DeepSeek API Key：编辑 .env 里的 DEEPSEEK_API_KEY，然后重启。', 'error');
     }
-    const params = new URLSearchParams(location.search);
-    const initialView = params.get('view') || String(location.hash || '').replace(/^#/, '');
-    if (['chat', 'memory', 'social', 'settings'].includes(initialView)) switchView(initialView);
+    if (['chat', 'memory', 'social', 'settings', 'presence', 'pet'].includes(initialView)) {
+      switchView(initialView === 'pet' ? 'presence' : initialView);
+    }
   } catch (error) {
     if (!state.loginRequired) toast(error.message, 'error');
   }

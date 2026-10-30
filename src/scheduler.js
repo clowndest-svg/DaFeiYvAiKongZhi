@@ -18,6 +18,9 @@ import { logger } from './logger.js';
 import { dailyDiary, getMemoryBlock, listDailyDigests, weeklyDiary } from './memory.js';
 import { getQzoneFeedCache, qzoneStatus, refreshQzoneFeed, sendQzoneComment, verifyQzoneCookie } from './channels/qzone.js';
 import { getMood } from './mood.js';
+import { applyNeuroEvent, neuroEnabled, neuroStatus } from './neuro.js';
+import { listSenses } from './senses.js';
+import { noteBrainLink } from './brain.js';
 import { addIntention, bumpIntention, listIntentions, pickDueIntention } from './intentions.js';
 import { canSendXhsDm, discoverSelfProfile, getRecentXhsActivity, isRiskyError, noteXhsDmSent, recordXhsActivity, triggerXhsCooldown } from './channels/xhs-actions.js';
 import { assertPublicContent, TOPIC_HINTS } from './privacy.js';
@@ -755,6 +758,7 @@ export class Scheduler {
       recordXhsActivity({ type: 'note_publish', note: post.title, text: '她自己发的（自动运营）', target: `${images.length} 张图` });
       addEvent('xhs_publish', '她自己发了一条小红书图文笔记', { title: post.title, images: images.length });
       logger.info('小红书自动发布成功', { title: post.title });
+      applyNeuroEvent('proud');
       return { ok: true, title: post.title };
     } catch (error) {
       addEvent('xhs_publish_error', '她自己发笔记没成功（草稿可能留在创作中心）', { error: error.message });
@@ -868,6 +872,7 @@ export class Scheduler {
     if (!costBlocked(feature)) return false;
     const state = readCostState();
     noteCostSkip(label || feature, (state.reasons || [])[0] || '余额到线');
+    applyNeuroEvent('budget_cut');
     return true;
   }
 
@@ -877,6 +882,7 @@ export class Scheduler {
     try {
       await this.tickStep('每日日记', () => this.maybeDailyDiary());
       await this.tickStep('花费看门狗', () => this.refreshCostState());
+      await this.tickStep('身体状态', () => this.maybeBodyState());
       await this.tickStep('空间 Cookie', () => this.checkQzoneCookie());
       await this.tickStep('主动找你', () => this.maybeProactive());
       await this.tickStep('发说说', () => this.maybePost());
@@ -888,6 +894,21 @@ export class Scheduler {
     } finally {
       this.busy = false;
     }
+  }
+
+  /** 一天最多各一次的体感事件：深夜熬着和早上睡够了，都会改递质。关掉递质时什么都不做。 */
+  async maybeBodyState() {
+    if (!neuroEnabled()) return null;
+    const hour = localHour();
+    const day = localDayKey();
+    if (hour >= 23 && readCount(`body_late:${day}`) === 0) {
+      bumpCount(`body_late:${day}`);
+      applyNeuroEvent('late_night');
+    } else if (hour >= 6 && hour < 9 && readCount(`body_rest:${day}`) === 0) {
+      bumpCount(`body_rest:${day}`);
+      applyNeuroEvent('rested');
+    }
+    return null;
   }
 
   async maybeProactive() {
@@ -924,6 +945,7 @@ export class Scheduler {
     if (unanswered >= maxUnanswered) {
       kvSet('next_proactive_at', hoursFromNow(12));
       addEvent('proactive_pause', '主动找了他几次他没接话，先不打扰了', { unanswered });
+      applyNeuroEvent('ignored');
       return null;
     }
 
@@ -957,7 +979,10 @@ export class Scheduler {
     const block = getMemoryBlock({ query: '他最近怎么样 现在在做什么 心情', settings });
     block.xhsActivity = getRecentXhsActivity({ hours: 48, limit: 6 });
     block.intentions = listIntentions({ limit: 4, forPrompt: true });
+    if (settings.presence?.neuroEnabled) block.neuro = neuroStatus(settings);
+    if (settings.presence?.sensesEnabled) block.senses = listSenses({ limit: 6 });
     const due = pickDueIntention();
+    if (due) noteBrainLink('intention');
     const mood = getMood();
     const system = buildSystemPrompt({ settings, mood, block });
     const recent = getRecentMessages(getActiveSession().id, 6)

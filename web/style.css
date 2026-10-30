@@ -1006,3 +1006,215 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 #view-settings { scroll-padding-bottom: 180px; }
 @media (max-width: 860px) { .login-card input { font-size: 16px; } }
 .peek-item { text-decoration: none; }
+
+/* ---------- 陪伴视图（立绘 / 摄像头 / 麦克风 / 字幕 / 身体状态） ---------- */
+.presence-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr);
+  gap: 14px;
+  padding: 14px;
+  align-items: start;
+}
+.pet-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+  backdrop-filter: blur(16px);
+  position: sticky;
+  top: 14px;
+}
+.presence-side {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+.presence-side .card { min-width: 0; }
+.pet-stage {
+  position: relative;
+  overflow: hidden;
+  border-radius: 14px;
+  aspect-ratio: 2 / 3;
+  max-height: 58vh;
+  background:
+    radial-gradient(120% 80% at 50% 0%, rgba(122, 167, 255, 0.18), transparent 60%),
+    linear-gradient(180deg, #0b1224, #070a12);
+  border: 1px solid var(--line);
+}
+.pet-inner { position: absolute; inset: 0; }
+.pet-inner.breathing { animation: pet-breathe 4.8s ease-in-out infinite; }
+@keyframes pet-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-7px) scale(1.012); }
+}
+.pet-figure {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 1;
+  transition: opacity 0.24s ease, transform 0.16s ease-out;
+  will-change: transform, opacity;
+}
+.pet-next { opacity: 0; }
+.pet-next.fading { opacity: 1; }
+.pet-figure.hidden-layer { opacity: 0; }
+.pet-tag {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  padding: 3px 9px;
+  font-size: 11px;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(8, 12, 22, 0.6);
+  border: 1px solid var(--line-strong);
+}
+.pet-pip {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  width: 30%;
+  min-width: 96px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  background: #000;
+}
+.pet-pip video { display: block; width: 100%; }
+.caption-bar {
+  min-height: 46px;
+  padding: 9px 12px;
+  border-radius: 12px;
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: rgba(8, 12, 22, 0.55);
+  border: 1px solid var(--line);
+}
+.presence-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.presence-row select { flex: 1 1 180px; min-width: 0; max-width: 320px; }
+.inline-label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); min-width: 0; white-space: nowrap; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  padding: 4px 11px;
+  font-size: 13px;
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(122, 167, 255, 0.12);
+  border: 1px solid var(--line-strong);
+  cursor: pointer;
+}
+.chip:hover { background: rgba(122, 167, 255, 0.22); }
+.icon-btn.recording { color: var(--danger); }
+#presenceHint.warn { color: var(--danger); }
+#presenceHint.ok { color: var(--ok); }
+#camCanvas { display: none; }
+.neuro-list, .sense-list, .forget-list, .kv-lines { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.neuro-row {
+  display: grid;
+  grid-template-columns: 74px minmax(0, 1fr) 44px;
+  gap: 8px;
+  align-items: center;
+  font-size: 12px;
+}
+.neuro-name { color: var(--muted); }
+.neuro-value { text-align: right; color: var(--text); }
+.neuro-bar { display: block; height: 8px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.neuro-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
+.neuro-bar i.down { background: linear-gradient(90deg, #5c6a86, #93a4c2); }
+.brain-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(78px, 1fr)); gap: 8px; }
+.brain-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.brain-cell b { font-size: 16px; }
+.brain-cell span { font-size: 11px; color: var(--muted); }
+.presence-side canvas { display: block; width: 100%; height: auto; max-width: 100%; }
+.forget-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 84px 40px;
+  gap: 8px;
+  align-items: center;
+  padding: 5px 6px;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  min-width: 0;
+}
+.forget-row:hover { border-color: var(--line-strong); background: rgba(255, 255, 255, 0.04); }
+.forget-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.forget-bar { display: block; height: 6px; border-radius: 999px; background: rgba(255, 255, 255, 0.08); overflow: hidden; }
+.forget-bar i { display: block; height: 100%; background: linear-gradient(90deg, var(--purple), var(--cyan)); }
+.forget-value { text-align: right; color: var(--muted); }
+.sense-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: baseline;
+  font-size: 12px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--line);
+  min-width: 0;
+}
+.sense-row b { color: var(--cyan); font-size: 12px; }
+.kv-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+  padding: 5px 0;
+  border-bottom: 1px dashed var(--line);
+}
+.kv-row span { color: var(--muted); min-width: 0; }
+.kv-row b { text-align: right; }
+
+/* 桌宠小窗：只留立绘、字幕和说话按钮 */
+body.mode-pet .rail,
+body.mode-pet .topbar,
+body.mode-pet .health-banner,
+body.mode-pet .presence-side,
+body.mode-pet .chip-row,
+body.mode-pet #petWindowBtn,
+body.mode-pet #clearSensesBtn { display: none !important; }
+body.mode-pet .main { height: 100vh; }
+body.mode-pet .presence-grid { display: block; padding: 0; }
+body.mode-pet .pet-panel {
+  position: static;
+  height: 100vh;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 0;
+  gap: 6px;
+}
+body.mode-pet .pet-stage { max-height: none; height: calc(100vh - 132px); aspect-ratio: auto; border-radius: 0; }
+body.mode-pet .caption-bar { min-height: 40px; font-size: 14px; }
+body.mode-pet .presence-row { justify-content: center; }
+
+@media (max-width: 900px) {
+  .presence-grid { grid-template-columns: minmax(0, 1fr); padding: 10px; gap: 10px; }
+  .pet-panel { position: static; }
+  .pet-stage { max-height: 52vh; }
+  .presence-row .icon-btn { flex: 0 1 auto; }
+  .neuro-row { grid-template-columns: 68px minmax(0, 1fr) 40px; }
+}

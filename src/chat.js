@@ -7,6 +7,8 @@ import { compactIfNeeded, getMemoryBlock, handoverIfNeeded } from './memory.js';
 import { getRecentXhsActivity } from './channels/xhs-actions.js';
 import { listIntentions } from './intentions.js';
 import { getMood } from './mood.js';
+import { applyNeuroEvent, neuroStatus, noteHisMessage } from './neuro.js';
+import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection } from './reflect.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
@@ -53,6 +55,11 @@ export class Companion {
       .filter((url) => url.length < 8 * 1024 * 1024)
       .slice(0, 4);
     if (!cleanText && !cleanImages.length) throw new Error('消息不能为空');
+    // 他这句话的语气先落到递质上，本轮心情才带得出来；群聊/访客不动私人情绪。
+    if (channel !== 'qq-group' && channel !== 'qq-guest') {
+      applyNeuroEvent('he_replied');
+      noteHisMessage(cleanText);
+    }
 
     const session = sessionId ? getSession(sessionId) : null;
     const active = session || getActiveSession();
@@ -89,6 +96,8 @@ export class Companion {
     if (!restricted) {
       block.xhsActivity = getRecentXhsActivity({ hours: 48, limit: 8 });
       block.intentions = listIntentions({ limit: 5, forPrompt: true });
+      if (settings.presence?.neuroEnabled) block.neuro = neuroStatus(settings);
+      if (settings.presence?.sensesEnabled) block.senses = listSenses({ limit: 8 });
     }
     const payload = buildChatPayload({
       settings,

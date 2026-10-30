@@ -91,6 +91,23 @@
     "autoSpeak": false,
     "showInnerThought": true
   },
+  "presence": {
+    "gaze": true,
+    "expression": true,
+    "breathing": true,
+    "subtitles": true,
+    "cameraEnabled": false,
+    "cameraDailyMax": 20,
+    "cameraIntervalSeconds": 90,
+    "micEnabled": false,
+    "speakReplies": false,
+    "speakDailyMax": 40,
+    "quickChips": "哼,好,哦,哭,哇,酷",
+    "neuroEnabled": false,
+    "neuroStrength": 0.35,
+    "forgettingCurve": false,
+    "sensesEnabled": false
+  },
   "cost": {
     "lowBalanceCny": 5,
     "stopBalanceCny": 1.5,

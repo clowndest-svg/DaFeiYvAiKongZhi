@@ -8,6 +8,9 @@ import {
   updateMessageMeta,
 } from './db.js';
 import { applyMood, getMood } from './mood.js';
+import { noteBrainLink } from './brain.js';
+import { applyNeuroEvent } from './neuro.js';
+import { addSense } from './senses.js';
 import { addIntention } from './intentions.js';
 import { buildReflectionPrompt } from './prompt.js';
 import { logger } from './logger.js';
@@ -89,7 +92,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
 
   const moodUpdate = data.mood || {};
   if (Number.isFinite(Number(moodUpdate.valence)) || Number.isFinite(Number(moodUpdate.energy))) {
-    applyMood(
+    const applied = applyMood(
       {
         valence: Number(moodUpdate.valence),
         energy: Number(moodUpdate.energy),
@@ -98,6 +101,9 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
       },
       { sessionId },
     );
+    const delta = Number(applied?.valence) - Number(mood.valence);
+    if (delta >= 0.05) applyNeuroEvent('mood_up');
+    else if (delta <= -0.05) applyNeuroEvent('mood_down');
   }
 
   const added = [];
@@ -159,8 +165,33 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
     })) intentionAdded += 1;
   }
 
+  let senseAdded = 0;
+  if (settings.presence?.sensesEnabled) {
+    const senses = Array.isArray(data.senses) ? data.senses.slice(0, 1) : [];
+    for (const item of senses) {
+      const content = String(item?.text || '').trim();
+      if (content.length < 2) continue;
+      const evidence = String(item?.evidence || '').trim();
+      const normalized = squash(evidence);
+      const source = recent.find((message) => message.role === 'user' && normalized.length >= 3 && squash(message.content).includes(normalized));
+      const result = addSense({
+        kind: item?.kind,
+        text: content,
+        detail: item?.detail,
+        evidence,
+        sourceText: source?.content || '',
+        source: 'reflect',
+      });
+      if (result.ok) {
+        senseAdded += 1;
+        noteBrainLink('sense');
+      }
+    }
+  }
+
   if (added.length) {
     logger.info('写入新记忆', { count: added.length, sessionId });
+    noteBrainLink('reflect', added.length);
   }
-  return { innerThought, added: added.length, intentions: intentionAdded };
+  return { innerThought, added: added.length, intentions: intentionAdded, senses: senseAdded };
 }
