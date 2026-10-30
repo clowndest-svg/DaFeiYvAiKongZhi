@@ -1,0 +1,605 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#070a12">
+  <title>小知 · BiZhi</title>
+  <link rel="icon" href="/assets/avatar.png">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <div class="bg-glow" aria-hidden="true"></div>
+  <div class="login-screen hidden" id="loginScreen">
+    <form class="login-card" id="loginForm">
+      <h1>小知控制台</h1>
+      <p class="muted">输入控制台密码。密码在电脑 <code>.env</code> 的 <code>CONSOLE_PASSWORD</code>；没设就用 <code>CONSOLE_TOKEN</code>。</p>
+      <label>密码 <input id="loginPassword" type="password" maxlength="200" autocomplete="current-password" required></label>
+      <button id="loginSubmit" type="submit">登录</button>
+      <p class="login-error" id="loginError"></p>
+      <p class="muted small">登录一次后 30 天内免登录；外网访问也用这个页面。</p>
+    </form>
+  </div>
+  <div class="app">
+    <aside class="rail" aria-label="主导航">
+      <div class="logo" title="小知">知</div>
+      <nav class="rail-nav">
+        <button class="rail-btn active" data-view="chat" title="聊天">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6a3 3 0 0 1 3-3h10a3 3 0 0 1 3 3v7a3 3 0 0 1-3 3H9l-5 4V6Z"/></svg>
+          <span>聊天</span>
+        </button>
+        <button class="rail-btn" data-view="memory" title="记忆">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4c-3 0-5 1.8-5 4.2 0 1.4.7 2.5 1.6 3.3-.7.8-1.1 1.8-1.1 2.9 0 2.6 2 4.6 4.5 4.6.7 0 1.3-.1 1.9-.4.6.3 1.2.4 1.9.4 2.5 0 4.5-2 4.5-4.6 0-1.1-.4-2.1-1.1-2.9.9-.8 1.6-1.9 1.6-3.3C19 5.8 17 4 14 4c-.7 0-1.4.1-2 .4-.6-.3-1.3-.4-2-.4Z"/></svg>
+          <span>记忆</span>
+        </button>
+        <button class="rail-btn" data-view="social" title="动态">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg>
+          <span>动态</span>
+        </button>
+        <button class="rail-btn" data-view="settings" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
+          <span>设置</span>
+        </button>
+      </nav>
+      <div class="rail-foot">
+        <span class="dot" id="railQqDot"></span>
+        <span>QQ</span>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="top-id">
+          <img src="/assets/avatar.png" alt="小知" class="top-avatar" id="topAvatar">
+          <div class="top-text">
+            <h1 id="topName">小知</h1>
+            <p id="topStatus"><span class="dot"></span><span id="topStatusText">在线</span></p>
+          </div>
+        </div>
+        <button class="mood-chip" id="moodChip" title="看看她现在的状态">正在感受…</button>
+        <div class="top-right">
+          <button class="ghost-btn" id="balanceBtn" title="查看 DeepSeek 余额">余额 --</button>
+          <button class="ghost-btn mobile-only" id="openChatSide" aria-controls="chatSide" aria-expanded="false">详情</button>
+          <button class="ghost-btn" id="openSettings">设置</button>
+        </div>
+      </header>
+
+      <div class="health-banner" id="healthBanner" role="status" aria-live="polite" hidden></div>
+
+      <div class="views">
+        <section class="view active" id="view-chat">
+          <div class="chat-grid">
+            <section class="chat-panel">
+              <div class="messages" id="messages" aria-live="polite"></div>
+              <div class="typing hidden" id="typing">
+                <img src="/assets/avatar.png" alt="">
+                <span class="dots"><i></i><i></i><i></i></span>
+                <span id="typingText">小知正在输入…</span>
+              </div>
+              <form class="composer" id="chatForm">
+                <div class="image-preview" id="imagePreview"></div>
+                <textarea id="chatInput" rows="1" maxlength="20000" placeholder="和小知说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+                <div class="composer-row">
+                  <div class="composer-left">
+                    <button type="button" class="icon-btn" id="imageBtn">添加图片</button>
+                    <button type="button" class="icon-btn" id="voiceBtn">自动朗读：关</button>
+                    <input type="file" id="imageInput" accept="image/*" multiple hidden>
+                  </div>
+                  <div class="composer-right">
+                    <span class="hint" id="composerHint">她记得你们的事</span>
+                    <button type="submit" class="primary-btn" id="sendBtn">发送</button>
+                  </div>
+                </div>
+              </form>
+            </section>
+
+            <aside class="chat-side" id="chatSide">
+              <button class="ghost-btn drawer-close" id="closeChatSide">收起</button>
+              <div class="card profile-card">
+                <div class="profile-head">
+                  <img src="/assets/avatar.png" alt="小知">
+                  <div>
+                    <h2 id="sideName">小知</h2>
+                    <p class="muted" id="sideIntro">有点小傲娇，但很会照顾人的女朋友</p>
+                  </div>
+                </div>
+                <div class="mood-line">
+                  <span class="mood-badge" id="sideMood">正在感受…</span>
+                  <span class="muted small" id="affectionText"></span>
+                </div>
+                <div class="meter"><label>愉悦</label><div class="track"><i id="barValence"></i></div></div>
+                <div class="meter"><label>精力</label><div class="track"><i id="barEnergy"></i></div></div>
+                <div class="meter"><label>亲密度</label><div class="track"><i id="barAffection"></i></div></div>
+                <p class="muted small" id="moodReason"></p>
+              </div>
+
+              <div class="card">
+                <h3>让她做点什么</h3>
+                <div class="quick-grid">
+                  <button data-action="proactive">主动找你</button>
+                  <button data-action="weekly">写周记</button>
+                  <button data-action="daily">写日记</button>
+                  <button data-action="compact">压缩记忆</button>
+                  <button data-action="handover" class="warn">给未来写信</button>
+                </div>
+              </div>
+
+              <div class="card">
+                <h3>最近记住的</h3>
+                <div class="peek-list" id="memoryPeek"></div>
+                <button class="link-btn" data-view="memory">查看全部记忆</button>
+              </div>
+
+              <div class="card stats-card">
+                <div><span class="muted">今日花费</span><strong id="todayCost">--</strong></div>
+                <div><span class="muted">今日 tokens</span><strong id="todayTokens">--</strong></div>
+                <div><span class="muted">本周花费</span><strong id="weekCost">--</strong></div>
+                <div><span class="muted">当前上下文 tokens</span><strong id="sessionTokens">--</strong></div>
+                <div><span class="muted">QQ</span><strong id="qqState">未连接</strong></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" id="view-memory">
+          <div class="page">
+            <div class="page-head">
+              <div>
+                <h2>记忆</h2>
+                <p>她说，记忆不是数据库，是你们一起过过的日子。</p>
+              </div>
+              <button class="ghost-btn" id="runDreamBtn">让她睡前想一遍</button>
+              <button class="ghost-btn" id="refreshMemory">刷新</button>
+            </div>
+            <div class="tabs" id="memoryTabs">
+              <button data-tab="core" class="active">核心档案 <b id="countCore">0</b></button>
+              <button data-tab="mid">重点记忆 <b id="countMid">0</b></button>
+              <button data-tab="long">长期 / 周记 <b id="countLong">0</b></button>
+              <button data-tab="letters">信 <b id="countLetters">0</b></button>
+            </div>
+            <p class="muted small memory-note" id="intentionLine">她还没有自己惦记的事。</p>
+            <p class="muted small memory-note" id="dreamLine">她还没有睡前一个人想过事。</p>
+            <div class="memory-grid">
+              <div class="card-list" id="memoryContent"></div>
+              <aside class="card add-memory">
+                <h3>手动塞给她一条记忆</h3>
+                <p class="muted small">适合写：你的生日、忌口、重要约定、她绝对不要做的事。</p>
+                <textarea id="memoryContentInput" rows="4" maxlength="500" placeholder="例如：他每年 3 月 14 日生日，不喜欢香菜。"></textarea>
+                <label class="range-label">重要度 <input id="memoryImportance" type="range" min="1" max="5" value="5"> <span id="memoryImportanceValue">5</span></label>
+                <button id="addMemoryBtn" class="primary-btn">记住这件事</button>
+              </aside>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" id="view-social">
+          <div class="page">
+            <div class="page-head">
+              <div>
+                <h2>动态</h2>
+                <p>按她此刻的心情写点什么。发之前，你先过目。</p>
+              </div>
+            </div>
+            <div class="social-toolbar card">
+              <div>
+                <h3>让她写一条</h3>
+                <p class="muted small">都会先存成草稿：说说 / 小红书 / 抖音。她不会写出你的真实信息。</p>
+              </div>
+              <div class="btn-row">
+                <button data-post-kind="qzone">QQ 空间说说</button>
+                <button data-post-kind="xhs">小红书笔记</button>
+                <button data-post-kind="douyin">抖音文案</button>
+              </div>
+            </div>
+
+            <div class="card qzone-interactions">
+              <div class="interaction-head">
+                <div>
+                  <h3>空间互动</h3>
+                  <p class="muted small">读她自己的说说和评论；回复评论要你确认后才发。点赞名单 Qzone 经常不给全，只保证数量。</p>
+                </div>
+                <div class="btn-row">
+                  <button id="runQzoneAutoReply">检查并自动回复</button>
+                  <button id="refreshQzoneFeed">刷新空间</button>
+                </div>
+              </div>
+              <div id="qzoneFeed" class="qzone-feed"></div>
+            </div>
+
+            <div class="card xhs-dm-lab">
+              <div class="interaction-head">
+                <div>
+                  <h3>小红书私信</h3>
+                  <p class="muted small">只对你明确绑定的主人会话自动回复（需开启设置）；陌生人每条仍需确认。发送和读取均有次数限制，验证码或未知结果会停下。</p>
+                </div>
+                <div class="btn-row">
+                  <button id="xhsDmRefresh">刷新私信</button>
+                </div>
+              </div>
+              <div id="xhsDmList" class="dm-list"></div>
+              <label>回给谁（点上面某一行会自动填上）<input id="xhsDmTarget" maxlength="40" placeholder="对方昵称"></label>
+              <label>回什么（200 字以内）<textarea id="xhsDmText" rows="3" maxlength="200" placeholder="她想好了会填在这里，你也可以自己改"></textarea></label>
+              <div class="btn-row">
+                <button type="button" id="xhsDmDraft">让她想一句</button>
+                <button type="button" id="xhsDmBindOwner">确认这个会话是我</button>
+                <label class="check"><input type="checkbox" id="xhsDmConfirm"> 我确认真的把这条发出去</label>
+                <button type="button" id="xhsDmSend" class="danger-btn">发这条私信</button>
+              </div>
+              <p class="muted small" id="xhsDmResult">私信状态读取中…</p>
+            </div>
+
+            <div class="post-grid" id="postList"></div>
+
+            <div class="card xhs-note-lab">
+              <div class="interaction-head">
+                <div>
+                  <h3>小红书图文笔记</h3>
+                  <p class="muted small">「填进创作中心」只把图和文字放进编辑器，不会发出去；点「确认发布」才会真的公开。发出去之前先看一眼截图。</p>
+                </div>
+                <div class="btn-row">
+                  <button id="xhsLoadDraft">用最近一条小红书草稿</button>
+                  <button id="xhsNoteFill">填进创作中心（不发）</button>
+                </div>
+              </div>
+              <label>标题（最多 40 字）<input id="xhsNoteTitle" maxlength="40" placeholder="例如：今天也被小事治愈了"></label>
+              <label>正文（最多 1000 字）<textarea id="xhsNoteBody" rows="4" maxlength="1000"></textarea></label>
+              <label>配图（按住 Ctrl 多选，最多 18 张）<select id="xhsNoteImages" multiple size="6"></select></label>
+              <div class="btn-row">
+                <label class="check"><input type="checkbox" id="xhsNoteConfirm"> 我确认这条要真的发出去</label>
+                <button id="xhsNotePublish" class="danger-btn">确认发布</button>
+                <button id="xhsNoteStash">存进草稿箱</button>
+                <button id="xhsNoteLeave">离开填写页</button>
+              </div>
+              <p class="muted small" id="xhsNoteResult">正在读取可选图片…</p>
+              <img id="xhsNoteShot" alt="创作中心填写结果截图" hidden>
+            </div>
+
+            <div class="card comment-lab">
+              <h3>评论区替她说话</h3>
+              <p class="muted small">把视频文案、笔记正文或链接内容贴进来，她帮你想 3 条不招人烦的评论。自动刷视频、自动发评论需要单独接管浏览器，这一步先做「她来想」，你再决定发不发。</p>
+              <div class="comment-input-row">
+                <select id="commentPlatform">
+                  <option value="douyin">抖音</option>
+                  <option value="xhs">小红书</option>
+                </select>
+                <textarea id="commentContext" rows="4" placeholder="粘贴视频标题/文案、笔记正文，或者你想评论的那段话…"></textarea>
+              </div>
+              <button id="genCommentsBtn" class="primary-btn">想三条评论</button>
+              <div class="comment-results" id="commentResults"></div>
+            </div>
+
+            <p class="disclaimer">提示：平台通常要求标注 AI 生成内容；个人账号自动化有封号风险。默认只生成草稿，发布前请你确认。</p>
+          </div>
+        </section>
+
+        <section class="view" id="view-settings">
+          <div class="page settings-page">
+            <div class="page-head">
+              <div>
+                <h2>设置</h2>
+                <p>改完点最下面的保存。API Key 在 .env 里改，改完重启。</p>
+              </div>
+            </div>
+            <nav class="settings-jump" aria-label="设置分区">
+              <a href="#set-card-identity">称呼</a>
+              <a href="#set-card-model">模型</a>
+              <a href="#set-card-memory">记忆</a>
+              <a href="#set-card-proactive">主动</a>
+              <a href="#set-card-qq">QQ</a>
+              <a href="#set-card-qq-login">QQ 登录</a>
+              <a href="#set-card-social">社交</a>
+              <a href="#set-card-xhs">小红书</a>
+              <a href="#set-card-ui">界面</a>
+              <a href="#set-card-persona">人设</a>
+              <a href="#set-card-data">数据</a>
+            </nav>
+            <div class="settings-grid">
+              <section class="card" id="set-card-identity">
+                <h3>称呼</h3>
+                <label>她的名字<input id="setName" maxlength="20"></label>
+                <label>你的名字<input id="setUserName" maxlength="20" placeholder="她可以这样叫你"></label>
+                <label>她对你的昵称<input id="setNickname" maxlength="20" placeholder="笨蛋 / 哥哥 / 宝贝…"></label>
+                <label>一句介绍<input id="setIntro" maxlength="80"></label>
+              </section>
+
+              <section class="card" id="set-card-model">
+                <h3>模型</h3>
+                <label>模型
+                  <select id="setModel">
+                    <option value="deepseek-flash">deepseek-flash（便宜、1M 上下文）</option>
+                    <option value="deepseek-v4-pro">deepseek-v4-pro（更强、更贵）</option>
+                  </select>
+                </label>
+                <label>温度 <input id="setTemperature" type="number" step="0.05" min="0.1" max="1.5"></label>
+                <label>回复 token 上限 <input id="setChatMaxTokens" type="number" min="600" max="8000"></label>
+                <label>推理强度
+                  <select id="setEffort">
+                    <option value="low">low（省钱）</option>
+                    <option value="high">high</option>
+                    <option value="max">max</option>
+                  </select>
+                </label>
+                <p class="muted small">Key：<span id="keyMasked">…</span> · 修改 .env 后重启</p>
+              </section>
+
+              <section class="card" id="set-card-memory">
+                <h3>记忆</h3>
+                <label>压缩阈值（tokens）<input id="setCompactTokens" type="number" min="4000"></label>
+                <label>交接阈值（tokens）<input id="setHandoverTokens" type="number" min="8000"></label>
+                <label>每轮带多少条近期消息 <input id="setShortTurns" type="number" min="6" max="80"></label>
+                <label>每次想起几条重点 <input id="setRetrieveCount" type="number" min="3" max="30"></label>
+                <details class="adv">
+                  <summary>高级：记忆预算与睡前反思</summary>
+                  <label>反思一次最多写多少 tokens <input id="setReflectMaxTokens" type="number" min="200" max="4000"></label>
+                  <label>每几轮做一次内心整理 <input id="setReflectEvery" type="number" min="1" max="10"></label>
+                  <label>一轮最多带多少上下文 tokens <input id="setMaxContextTokens" type="number" min="8000" max="128000"></label>
+                  <label>系统提示最多多少 tokens <input id="setMaxPromptTokens" type="number" min="3000" max="16000"></label>
+                  <label>每次回忆最多花多少 tokens <input id="setRetrieveBudget" type="number" min="500" max="8000"></label>
+                  <label class="check"><input type="checkbox" id="setDreamEnabled"> 睡前自己反思一次（做梦）</label>
+                  <label>几点以后允许她反思（0–23）<input id="setDreamHour" type="number" min="0" max="23"></label>
+                </details>
+
+              </section>
+
+              <section class="card" id="set-card-proactive">
+                <h3>主动</h3>
+                <label class="check"><input type="checkbox" id="setProactiveEnabled"> 允许她主动找你</label>
+                <div class="row">
+                  <label>最短等几分钟（1–720）<input id="setIdleMin" type="number" step="5" min="1" max="720"></label>
+                  <label>最长等几分钟（≤1440）<input id="setIdleMax" type="number" step="5" min="1" max="1440"></label>
+                </div>
+                <div class="row">
+                  <label>安静开始<input id="setQuietStart" type="time"></label>
+                  <label>安静结束<input id="setQuietEnd" type="time"></label>
+                </div>
+                <label>每天最多主动几次 <input id="setMaxPerDay" type="number" min="0" max="10"></label>
+                <label>连着几次他不回就先不打扰（1–5）<input id="setMaxUnanswered" type="number" min="1" max="5"></label>
+                <p class="muted small" id="proactiveHint">正在读取她的打算…</p>
+                <p class="muted small">她不是定时器：你每发一条消息，她会在“最短–最长”之间重新抽一个时间点想起你；到点才发。发完你没回，连着几次（上面那个数）之后她会停手，等你先开口。</p>
+              </section>
+
+              <section class="card" id="set-card-qq">
+                <h3>QQ 聊天行为</h3>
+                <label class="check"><input type="checkbox" id="setAllowAllPrivate"> 允许陌生人私聊（不建议）</label>
+                <label class="check"><input type="checkbox" id="setVoiceEnabled"> 允许她发 QQ 语音（她自己的判断，不是每条都发）</label>
+                <label class="check"><input type="checkbox" id="setVoiceListen"> 听你发的语音（本地 SenseVoice 识别，不上传）</label>
+                <label>每天最多几条语音 <input id="setVoiceMax" type="number" min="0" max="30"></label>
+                <label>主动想发的概率（0–1，另外她也可以自己打标记要求用说的）<input id="setVoiceChance" type="number" min="0" max="1" step="0.02"></label>
+                <label>音色 <select id="setVoiceName"></select></label>
+                <label>语速 <input id="setVoiceRate" maxlength="6" placeholder="+8%"></label>
+                <label>音调 <input id="setVoicePitch" maxlength="6" placeholder="+2Hz"></label>
+                <label>一条语音最多几个字（20–200）<input id="setVoiceMaxChars" type="number" min="20" max="200"></label>
+                <div class="btn-row">
+                  <button type="button" class="icon-btn" id="voicePreviewBtn">试听这个音色</button>
+                  <button type="button" class="icon-btn" id="voiceQqBtn">发一条到我 QQ 上听</button>
+                  <button type="button" class="icon-btn" id="voiceEchoBtn">自检：发出去再听回来</button>
+                </div>
+                <audio id="voicePreviewPlayer" controls class="voice-preview hidden"></audio>
+                <p class="muted small" id="voiceStatusLine">正在读取音色与识别状态…</p>
+                <label class="check"><input type="checkbox" id="setQqAutoBind"> 白名单里的 QQ 第一次私聊就直接当主人（关掉则都要在控制台确认）</label>
+                <label class="check"><input type="checkbox" id="setQqAutoRecover"> QQ 断了 5 分钟后她自己重启登录进程试着恢复（可能要你再扫一次码）</label>
+                <label class="check"><input type="checkbox" id="setSleepyMode"> 深夜（00:30–08:30）她回得慢一点、短一点，不发语音和表情</label>
+                <details class="settings-group">
+                  <summary>群聊与白名单（高级）</summary>
+                <label class="check"><input type="checkbox" id="setGroupAtOnly"> 群里只回 @ 她（关闭后：白名单群里自己判断是否插话）</label>
+                <p class="muted small">不 @ 的“自己判断”只对下面群白名单里的群生效；留空时非 @ 消息一律不理。判断有冷却，每小时回复也有上限。</p>
+                <label>私聊白名单（QQ号，逗号分隔）<input id="setWhitelist" placeholder="留空 = 新私聊需要在下面确认主人"></label>
+                <label>群白名单（群号，逗号分隔）<input id="setGroupWhitelist"></label>
+                <label>每小时最多回复 <input id="setMaxReplies" type="number" min="3" max="200"></label>
+                </details>
+                <label class="check"><input type="checkbox" id="setSendStickers"> 允许她发角色表情包</label>
+                <label class="check"><input type="checkbox" id="setLearnImages"> 学习并使用你私聊发的图片表情</label>
+                <p class="muted small">学你私聊发的图 + 她自己上网找的图，一起放在 data/stickers-learned，最多 60 张，可一键清空。</p>
+                <details class="settings-group">
+                  <summary>表情库与找图（高级）</summary>
+                <div class="btn-row">
+                  <input id="stickerQuery" maxlength="60" placeholder="让她去找什么图，例如：蓝鲸鱼 表情包">
+                  <button type="button" id="stickerFindBtn">自己去网上找 3 张</button>
+                  <button type="button" id="stickerMemeBtn">收一批现成梗图模板</button>
+                </div>
+                <p class="muted small" id="stickerFindResult">表情库状态读取中…</p>
+                <label>遇到颜文字时发表情包的概率（0–1）<input id="setStickerChance" type="number" min="0" max="1" step="0.05"></label>
+                </details>
+                <details class="settings-group">
+                  <summary>自己接话（高级）</summary>
+                <label class="check"><input type="checkbox" id="setSelfFollowUp"> 你没接话时，她可能自己补一句（只对你的私聊）</label>
+                <p class="muted small">她回完你之后会等一小会儿，如果你没说话，她自己决定要不要接一句；你一发消息这个念头就取消。有每小时/每天上限。</p>
+                <label>自己接话的概率（0–1）<input id="setFollowChance" type="number" min="0" max="1" step="0.05"></label>
+                <label>接话前大概等几秒（3–300，实际有浮动）<input id="setFollowDelay" type="number" min="3" max="300"></label>
+                <label>每小时最多接话 <input id="setFollowHour" type="number" min="0" max="6"></label>
+                <label>每天最多接话 <input id="setFollowDay" type="number" min="0" max="20"></label>
+                </details>
+              </section>
+
+              <section class="card" id="set-card-qq-login">
+                <h3>QQ 连接与登录</h3>
+                <label class="check"><input type="checkbox" id="setQqEnabled"> 启用 QQ 通道</label>
+                <div class="qq-setup" id="qq-setup">
+                  <p>在 NapCat 的「网络配置 → WebSocket 客户端」里填：</p>
+                  <div class="copy-row"><code id="qqWs">ws://127.0.0.1:7788/onebot</code><button type="button" id="copyWs">复制地址</button></div>
+                  <div class="copy-row"><code id="qqToken">…</code><button type="button" id="copyToken">复制令牌</button></div>
+                  <p class="muted small" id="qqStatusText">正在读取状态…</p>
+                  <p class="alert-warn hidden" id="qqAccountWarn"></p>
+                  <label>机器人 QQ 号（她自己的小号，快速登录用）<input id="setQqBotAccount" inputmode="numeric" maxlength="12"></label>
+                  <div class="btn-row">
+                    <button type="button" id="qqStopChannel">立刻停用 QQ 通道</button>
+                    <button type="button" id="qqReloginBot">用机器人小号重新登录</button>
+                    <button type="button" id="qqHealthBtn">检查 QQ 收发</button>
+                  </div>
+                  <p class="muted small">扫码设备必须登录设置中的机器人小号，而不是你的主人号。误登时所有发送都会被拦下；请停用通道后重新登录。</p>
+                  <div class="login-qr-box" id="qqQrBox" hidden>
+                    <img id="qqQrImg" alt="QQ 登录二维码">
+                    <p class="muted small" id="qqQrHint">用手机 QQ 扫码登录机器人小号。</p>
+                    <button type="button" id="qqNewQr">二维码过期？重新生成</button>
+                  </div>
+                  <div class="candidate-box" id="qqCandidateBox" hidden>
+                    <span>待确认的新私聊：<b id="qqCandidateText"></b></span>
+                    <button type="button" id="qqBindOwner">确认是主人</button>
+                  </div>
+                  <div class="owner-bind-row">
+                    <input id="qqOwnerInput" inputmode="numeric" maxlength="12" placeholder="主人 QQ 号">
+                    <button type="button" id="qqSaveOwner">保存并绑定</button>
+                  </div>
+                  <p class="muted small">绑定后只有这个 QQ 号的私聊会带完整记忆；其他私聊和群聊使用受限记忆。</p>
+                  <div class="btn-row">
+                    <button type="button" id="qqTest">发条测试消息</button>
+                    <button type="button" id="qqStickerTest">发个表情包测试</button>
+                    <button type="button" id="qqFaceTest">发个QQ小黄脸</button>
+                    <button type="button" id="qqMfaceTest">发回上次的QQ表情包</button>
+                    <button type="button" id="qqLearnedImageTest">发回上次学的图片表情</button>
+                    <button type="button" id="qqClearLearned">清除已学图片</button>
+                    <button type="button" id="qqReset">解绑主人 QQ</button>
+                  </div>
+                  <p class="muted small">想让她发 QQ 表情包：先用 QQ 发一个表情包给她，她会记住；之后说“发表情包”就会回发。QQ 小黄脸是原生 face 表情。</p>
+                </div>
+              </section>
+
+              <section class="card" id="set-card-social">
+                <h3>社交</h3>
+                <label class="check"><input type="checkbox" id="setSocialEnabled"> 允许她写动态草稿</label>
+                <label>每天最多几条 <input id="setDailyPostMax" type="number" min="0" max="6"></label>
+                <div class="row">
+                  <label>活跃开始<input id="setPostStart" type="time"></label>
+                  <label>活跃结束<input id="setPostEnd" type="time"></label>
+                </div>
+                <label class="check"><input type="checkbox" id="setQzoneAuto"> QQ 空间自动发布（需保存空间 Cookie）</label>
+                <label class="check"><input type="checkbox" id="setQzoneAutoReply"> 按心情自动回复空间评论</label>
+                <div class="row">
+                  <label>每小时最多回<input id="setQzoneAutoReplyHourly" type="number" min="1" max="20"></label>
+                  <label>每天最多回<input id="setQzoneAutoReplyDaily" type="number" min="1" max="50"></label>
+                </div>
+                <label>只回最近多少小时内的评论 <input id="setQzoneAutoReplyAge" type="number" min="1" max="168"></label>
+                <p class="muted small">主人评论必回（在时限内）；其他人按内容/心情判断，广告、辱骂、敏感、刷屏不回。</p>
+                <label class="check"><input type="checkbox" id="setDouyinAuto" disabled> 抖音自动发布（未实现，仅草稿）</label>
+                <p class="muted small">自动发布是否开启看上面的开关。她发不发、发什么由她自己决定；公开内容还会过隐私闸门。抖音目前只有文案草稿。</p>
+                <details class="qzone-cookie-box settings-group">
+                  <summary>QQ 空间 Cookie（自动发说说用）</summary>
+                  <p class="muted small">用机器人小号登录 <code>user.qzone.qq.com</code>，F12 → Network → 刷新 → 点 user.qzone.qq.com 请求 → 复制整个 <code>Cookie</code> 请求头（不要只抄四个字段）。只保存在本机 <code>data/qzone-cookie.json</code>，不会上传。</p>
+                  <p id="qzoneStatus" class="muted small">正在读取…</p>
+                  <textarea id="qzoneCookie" rows="3" placeholder="uin=o0123456789; skey=...; p_skey=..."></textarea>
+                  <div class="btn-row">
+                    <button type="button" id="saveQzoneCookie">保存 Cookie</button>
+                    <button type="button" id="verifyQzoneCookie">验证 Cookie</button>
+                    <button type="button" id="importQzoneCookie">从 NapCat 导入</button>
+                    <button type="button" id="clearQzoneCookie">清除 Cookie</button>
+                  </div>
+                </details>
+              </section>
+
+              <section class="card" id="set-card-xhs">
+                <h3>小红书（浏览器自动化）</h3>
+                <p class="muted small" id="xhsStatusText">正在读取登录状态…</p>
+                <div class="btn-row">
+                  <button type="button" id="xhsLoginBtn">打开登录窗口</button>
+                  <button type="button" id="xhsVerifyBtn">验证登录</button>
+                  <button type="button" id="xhsCloseBtn">关闭浏览器</button>
+                  <button type="button" id="xhsLogoutBtn">退出登录（换号）</button>
+                </div>
+                <p class="muted small" id="xhsAccountLine">当前登录的小红书账号：读取中…</p>
+                <p class="muted small">登录会在一个专用 Chrome 窗口里完成，扫码或手机号验证码都可以；不保存密码，登录态存在 <code>data/xhs-profile</code>（D 盘）。自动化遇到验证码/登录失效会停下，不会硬闯。</p>
+                <label class="check"><input type="checkbox" id="setXhsEnabled"> 启用小红书互动</label>
+                <label class="check"><input type="checkbox" id="setXhsAutoBrowse"> 自动浏览别人笔记并评论</label>
+                <label class="check"><input type="checkbox" id="setXhsAutoReply"> 自动回复自己笔记下的评论（通知页的 @ 还没解析）</label>
+                <label class="check"><input type="checkbox" id="setXhsAutoLike"> 她评论过的笔记顺手点赞</label>
+                <label class="check"><input type="checkbox" id="setXhsAutoCollect"> 顺手收藏（下面可调上限）</label>
+                <label class="check"><input type="checkbox" id="setXhsAutoPublish"> 允许她自己发图文笔记（自动运营）</label>
+                <label class="check"><input type="checkbox" id="setXhsDmReply"> 允许她回小红书私信</label>
+                <label class="check"><input type="checkbox" id="setXhsDmAutoOwner"> 自动回你（主人）的小红书私信；陌生人仍然逐条确认</label>
+                <div class="row">
+                  <label>每天回私信总上限<input id="setXhsDmMaxPerDay" type="number" min="0" max="10"></label>
+                  <label>同一个人每天最多回<input id="setXhsDmMaxPerTarget" type="number" min="1" max="5"></label>
+                </div>
+                <p class="muted small">自动回复只对你明确确认的主人会话生效；换号后必须重新绑定。陌生人私信仍需你逐条确认。</p>
+                <label>每天最多自己发几条 <input id="setXhsPublishPerDay" type="number" min="0" max="3"></label>
+                <details class="settings-group">
+                  <summary>频率与限额（高级）</summary>
+                <label>每天所有动作加起来最多（评论+回复+赞+藏）<input id="setXhsActionMax" type="number" min="0" max="60"></label>
+                <label>自动逛+评论的间隔（小时，下限/上限）<input id="setXhsPollMin" type="number" min="1" max="12" step="0.5" class="num-sm"> <input id="setXhsPollMax" type="number" min="1" max="24" step="0.5" class="num-sm"></label>
+                <p class="muted small">风控保护：出现「访问频繁/安全验证」她会把所有小红书动作停 6 小时并写事件；每条评论之间隔 20–60 秒；动作总数每天封顶。</p>
+                <label>每天最多点赞 <input id="setXhsLikeMax" type="number" min="0" max="30"></label>
+                <label>每天最多收藏 <input id="setXhsCollectMax" type="number" min="0" max="20"></label>
+                <label>主人小红书昵称 <input id="setXhsOwnerName" maxlength="40" placeholder="例如：我的小红书昵称"></label>
+                <label>主人主页链接或用户 ID <input id="setXhsOwnerUserId" maxlength="64" placeholder="粘贴主页链接，或 24 位用户 ID"></label>
+                <label>浏览关键词（可选，逗号分隔）<input id="setXhsSearchKeywords" maxlength="200" placeholder="留空 = 看发现页；例如：咖啡, 穿搭, 情绪"></label>
+                <div class="row">
+                  <label>每天主动评论上限<input id="setXhsDailyComment" type="number" min="0" max="30"></label>
+                  <label>每天回复上限<input id="setXhsDailyReply" type="number" min="0" max="50"></label>
+                </div>
+                <label>每小时总动作上限 <input id="setXhsHourly" type="number" min="1" max="10"></label>
+                </details>
+                <div class="btn-row">
+                  <button type="button" id="xhsRunBrowse">现在浏览并评论</button>
+                  <button type="button" id="xhsRunReply">现在检查评论并回复</button>
+                  <button type="button" id="xhsReportBtn">读数据写周报</button>
+                  <button type="button" id="xhsProfileBtn">帮她想昵称和简介</button>
+                  <button type="button" id="xhsProfileReadBtn">读一下我现在叫什么</button>
+                </div>
+                <div class="muted small" id="xhsProfileBox">昵称和简介只有手机 App 能改：她想文案、你贴进去、她再读一遍主页核对。</div>
+                <div class="muted small" id="xhsReportBox">周报会从创作中心首页真实读一遍数据，再让她写小结和 3 条选题，存到 data/weekly。</div>
+                <p class="muted small">自动执行由上面的开关控制。主人账号的评论优先回；其他人的评论按内容和心情判断。新闻事故、政治、医疗求助、未成年人、隐私、广告、辱骂等内容一律不插话。她偶尔只看不说，不会每天交作业。</p>
+              </section>
+
+              <section class="card" id="set-card-ui">
+                <h3>界面</h3>
+                <label class="check"><input type="checkbox" id="setAutoSpeak"> 收到回复自动朗读</label>
+                <label class="check"><input type="checkbox" id="setShowThought"> 显示“她的心里话”</label>
+                <p class="muted small">朗读使用系统自带中文语音，不额外花钱。</p>
+                <button type="button" id="logoutBtn" class="icon-btn">退出控制台登录</button>
+              </section>
+
+              <section class="card wide" id="set-card-persona">
+                <h3>人设（config/persona.md）</h3>
+                <textarea id="setPersona" rows="18" spellcheck="false"></textarea>
+                <button id="savePersonaBtn" class="primary-btn">保存人设</button>
+              </section>
+
+              <section class="card wide" id="set-card-data">
+                <h3>数据与花费</h3>
+                <div class="stat-row"><span>DeepSeek 余额</span><strong id="balanceValue">--</strong><button type="button" id="refreshBalance">刷新</button></div>
+                <div class="stat-row"><span>本周花费</span><strong id="weekCost2">--</strong></div>
+                <div class="stat-row"><span>数据目录</span><code id="dataDir">--</code></div>
+                <h4>省钱闸门（余额不够时她自己降级，不用你盯）</h4>
+                <div class="row">
+                  <label>余额低于多少开始省<input id="setLowBalanceCny" type="number" min="0.1" max="100" step="0.5"></label>
+                  <label>余额低于多少全停<input id="setStopBalanceCny" type="number" min="0" max="50" step="0.5"></label>
+                </div>
+                <label>今天最多花多少元（超了当天不再主动动作）<input id="setMaxDailyCostCny" type="number" min="0" max="100" step="0.5"></label>
+                <p class="muted small">“省”= 关语音、关小红书/空间自动运营、关做梦和周记，主动找你还留着；“全停”= 连主动动作也停。充值以后自动恢复，她会自己在 QQ 上跟你说一声。</p>
+                <p class="alert-warn" id="costStateLine">省钱闸门状态读取中…</p>
+                <div class="btn-row">
+                  <button type="button" id="actionProactive">让她主动找你</button>
+                  <button type="button" id="actionWeekly">写周记</button>
+                  <button type="button" id="actionDaily">写今天的日记</button>
+                  <button type="button" id="actionCompact">压缩记忆</button>
+                  <button type="button" id="actionHandover">交接信</button>
+                  <button type="button" id="actionResetSchedule">重置主动日程</button>
+                </div>
+                <h4>最近事件</h4>
+                <div class="event-list" id="eventList"></div>
+              </section>
+            </div>
+            <div class="save-bar">
+              <button id="saveSettingsBtn" class="primary-btn">保存设置</button>
+              <span class="muted" id="saveHint">改完点保存</span>
+            </div>
+            <p class="disclaimer">API Key 只保存在本机 .env；聊天内容会发送给 DeepSeek API 用于生成回复。QQ 自动化有账号风险，请优先使用小号。</p>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal" id="letterModal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h3 id="letterTitle">信</h3>
+        <button id="closeLetter">关闭</button>
+      </div>
+      <pre id="letterBody"></pre>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

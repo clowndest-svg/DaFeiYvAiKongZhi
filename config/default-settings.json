@@ -1,0 +1,110 @@
+{
+  "companion": {
+    "name": "小知",
+    "userName": "",
+    "nickname": "笨蛋",
+    "intro": "有点小傲娇、但很会照顾人的女朋友"
+  },
+  "model": {
+    "name": "deepseek-flash",
+    "temperature": 0.95,
+    "chatMaxTokens": 1400,
+    "reflectMaxTokens": 450,
+    "reasoningEffort": "low",
+    "reflectEvery": 2
+  },
+  "memory": {
+    "compactTokens": 24000,
+    "handoverTokens": 48000,
+    "maxContextTokens": 64000,
+    "maxPromptTokens": 6000,
+    "shortTurns": 24,
+    "retrieveCount": 10,
+    "retrieveBudgetTokens": 2200
+  },
+  "proactive": {
+    "enabled": true,
+    "idleMinutesMin": 25,
+    "idleMinutesMax": 120,
+    "quietStart": "00:30",
+    "quietEnd": "08:30",
+    "maxPerDay": 3,
+    "maxUnanswered": 2,
+    "dreamEnabled": true,
+    "dreamHour": 23
+  },
+  "social": {
+    "enabled": true,
+    "dailyPostMax": 2,
+    "qzoneAutoPost": false,
+    "douyinAutoPost": false,
+    "qzoneAutoReply": true,
+    "qzoneAutoReplyMaxPerHour": 3,
+    "qzoneAutoReplyMaxPerDay": 10,
+    "qzoneAutoReplyMaxAgeHours": 48,
+    "activeStart": "09:30",
+    "activeEnd": "22:30",
+    "xhsEnabled": true,
+    "xhsAutoBrowse": true,
+    "xhsAutoReply": true,
+    "xhsOwnerName": "",
+    "xhsOwnerUserId": "",
+    "xhsSearchKeywords": "",
+    "xhsDailyCommentMax": 4,
+    "xhsDailyReplyMax": 10,
+    "xhsHourlyActionMax": 2,
+    "xhsAutoLike": true,
+    "xhsDailyLikeMax": 5,
+    "xhsAutoCollect": true,
+    "xhsDailyCollectMax": 2,
+    "xhsAutoPublish": true,
+    "xhsDmReply": false,
+    "xhsDmMaxPerDay": 3,
+    "xhsDmMaxPerTarget": 1,
+    "xhsPublishPerDay": 1,
+    "xhsDailyActionMax": 12,
+    "xhsPollHoursMin": 2,
+    "xhsPollHoursMax": 3.5,
+    "xhsDmAutoOwner": true
+  },
+  "qq": {
+    "enabled": true,
+    "groupAtOnly": true,
+    "whitelist": [],
+    "groupWhitelist": [],
+    "allowAllPrivate": false,
+    "maxRepliesPerHour": 40,
+    "sendStickers": true,
+    "stickerChance": 0.2,
+    "learnImages": true,
+    "selfFollowUp": true,
+    "selfFollowUpChance": 0.25,
+    "selfFollowUpDelaySeconds": 25,
+    "selfFollowUpMaxPerHour": 2,
+    "selfFollowUpMaxPerDay": 6,
+    "autoBindWhitelist": true,
+    "botAccount": "",
+    "autoRecover": true,
+    "sleepyMode": true
+  },
+  "ui": {
+    "autoSpeak": false,
+    "showInnerThought": true
+  },
+  "cost": {
+    "lowBalanceCny": 5,
+    "stopBalanceCny": 1.5,
+    "maxDailyCostCny": 3,
+    "rechargeHint": "DeepSeek 余额"
+  },
+  "tts": {
+    "enabled": true,
+    "voice": "zh-CN-XiaoxiaoNeural",
+    "rate": "+8%",
+    "pitch": "+2Hz",
+    "listen": true,
+    "maxPerDay": 8,
+    "maxChars": 120,
+    "chance": 0.18
+  }
+}
