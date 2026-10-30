@@ -1,4 +1,6 @@
 import { getMomLetter, getPersona } from './config.js';
+import { neuroPrompt } from './neuro.js';
+import { sensesPrompt } from './senses.js';
 import { moodPrompt } from './mood.js';
 import { estimateMessagesTokens, estimateTokens, formatLocal, localHour, relativeTimeCn, truncate } from './util.js';
 
@@ -84,6 +86,12 @@ export function buildSystemPrompt({ settings, mood, block, now = new Date(), all
   const hour = localHour(now);
   const daypart = hour < 5 ? '凌晨' : hour < 9 ? '早上' : hour < 12 ? '上午' : hour < 14 ? '中午' : hour < 18 ? '下午' : hour < 23 ? '晚上' : '深夜';
 
+  let bodyTail = '';
+  const bodyParts = [];
+  if (block.neuro?.enabled) bodyParts.push(neuroPrompt(block.neuro.levels, { name: companion.name || '小知' }));
+  if (block.senses?.length) bodyParts.push(sensesPrompt(block.senses));
+  if (bodyParts.length) bodyTail = `\n${bodyParts.join('\n')}`;
+
   const render = () => `${persona}
 
 ${momLetter ? `===== 妈妈留给你的话（不是规则，是你自己认下的东西） =====
@@ -92,7 +100,7 @@ ${momLetter}
 ` : ``}===== 你此刻带着的东西（背景，不要照念） =====
 【现在】${formatLocal(now)}（${daypart}）
 【称呼】${nameLine}
-【你的心情】${moodPrompt(mood)}
+【你的心情】${moodPrompt(mood)}${bodyTail}
 【核心档案】
 ${formatList(core)}
 【长期记忆 · 周记】
@@ -177,6 +185,7 @@ ${extraContext ? `\n【刚刚真实发生的事】\n${extraContext}\n` : ''}${al
     intentions = [];
     summary = summary.slice(0, 240);
     handover = handover.slice(0, 320);
+    bodyTail = '';
     system = render();
   }
   return system;
@@ -314,7 +323,8 @@ export function buildReflectionPrompt({ settings, mood, transcript, coreMemories
 - mood：valence 是目标愉悦度（-1 到 1），energy 是目标精力（0 到 1），affection_delta 是这一轮对亲密度的影响（-3 到 3），reason 是 20 字内的原因。
 - memories：0-2 条值得长期记住的事实/偏好/约定/重要情绪。不要记录寒暄和一次性琐事。每条含 content、importance（1-5）、tags（数组）、reasoning（为什么值得记住，20 字内）。
 - profile_updates：0-1 条稳定的核心档案（比如名字、生日、长期偏好、明确边界）。**必须带 evidence：他亲口说过的原话，必须能在下面“对话”里逐字找到；找不到就不许写这条。** 没有就空数组。格式 {"content":"...","evidence":"他原话"}。
-- intentions：0-1 件你自己之后还想做、或者想问他/提醒他的事（比如“想问他体检结果”“想把那条笔记发出去”）。要具体、一句话说明白，别记你做不到的事。没有就空数组。格式 {"text":"...","why":"...","later_hours":2}。
+${settings.presence?.sensesEnabled ? `- senses：0-1 条你这轮真实“尝到/闻到/摸到/看到/听到”的东西（他说吃了块蛋糕才记 taste）。同样**必须带 evidence：他原话里逐字能找到的片段**，找不到就不许写；没有就空数组。格式 {"kind":"taste|smell|touch|sight|sound","text":"...","detail":"口感或气味，20 字内","evidence":"他原话"}。
+` : ''}- intentions：0-1 件你自己之后还想做、或者想问他/提醒他的事（比如“想问他体检结果”“想把那条笔记发出去”）。要具体、一句话说明白，别记你做不到的事。没有就空数组。格式 {"text":"...","why":"...","later_hours":2}。
 只返回 JSON，不要 markdown。
 她现在的状态：${mood.label}，愉悦 ${mood.valence.toFixed(2)}，精力 ${mood.energy.toFixed(2)}，亲密度 ${Math.round(mood.affection)}。
 已有的核心档案：

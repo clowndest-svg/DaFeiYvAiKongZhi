@@ -26,6 +26,8 @@ import {
   touchMemories,
 } from './db.js';
 import { logger } from './logger.js';
+import { noteBrainLink } from './brain.js';
+import { memoryStrength } from './forgetting.js';
 import { getMood } from './mood.js';
 import {
   buildCompactionPrompt,
@@ -62,6 +64,7 @@ export function getMemoryBlock({ query = '', settings, recordUsage = true, sessi
   const midAll = searchableMidMemories(800);
   const qset = keywordSet(query);
   const now = Date.now();
+  const decayOn = Boolean(settings?.presence?.forgettingCurve);
 
   const scored = midAll
     .map((memory) => {
@@ -70,7 +73,7 @@ export function getMemoryBlock({ query = '', settings, recordUsage = true, sessi
       const relevance = overlapScore(qset, `${memory.content} ${(memory.tags || []).join(' ')}`);
       const score =
         relevance * 1.8 + (memory.importance / 5) * 0.9 + recency * 0.45 + Math.min(0.2, (memory.use_count || 0) * 0.01);
-      return { memory, score };
+      return { memory, score: decayOn ? score * (0.55 + 0.45 * Math.min(1, memoryStrength(memory, now))) : score };
     })
     .sort((a, b) => b.score - a.score);
 
@@ -86,6 +89,7 @@ export function getMemoryBlock({ query = '', settings, recordUsage = true, sessi
     budget -= cost;
   }
   if (recordUsage) touchMemories(picked.map((m) => m.id));
+  if (recordUsage && picked.length) noteBrainLink('recall', picked.length);
 
   const session = sessionId ? getSession(sessionId) : getActiveSession();
   const summary = kvGet(`session_summary:${session.id}`) || '';
@@ -100,6 +104,7 @@ export function getMemoryBlock({ query = '', settings, recordUsage = true, sessi
   const dailyRecent = kvGetJson('daily_digests', []).slice(-3);
   const diaryMatches = findDiaryMatches(query);
   const quotes = findQuotesForQuery(query, { excludeIds: excludeQuoteIds });
+  if (recordUsage && quotes.length) noteBrainLink('quote', quotes.length);
 
   return { core, long, mid: picked, summary, handover, innerThoughts, session, dailyRecent, diaryMatches, quotes };
 }

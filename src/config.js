@@ -41,6 +41,7 @@ export const paths = {
   get letters() { return path.join(this.data, 'letters'); },
   get archives() { return path.join(this.data, 'archives'); },
   get xhsProfile() { return path.join(this.data, 'xhs-profile'); },
+  get presenceTmp() { return path.join(this.data, 'presence-tmp'); },
   get db() { return path.join(this.data, 'bizhi.db'); },
   get settings() {
     return process.env.BIZHI_SETTINGS_FILE
@@ -62,6 +63,7 @@ for (const dir of [
   paths.letters,
   paths.archives,
   paths.xhsProfile,
+  paths.presenceTmp,
 ]) {
   ensureDir(dir);
 }
@@ -200,6 +202,22 @@ export function normalizeSettings(settings) {
   s.qq.selfFollowUpDelaySeconds = Math.min(300, Math.max(3, numberOr(s.qq.selfFollowUpDelaySeconds, 25)));
   s.qq.selfFollowUpMaxPerHour = Math.min(6, Math.max(0, numberOr(s.qq.selfFollowUpMaxPerHour, 2)));
   s.qq.selfFollowUpMaxPerDay = Math.min(20, Math.max(0, numberOr(s.qq.selfFollowUpMaxPerDay, 6)));
+
+  s.presence.gaze = s.presence?.gaze !== false;
+  s.presence.expression = s.presence?.expression !== false;
+  s.presence.breathing = s.presence?.breathing !== false;
+  s.presence.subtitles = s.presence?.subtitles !== false;
+  s.presence.cameraEnabled = s.presence?.cameraEnabled === true;
+  s.presence.cameraDailyMax = Math.min(200, Math.max(0, numberOr(s.presence?.cameraDailyMax, 20)));
+  s.presence.cameraIntervalSeconds = Math.min(3600, Math.max(30, numberOr(s.presence?.cameraIntervalSeconds, 90)));
+  s.presence.micEnabled = s.presence?.micEnabled === true;
+  s.presence.speakReplies = s.presence?.speakReplies === true;
+  s.presence.speakDailyMax = Math.min(200, Math.max(0, numberOr(s.presence?.speakDailyMax, 40)));
+  s.presence.quickChips = String(s.presence?.quickChips ?? '').trim().slice(0, 80);
+  s.presence.neuroEnabled = s.presence?.neuroEnabled === true;
+  s.presence.neuroStrength = Math.min(1, Math.max(0, numberOr(s.presence?.neuroStrength, 0.35)));
+  s.presence.forgettingCurve = s.presence?.forgettingCurve === true;
+  s.presence.sensesEnabled = s.presence?.sensesEnabled === true;
 
   s.cost.lowBalanceCny = Math.min(100, Math.max(0.1, numberOr(s.cost?.lowBalanceCny, 5)));
   s.cost.stopBalanceCny = Math.min(50, Math.max(0, numberOr(s.cost?.stopBalanceCny, 1.5)));

@@ -64,10 +64,14 @@ import {
   stickerLibraryStatus,
 } from './sticker-search.js';
 import { completeIntention, listIntentions } from './intentions.js';
-import { readCostState } from './budget.js';
+import { costBlocked, readCostState } from './budget.js';
 import { privacyProblems } from './privacy.js';
 import { synthesizeSpeech, ttsStatus, ttsVoices } from './tts.js';
 import { asrStatus } from './asr.js';
+import { checkSpeakSlot, consumeCameraSlot, hearWav, noteSpeakUsed, presenceBudget, speakLine } from './presence.js';
+import { brainStats, curveForMemory, noteBrainLink } from './brain.js';
+import { applyNeuroEvent, neuroStatus } from './neuro.js';
+import { addSense, clearSenses, sensesStatus } from './senses.js';
 import {
   closeXhsBrowser,
   fetchXhsCreatorStats,
@@ -222,7 +226,8 @@ function securityHeaders() {
     'X-Frame-Options': 'DENY',
     'Referrer-Policy': 'no-referrer',
     'Cross-Origin-Resource-Policy': 'same-origin',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
+    // 只放开「本控制台自己」用摄像头和麦克风；第三方帧和定位一律不给。
+    'Permissions-Policy': 'camera=(self), microphone=(self), geolocation=()',
     'Content-Security-Policy':
       "default-src 'self'; img-src 'self' data: https:; style-src 'self'; script-src 'self'; connect-src 'self'; font-src 'self'; media-src 'self' blob:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'",
   };
@@ -453,6 +458,9 @@ const EXPENSIVE_API = new Set([
   '/api/xhs/report',
   '/api/xhs/profile/draft',
   '/api/qzone/import-napcat',
+  '/api/presence/hear',
+  '/api/presence/look',
+  '/api/presence/speak',
 ]);
 
 // 只锁"人点一下才跑"的只读重接口；/api/xhs/status 和 /api/xhs/qr 是前端定时轮询的，
@@ -1715,6 +1723,99 @@ async function handleApi(req, res, pathname, url) {
     clearLearnedImages();
     addEvent('qq_learn_clear', '已清空学到的图片表情');
     return sendJson(res, 200, { ok: true, count: 0 });
+  }
+
+  /* ---------------- 陪伴模式：摄像头 / 麦克风 / 念话 / 身体状态 ---------------- */
+
+  if (pathname === '/api/presence/state' && method === 'GET') {
+    const settings = loadSettings();
+    return sendJson(res, 200, {
+      ok: true,
+      presence: settings.presence,
+      budget: presenceBudget(settings),
+      neuro: neuroStatus(settings),
+      senses: sensesStatus(),
+      brain: brainStats(),
+      mood: getMood(),
+      asrReady: asrStatus().ready,
+    });
+  }
+
+  if (pathname === '/api/presence/curve' && method === 'GET') {
+    const id = Number(url.searchParams.get('id'));
+    if (!Number.isFinite(id) || id <= 0) throw new HttpError(400, '缺少记忆 id');
+    const curve = curveForMemory(id);
+    if (!curve) throw new HttpError(404, '这条记忆不在了');
+    return sendJson(res, 200, { ok: true, ...curve });
+  }
+
+  if (pathname === '/api/presence/hear' && method === 'POST') {
+    const settings = loadSettings();
+    const body = await readJsonBody(req, 4 * 1024 * 1024);
+    const result = await hearWav(body.audio, { settings });
+    return sendJson(res, 200, { ok: true, ...result });
+  }
+
+  if (pathname === '/api/presence/look' && method === 'POST') {
+    const settings = loadSettings();
+    const body = await readJsonBody(req, 12 * 1024 * 1024);
+    const image = String(body.image || '');
+    if (!/^data:image\/(png|jpe?g|webp);base64,/i.test(image) || image.length > 8 * 1024 * 1024) {
+      throw new HttpError(400, '只收 png/jpeg/webp 的数据块，单张别超过 8MB');
+    }
+    if (costBlocked('look')) throw new HttpError(429, '今天花费到线了，先不让她看东西');
+    const budget = consumeCameraSlot(settings);
+    const caption = String(body.caption || '').trim().slice(0, 200);
+    const result = await companion.reply({
+      text: caption || '（他把摄像头对准了这边）你看看，说说你看到了什么',
+      images: [image],
+      channel: 'web',
+      extraContext:
+        '这是他现在用摄像头给你的实时画面，不是他上传的旧照片。只说画面里真看得清的东西；看不清、光线差就说看不清，别补画面外的细节。',
+    });
+    applyNeuroEvent('novelty_sight');
+    noteBrainLink('look');
+    if (settings.presence?.sensesEnabled) {
+      const sense = addSense({
+        kind: 'sight',
+        text: String(result.text || '').slice(0, 60),
+        detail: caption,
+        source: 'camera',
+      });
+      if (sense.ok) noteBrainLink('sense');
+    }
+    return sendJson(res, 200, {
+      ok: true,
+      text: result.text,
+      message: result.message,
+      stickerHint: result.stickerHint || null,
+      costCny: result.costCny,
+      budget,
+    });
+  }
+
+  if (pathname === '/api/presence/speak' && method === 'POST') {
+    const settings = loadSettings();
+    if (!settings.presence?.speakReplies) {
+      throw new HttpError(403, '控制台念话是关的：设置页「陪伴与感官」里打开');
+    }
+    const body = await readJsonBody(req);
+    const text = String(body.text || '').trim();
+    if (!text) throw new HttpError(400, '没有要念的话');
+    checkSpeakSlot(settings);
+    try {
+      const audio = await speakLine(text, settings);
+      return sendJson(res, 200, { ok: true, ...audio, budget: noteSpeakUsed(settings) });
+    } catch (error) {
+      addEvent('presence_speak_error', '控制台念话没合成出来', { error: errorMessage(error).slice(0, 120) });
+      throw new HttpError(502, `语音没合成出来：${errorMessage(error)}`);
+    }
+  }
+
+  if (pathname === '/api/presence/senses' && method === 'DELETE') {
+    clearSenses();
+    addEvent('presence_senses_clear', '她清空了自己的感官记忆');
+    return sendJson(res, 200, { ok: true });
   }
 
   return sendJson(res, 404, { error: 'API 不存在' });

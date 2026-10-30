@@ -686,6 +686,23 @@ function sweepMedia(now) {
   return { files, bytes };
 }
 
+function sweepPresenceTmp(now) {
+  let files = 0;
+  try {
+    for (const entry of fs.readdirSync(paths.presenceTmp)) {
+      if (!entry.startsWith('hear-')) continue;
+      const file = path.join(paths.presenceTmp, entry);
+      const stat = fs.statSync(file);
+      if (!stat.isFile() || now - stat.mtimeMs <= 3600000) continue;
+      fs.unlinkSync(file);
+      files += 1;
+    }
+  } catch {
+    // 还没用过麦克风，目录是空的
+  }
+  return files;
+}
+
 export function maintenance() {
   const db = getDb();
   const now = Date.now();
@@ -698,6 +715,7 @@ export function maintenance() {
     kv: 0,
     media: swept.files,
     mediaBytes: swept.bytes,
+    presenceTmp: sweepPresenceTmp(now),
   };
 
   const datedPrefixes = [
@@ -730,6 +748,8 @@ export function maintenance() {
     'xhs_collect_day:',
     'xhs_publish_day:',
     'xhs_publish_attempt:',
+    'presence_look_day:',
+    'presence_speak_day:',
   ];
   const cutoffDate = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(
     new Date(now - 30 * 86400000),

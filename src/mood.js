@@ -1,4 +1,5 @@
 import { addMood, latestMood } from './db.js';
+import { getNeuro } from './neuro.js';
 import { clamp, localHour, nowIso } from './util.js';
 
 const DEFAULT_MOOD = {
@@ -36,30 +37,57 @@ export function moodLabel({ valence, energy }) {
   return '平静';
 }
 
-export function getMood(now = new Date()) {
+function shiftMood(base, tone) {
+  const valence = clamp(base.valence + tone.valenceBias, -1, 1);
+  const energy = clamp(base.energy + tone.energyBias, 0, 1);
+  if (valence === base.valence && energy === base.energy) return { ...base, neuro: tone };
+  return { ...base, valence, energy, label: moodLabel({ valence, energy }), neuro: tone };
+}
+
+function readMood(now = new Date(), { applyNeuro = false } = {}) {
   const row = latestMood();
   const targetEnergy = circadianEnergy(now);
-  if (!row) return { ...DEFAULT_MOOD, energy: targetEnergy, created_at: nowIso() };
-  const created = new Date(row.created_at || 0).getTime();
-  const ageHours = Number.isFinite(created) ? Math.max(0, (now.getTime() - created) / 3600000) : 24;
-  // 心情会回落：几个小时后还带着“他说晚安”的语气就不像人了。
-  const valencePull = Math.min(1, ageHours / 8) * 0.6;
-  const energyPull = Math.min(1, ageHours / 4) * 0.8;
-  const valence = clamp(Number(row.valence) + (0.25 - Number(row.valence)) * valencePull, -1, 1);
-  const energy = clamp(Number(row.energy) + (targetEnergy - Number(row.energy)) * energyPull, 0, 1);
-  const reason = ageHours <= 2 ? String(row.reason || '') : '';
-  return {
-    valence,
-    energy,
-    affection: Number(row.affection),
-    label: moodLabel({ valence, energy }),
-    reason,
-    created_at: row.created_at,
-  };
+  const base = !row
+    ? { ...DEFAULT_MOOD, energy: targetEnergy, created_at: nowIso() }
+    : (() => {
+        const created = new Date(row.created_at || 0).getTime();
+        const ageHours = Number.isFinite(created) ? Math.max(0, (now.getTime() - created) / 3600000) : 24;
+        // 心情会回落：几个小时后还带着“他说晚安”的语气就不像人了。
+        const valencePull = Math.min(1, ageHours / 8) * 0.6;
+        const energyPull = Math.min(1, ageHours / 4) * 0.8;
+        const valence = clamp(Number(row.valence) + (0.25 - Number(row.valence)) * valencePull, -1, 1);
+        const energy = clamp(Number(row.energy) + (targetEnergy - Number(row.energy)) * energyPull, 0, 1);
+        return {
+          valence,
+          energy,
+          affection: Number(row.affection),
+          label: moodLabel({ valence, energy }),
+          reason: ageHours <= 2 ? String(row.reason || '') : '',
+          created_at: row.created_at,
+        };
+      })();
+  if (!applyNeuro) return base;
+  let tone;
+  try {
+    tone = getNeuro({ now });
+  } catch {
+    return base;
+  }
+  if (!tone.enabled) return base;
+  return shiftMood(base, tone.tone);
+}
+
+export function getMood(now = new Date()) {
+  return readMood(now, { applyNeuro: true });
+}
+
+/** 不带递质影响的“账面上的心情”，写库时用这个，避免自我放大。 */
+export function getMoodRaw(now = new Date()) {
+  return readMood(now, { applyNeuro: false });
 }
 
 export function applyMood(update = {}, { reason = '', sessionId = null } = {}) {
-  const current = getMood();
+  const current = getMoodRaw();
   const targetValence = Number.isFinite(Number(update.valence)) ? Number(update.valence) : current.valence;
   const targetEnergy = Number.isFinite(Number(update.energy)) ? Number(update.energy) : current.energy;
   // 情绪有惯性：单轮只走 35%，避免一句好话就飘上天、一句重话就崩
