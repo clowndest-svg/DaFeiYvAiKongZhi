@@ -1,0 +1,156 @@
+{
+  "name": "DS 蓝色大肥鱼",
+  "note": "Generated from the user's licensed 大肥鱼 character art; not scraped from the web.",
+  "items": [
+    {
+      "file": "happy-01.jpg",
+      "expression": "happy",
+      "caption": "在呢"
+    },
+    {
+      "file": "happy-02.jpg",
+      "expression": "happy",
+      "caption": "好耶"
+    },
+    {
+      "file": "happy-03.jpg",
+      "expression": "happy",
+      "caption": "贴贴"
+    },
+    {
+      "file": "happy-04.jpg",
+      "expression": "happy",
+      "caption": "收到"
+    },
+    {
+      "file": "happy-05.jpg",
+      "expression": "happy",
+      "caption": "想你了"
+    },
+    {
+      "file": "happy-06.jpg",
+      "expression": "happy",
+      "caption": "嘿嘿"
+    },
+    {
+      "file": "shy-01.jpg",
+      "expression": "shy",
+      "caption": "哼"
+    },
+    {
+      "file": "shy-02.jpg",
+      "expression": "shy",
+      "caption": "才不是"
+    },
+    {
+      "file": "shy-03.jpg",
+      "expression": "shy",
+      "caption": "别看我"
+    },
+    {
+      "file": "shy-04.jpg",
+      "expression": "shy",
+      "caption": "脸红了"
+    },
+    {
+      "file": "shy-05.jpg",
+      "expression": "shy",
+      "caption": "晚安"
+    },
+    {
+      "file": "shy-06.jpg",
+      "expression": "shy",
+      "caption": "谢谢"
+    },
+    {
+      "file": "surprised-01.jpg",
+      "expression": "surprised",
+      "caption": "欸？"
+    },
+    {
+      "file": "surprised-02.jpg",
+      "expression": "surprised",
+      "caption": "真的假的"
+    },
+    {
+      "file": "surprised-03.jpg",
+      "expression": "surprised",
+      "caption": "救命"
+    },
+    {
+      "file": "surprised-04.jpg",
+      "expression": "surprised",
+      "caption": "不会吧"
+    },
+    {
+      "file": "surprised-05.jpg",
+      "expression": "surprised",
+      "caption": "看戏"
+    },
+    {
+      "file": "surprised-06.jpg",
+      "expression": "surprised",
+      "caption": "哇"
+    },
+    {
+      "file": "blink-01.jpg",
+      "expression": "blink",
+      "caption": "笨蛋"
+    },
+    {
+      "file": "blink-02.jpg",
+      "expression": "blink",
+      "caption": "摸摸头"
+    },
+    {
+      "file": "blink-03.jpg",
+      "expression": "blink",
+      "caption": "别熬夜"
+    },
+    {
+      "file": "blink-04.jpg",
+      "expression": "blink",
+      "caption": "加油"
+    },
+    {
+      "file": "blink-05.jpg",
+      "expression": "blink",
+      "caption": "看我的"
+    },
+    {
+      "file": "blink-06.jpg",
+      "expression": "blink",
+      "caption": "溜了"
+    },
+    {
+      "file": "normal-01.jpg",
+      "expression": "normal",
+      "caption": "嗯嗯"
+    },
+    {
+      "file": "normal-02.jpg",
+      "expression": "normal",
+      "caption": "知道了"
+    },
+    {
+      "file": "normal-03.jpg",
+      "expression": "normal",
+      "caption": "随便"
+    },
+    {
+      "file": "normal-04.jpg",
+      "expression": "normal",
+      "caption": "好吧"
+    },
+    {
+      "file": "normal-05.jpg",
+      "expression": "normal",
+      "caption": "在忙"
+    },
+    {
+      "file": "normal-06.jpg",
+      "expression": "normal",
+      "caption": "等你"
+    }
+  ]
+}

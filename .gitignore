@@ -1,0 +1,43 @@
+# Local credentials and runtime configuration
+.env
+.env.*
+!.env.example
+config/settings.json
+config/persona.local.md
+config/mom-letter.local.md
+
+# Private history, accounts, databases, screenshots and logs
+data/
+audit/
+napcat/
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.out
+
+# Downloaded runtimes, models and dependencies
+node_modules/
+asr/
+voice/
+dl/
+.local/
+*.zip
+*.7z
+*.onnx
+*.exe
+*.dll
+__pycache__/
+*.pyc
+
+# Local editor / Claude state
+.claude/*
+!.claude/launch.json
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test reports and build artifacts
+playwright-report/
+test-results/
+coverage/

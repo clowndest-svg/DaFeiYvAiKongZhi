@@ -1,0 +1,28 @@
+{
+  "name": "bizhi-companion",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "小知 —— 本地运行的 AI 女友：三层记忆、心情、主动找你、QQ 通道",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "test": "node tools/test.mjs",
+    "test:local": "node tools/test.mjs --local",
+    "check": "node tools/check.mjs",
+    "test:browser": "node --test tests/browser.e2e.js",
+    "smoke": "node tools/smoke-llm.js"
+  },
+  "engines": {
+    "node": ">=22.16"
+  },
+  "dependencies": {
+    "ws": "^8.22.0"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-node": "^2.0.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
+}
