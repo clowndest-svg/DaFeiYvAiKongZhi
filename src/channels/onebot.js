@@ -15,6 +15,8 @@ import { transcribeRecord, transcribeWav } from '../asr.js';
 import { buildSelfFollowUpPrompt } from '../prompt.js';
 import { generatePost, tryAutoPublish } from '../social.js';
 import { getStickerBase64, pickSticker } from '../stickers.js';
+import { CALL_DEFAULTS, VoiceCall } from '../voice-call.js';
+import { planSpokenReply } from '../voice-style.js';
 import { localHour, nowIso, parseJsonLoose, safeEqual, shanghaiDayKey, sleep, splitForQQ } from '../util.js';
 
 function wsToken(req) {
@@ -40,6 +42,8 @@ export function parseOwnerCommand(text) {
   if (/^(发一条|发个笔记|去发笔记)$/.test(value)) return 'publish';
   if (/^(今天做了啥|今天干了什么|今天都做了啥)$/.test(value)) return 'today';
   if (/^(发条语音|说句语音|用声音说)$/.test(value)) return 'voice';
+  if (/^[\/]?(语音聊天|语音通话|打语音|来电话|打电话)$/.test(value)) return 'call_on';
+  if (/^[\/]?(挂断|退出语音|结束语音|不说了)$/.test(value)) return 'call_off';
   return null;
 }
 
@@ -182,6 +186,25 @@ export class OneBotChannel {
     this.stickerTimes = new Map();
     this.lastEventAt = null;
     this.lastError = null;
+    // 会话对象本身不建定时器、不起进程；只有 state=ACTIVE 之后才有这些副作用。
+    this.voiceCall = new VoiceCall({
+      config: () => {
+        const t = loadSettings().tts || {};
+        return {
+          dailyVoiceMax: Number(t.callDailyMax ?? CALL_DEFAULTS.dailyVoiceMax),
+          minSendGapMs: Math.max(0, Number(t.callMinIntervalSeconds ?? 8)) * 1000,
+        };
+      },
+      sendAck: async (text, scope) => {
+        const owner = kvGet('qq_owner_id');
+        if (!owner) return;
+        await this.outboundScope.run(scope, () => this.sendToTarget({ type: 'private', userId: owner }, text));
+      },
+      onEvent: (kind, data) => {
+        const labels = { call_begin: '进入语音会话', call_end: '语音会话结束', call_ack: '慢回合先回了一句「收到」', call_stale_reserved: '旧回合作废，额度还回来了', call_ack_failed: '确认消息没发出去' };
+        addEvent(`qq_${kind}`, labels[kind] || kind, data || {});
+      },
+    });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
     this.heartbeat = setInterval(() => {
       this.pruneSeenMessages();
@@ -306,6 +329,7 @@ export class OneBotChannel {
     ws.on('message', (data) => this.handleRaw(ws, data));
     ws.on('close', () => {
       this.clients.delete(ws);
+      if (this.voiceCall.active && this.clients.size === 0) this.voiceCall.end('channel_down');
       for (const [echo, entry] of this.pending) {
         if (entry.ws === ws) {
           clearTimeout(entry.timer);
@@ -493,9 +517,12 @@ export class OneBotChannel {
       return;
     }
 
+    // 作废发生在入站这一刻，不是 flush 那一刻：等 2.2 秒的话旧回答早就提交出去了。
+    if (isOwnerPrivate && this.voiceCall.active) this.voiceCall.noteInbound();
+
     let buffer = this.buffers.get(conversationKey);
     if (!buffer) {
-      buffer = { texts: [], images: [], voices: [], target, nickname, timer: null, groupContext: '', guest, sessionId };
+      buffer = { texts: [], images: [], voices: [], target, nickname, timer: null, groupContext: '', guest, sessionId, firstAt: Date.now() };
       this.buffers.set(conversationKey, buffer);
     }
     if (target.type === 'group') {
@@ -510,12 +537,15 @@ export class OneBotChannel {
     buffer.guest = guest;
     buffer.sessionId = sessionId;
     if (buffer.timer) clearTimeout(buffer.timer);
+    // 会话里连发短语音时，防抖不能无限推迟：quiet 与「首批消息 + 硬顶」取更早的那个。
+    // 不在语音会话里时 ageCap 是 Infinity，延迟值与改动前逐字相同。
+    const ageCap = this.voiceCall.active && isOwnerPrivate ? Math.max(0, buffer.firstAt + CALL_DEFAULTS.maxBufferAgeMs - Date.now()) : Infinity;
     buffer.timer = setTimeout(() => {
       this.flushBuffer(conversationKey).catch((error) => {
         this.lastError = error.message;
         logger.warn('QQ 回复失败', { error: error.message, conversationKey });
       });
-    }, 2200);
+    }, Math.min(2200, ageCap));
   }
 
   rememberGroupMessage(groupId, nickname, text) {
@@ -777,22 +807,41 @@ ${history}
       extraContext = `${extraContext ? `${extraContext}\n` : ''}现在是深夜，你已经困了：回复短一点、慢一点，别发长段，别发表情包，也别发语音。`;
     }
 
+    // 语音会话：这一轮的回复要更短、更口语，并且带一个回合身份往下传。
+    const callScope = isOwnerPrivate && this.voiceCall.active
+      ? this.voiceCall.openTurn({ accountGeneration: this.generation, ownerId: String(buffer.target.userId || ''), batchFirstAt: buffer.firstAt })
+      : null;
+    if (callScope) {
+      this.voiceCall.armAck(callScope);
+      extraContext = `${extraContext ? `${extraContext}\n` : ''}他正在用语音跟你通话，你也用语音回他：只说一到两句、25～45 个汉字，像打电话那样口语，别列点、别用书面词、别念数字。`;
+    }
+
     try {
-      const result = await this.companion.reply({
+      const replyArgs = {
         text: messageText,
         images,
         channel: buffer.guest ? (buffer.target.type === 'group' ? 'qq-group' : 'qq-guest') : 'qq',
         sessionId: buffer.sessionId || undefined,
         displayName: buffer.nickname,
         extraContext,
-      });
+      };
+      const result = callScope
+        ? await this.outboundScope.run(callScope, () => this.companion.reply(replyArgs))
+        : await this.companion.reply(replyArgs);
       this.assertCurrentWork();
       const allowExtras = !sleepy && loadSettings().qq.sendStickers !== false && !/别|不要|不想|不许/.test(messageText);
       const stickerCooling = Date.now() - Number(this.stickerTimes.get(this.stickerKey(buffer.target)) || 0) < 5 * 60000;
       const allowVoice = !sleepy && !buffer.guest && buffer.target.type === 'private';
       // 想用说的就用说的：短句语音直接替代文字，失败再补文字，不同时发两遍。
-      const voiceSent = allowVoice ? await this.maybeSendVoice(result) : false;
+      const voiceSent = callScope
+        ? await this.sendCallVoice(result, callScope)
+        : (allowVoice ? await this.maybeSendVoice(result) : false);
       if (!voiceSent) {
+        // 回合已经被新的输入或挂断作废：文字也不许补发，否则旧答案会追到新话题后面。
+        if (callScope && !this.voiceCall.isCurrent(callScope)) {
+          addEvent('qq_call_turn_dropped', '这一回合被新的输入作废，文字也没补发', { turn: callScope.turnGeneration });
+          return;
+        }
         await this.delayFor(result.text);
         const chunks = splitForQQ(result.text);
         for (let i = 0; i < chunks.length; i += 1) {
@@ -1029,6 +1078,18 @@ ${history}
         logger.warn('QQ 口令发语音失败，改成文字', { error: error.message });
         reply = result.text;
       }
+    } else if (command === 'call_on') {
+      const started = this.voiceCall.begin({
+        ownerId: kvGet('qq_owner_id'),
+        accountGeneration: this.generation,
+        enabled: loadSettings().tts?.callEnabled === true,
+      });
+      reply = started.ok
+        ? '好，那我用语音跟你说，你说完我接着。随时发「挂断」就停。'
+        : `语音会话开不起来：${started.reason}`;
+    } else if (command === 'call_off') {
+      const ended = this.voiceCall.end('owner_command');
+      reply = ended.ok ? '好，先挂了。想听我说话再叫我。' : `现在没在语音会话里（${ended.reason}）`;
     }
     if (reply) {
       for (const chunk of splitForQQ(reply)) {
@@ -1078,11 +1139,78 @@ ${history}
     }
   }
 
-  voiceCountToday() {
-    return Number(kvGet(`voice_day:${shanghaiDayKey()}`, '0') || 0);
+  // 语音会话里的一轮。跳过 18% 概率闸门，但预算、最小间隔、世代校验一个都不能少；
+  // 最后一次校验与真正提交之间不许有 await，否则「作废」就是纸面上的。
+  async sendCallVoice(result, scope) {
+    const owner = kvGet('qq_owner_id');
+    if (!owner) return false;
+    const plan = planSpokenReply(result.text, { maxChars: CALL_DEFAULTS.spokenMaxChars, minChars: CALL_DEFAULTS.spokenMinChars });
+    if (plan.mode !== 'voice') {
+      addEvent('qq_call_text_fallback', plan.reason, { chars: String(result.text || '').length });
+      return false;
+    }
+    const tts = loadSettings().tts || {};
+    const mood = getMood();
+    const baseRate = Number(String(tts.rate || '+8%').replace('%', '')) || 8;
+    const basePitch = Number(String(tts.pitch || '+2Hz').replace(/[^\d+-]/g, '')) || 2;
+    const sign = (value, unit) => `${value >= 0 ? '+' : ''}${Math.round(value)}${unit}`;
+    // 会话里情绪只许小幅挪动：语速变化太大会让同一场电话里像换了个人。
+    const rate = sign(baseRate + (mood.energy - 0.5) * 4, '%');
+    const pitch = sign(basePitch + mood.valence * 2, 'Hz');
+    let audio = null;
+    try {
+      audio = await this.synthesizeSpeech(plan.text, {
+        voice: tts.voice,
+        rate,
+        pitch,
+        volume: tts.volume || '',
+        maxChars: CALL_DEFAULTS.spokenMaxChars + 20,
+      });
+      // 这一行故意不加 await：run() 同步返回，校验→扣额度→写发送帧在同一个 JS 同步片段里完成，
+      // 中间一旦让出事件循环，新来的语音就来不及"作废"这条已经在路上的消息了。
+      const ticket = this.outboundScope.run(scope, () => this.voiceCall.markCommitting(scope, { dailyCount: this.voiceCountToday() }));
+      if (!ticket.ok) {
+        addEvent('qq_call_stale', `这条语音不发了：${ticket.reason}`, { turn: scope.turnGeneration });
+        return false;
+      }
+      this.bumpVoiceCount(1);
+      try {
+        await this.outboundScope.run(scope, () => this.sendRecordToTarget({ type: 'private', userId: owner }, audio.file));
+        this.voiceCall.settle(ticket.ticketId, 'confirmed');
+        addEvent('qq_call_voice', `语音会话里她说了一句（${audio.voice || audio.engine}）`, {
+          chars: audio.text.length,
+          bytes: audio.bytes,
+          seconds: audio.seconds ?? null,
+          engine: audio.engine,
+        });
+        return true;
+      } catch (error) {
+        const unknown = error.code === 'DELIVERY_UNKNOWN';
+        this.voiceCall.settle(ticket.ticketId, unknown ? 'unknown' : 'refunded');
+        if (!unknown) this.bumpVoiceCount(-1);
+        addEvent('qq_call_voice_error', `语音没发出去，改打字（${unknown ? '发送状态未知，不重试' : error.message}）`, { error: error.message });
+        return false;
+      }
+    } catch (error) {
+      if (error.code !== 'DELIVERY_UNKNOWN' && error.name !== 'AbortError') {
+        logger.warn('语音会话合成失败，改文字', { error: error.message });
+        addEvent('qq_call_tts_error', '语音会话里合成没成功，这轮改打字', { error: error.message });
+      }
+      return false;
+    } finally {
+      if (audio?.file) {
+        try {
+          fs.unlinkSync(audio.file);
+        } catch {
+          // 已经没了
+        }
+      }
+    }
   }
 
-  bumpVoiceCount(delta = 1) {
+  voiceCountToday() {
+    return Number(kvGet(`voice_day:${shanghaiDayKey()}`, '0') || 0);
+  }  bumpVoiceCount(delta = 1) {
     const key = `voice_day:${shanghaiDayKey()}`;
     kvSet(key, String(Math.max(0, Number(kvGet(key, '0') || 0) + delta)));
   }
@@ -1121,6 +1249,7 @@ ${history}
         voice: voice || tts.voice,
         rate: rate || tts.rate,
         pitch: pitch || tts.pitch,
+        volume: tts.volume || '',
         maxChars: Number(tts.maxChars ?? 120),
       });
       if (generation !== this.generation || owner !== kvGet('qq_owner_id')) throw Object.assign(new Error('账号已改变，取消旧语音'), { name: 'AbortError', code: 'ABORT_ERR' });
@@ -1409,6 +1538,10 @@ ${history}
     if (this.destroyed || scope && (scope.generation !== this.generation || scope.ownerId && scope.ownerId !== String(kvGet('qq_owner_id') || ''))) {
       throw Object.assign(new Error('账号或通道已改变，取消旧任务'), { name: 'AbortError', code: 'ABORT_ERR' });
     }
+    // 只有带回合身份的发送才多校这一级；旧路径的 scope 没有 callSessionId，行为逐字不变。
+    if (scope && scope.callSessionId && !this.voiceCall.isCurrent(scope)) {
+      throw Object.assign(new Error('这一回合已经被新的输入或挂断作废'), { name: 'AbortError', code: 'ABORT_ERR' });
+    }
   }
 
   sendAction(action, params, timeoutMs = 30000) {
@@ -1476,6 +1609,7 @@ ${history}
       lastEventAt: this.lastEventAt,
       downMinutes: this.downSince ? Math.round((Date.now() - this.downSince) / 60000) : 0,
       autoRecover: Boolean(budget.settings.qq?.autoRecover),
+      voiceCall: this.voiceCall.snapshot(),
       voice: {
         enabled: Boolean(budget.settings.tts?.enabled),
         today: this.voiceCountToday(),
@@ -1522,6 +1656,7 @@ ${history}
   destroy() {
     this.destroyed = true;
     clearInterval(this.heartbeat);
+    this.voiceCall.end('channel_destroyed');
     for (const key of [...this.followUpTimers.keys()]) this.cancelFollowUp(key);
     for (const buffer of this.buffers.values()) if (buffer.timer) clearTimeout(buffer.timer);
     this.buffers.clear();

@@ -467,12 +467,18 @@
                 <label>语速 <input id="setVoiceRate" maxlength="6" placeholder="+8%"></label>
                 <label>音调 <input id="setVoicePitch" maxlength="6" placeholder="+2Hz"></label>
                 <label>一条语音最多几个字（20–200）<input id="setVoiceMaxChars" type="number" min="20" max="200"></label>
+                <label>音量（可空，例 +10%；空着就是不传这个参数）<input id="setVoiceVolume" maxlength="6" placeholder="+0%"></label>
+                <label class="check"><input type="checkbox" id="setVoiceCall"> 语音对话模式（默认关）：你发「/语音聊天」后她用语音连着回，发「/挂断」停</label>
+                <label>对话模式当天语音总量上限（0–80，普通散发仍受上面那个 8 条约束）<input id="setVoiceCallMax" type="number" min="0" max="80"></label>
+                <label>两条语音之间至少隔几秒（0–120）<input id="setVoiceCallGap" type="number" min="0" max="120"></label>
                 <div class="btn-row">
                   <button type="button" class="icon-btn" id="voicePreviewBtn">试听这个音色</button>
+                  <button type="button" class="icon-btn" id="voiceCompareBtn">同一句话 · 多音色对比试听</button>
                   <button type="button" class="icon-btn" id="voiceQqBtn">发一条到我 QQ 上听</button>
                   <button type="button" class="icon-btn" id="voiceEchoBtn">自检：发出去再听回来</button>
                 </div>
                 <audio id="voicePreviewPlayer" controls class="voice-preview hidden"></audio>
+                <div id="voiceCompareList" class="compare-list"></div>
                 <p class="muted small" id="voiceStatusLine">正在读取音色与识别状态…</p>
                 <label class="check"><input type="checkbox" id="setQqAutoBind"> 白名单里的 QQ 第一次私聊就直接当主人（关掉则都要在控制台确认）</label>
                 <label class="check"><input type="checkbox" id="setQqAutoRecover"> QQ 断了 5 分钟后她自己重启登录进程试着恢复（可能要你再扫一次码）</label>

@@ -1499,7 +1499,11 @@ function renderVoiceLine() {
     return;
   }
   const engines = setup.engines || {};
-  const say = engines.edge ? '微软自然声（在线，可选 12 个音色）' : engines.piper ? '本地 piper（离线）' : '本机语音（Huihui）';
+  const local = engines.local || {};
+  const localText = local.installed
+    ? `本地 Matcha 已装（离线${local.alive ? '，进程在跑' : '，用时才起进程'}${local.metrics && local.metrics.lastRtf != null ? `，上次 RTF ${local.metrics.lastRtf}` : ''}）`
+    : '本地 Matcha 未安装（跑 npm run tts:install-local）';
+  const say = `${engines.edge ? '微软自然声（在线）' : engines.piper ? '本地 piper' : '本机语音'}；${localText}`;
   const asr = setup.asr || {};
   const hear = asr.ready
     ? `SenseVoice 已装好（${asr.modelMb}MB，${asr.warm ? '已加载' : '第一次听时加载'}）`
@@ -1509,7 +1513,11 @@ function renderVoiceLine() {
     ? `今天发了 ${voice.today ?? 0}/${voice.maxPerDay ?? 0} 条语音、听懂 ${voice.heardToday ?? 0} 条`
     : '发语音已关闭';
   const listen = voice.listen === false ? '（听语音开关是关的）' : '';
-  line.textContent = `发声：${say}；听懂：${hear}；${sent}${listen}。`;
+  const call = state.status?.qq?.voiceCall || {};
+  const callText = call.active
+    ? `语音会话进行中：本场已说 ${call.voiceUsed} 条（上限 ${call.caps?.sessionVoiceMax}，当日总量 ${call.caps?.dailyVoiceMax}），确认消息 ${call.ackSent} 条`
+    : `语音会话：没在会话里（模式${state.settings?.tts?.callEnabled ? '已打开' : '关着'}，在 QQ 上发「/语音聊天」进入）`;
+  line.textContent = `发声：${say}；听懂：${hear}；${sent}${listen}。${callText}`;
 }
 
 async function loadVoiceSetup() {
@@ -1518,6 +1526,30 @@ async function loadVoiceSetup() {
   state.voiceSetup = data;
   fillVoiceSelect(previous);
   renderVoiceLine();
+}
+
+// 一行试听结果：文本完全相同，所以听起来差别只能来自引擎。
+// 时长为 null 时不编数字 —— mp3 在这台机器上没有解码器。
+function compareRow(item) {
+  const row = el('div', 'compare-row');
+  const head = el('div', 'compare-head');
+  head.appendChild(el('strong', '', item.label || item.voice));
+  head.appendChild(el('span', 'muted small', item.ok ? `${item.engine} · ${item.ms}ms · ${item.bytes} 字节 · 时长${item.seconds == null ? '未测量' : `${item.seconds.toFixed(2)}s`}` : `没出声：${item.error || '未知原因'}`));
+  row.appendChild(head);
+  if (item.ok) {
+    const audio = el('audio');
+    audio.controls = true;
+    audio.src = withToken(item.url);
+    row.appendChild(audio);
+    const use = el('button', 'icon-btn', '就用这个');
+    use.type = 'button';
+    use.addEventListener('click', () => {
+      fillVoiceSelect(item.voice);
+      toast(`已选中 ${item.label || item.voice}，记得点保存才生效。`);
+    });
+    row.appendChild(use);
+  }
+  return row;
 }
 
 async function previewVoice(button) {
@@ -1530,6 +1562,7 @@ async function previewVoice(button) {
           voice: $('#setVoiceName').value,
           rate: String($('#setVoiceRate').value || '').trim(),
           pitch: String($('#setVoicePitch').value || '').trim(),
+          volume: String($('#setVoiceVolume').value || '').trim(),
         },
       });
       player.src = withToken(data.url);
@@ -1595,6 +1628,10 @@ function fillSettings() {
   $('#setVoiceRate').value = settings.tts?.rate || '+8%';
   $('#setVoicePitch').value = settings.tts?.pitch || '+2Hz';
   $('#setVoiceMaxChars').value = settings.tts?.maxChars ?? 120;
+  $('#setVoiceVolume').value = settings.tts?.volume || '';
+  $('#setVoiceCall').checked = settings.tts?.callEnabled === true;
+  $('#setVoiceCallMax').value = settings.tts?.callDailyMax ?? 40;
+  $('#setVoiceCallGap').value = settings.tts?.callMinIntervalSeconds ?? 8;
   $('#setSleepyMode').checked = settings.qq?.sleepyMode !== false;
   renderVoiceLine();
   $('#setQqAutoBind').checked = settings.qq?.autoBindWhitelist !== false;
@@ -1753,6 +1790,10 @@ function collectSettings() {
       rate: String($('#setVoiceRate').value || '').trim() || '+8%',
       pitch: String($('#setVoicePitch').value || '').trim() || '+2Hz',
       maxChars: Number($('#setVoiceMaxChars').value) || prev.tts?.maxChars || 120,
+      volume: String($('#setVoiceVolume').value || '').trim(),
+      callEnabled: $('#setVoiceCall').checked,
+      callDailyMax: Number($('#setVoiceCallMax').value) || 0,
+      callMinIntervalSeconds: Number($('#setVoiceCallGap').value) || 0,
     },
     social: {
       ...(prev.social || {}),
@@ -2381,6 +2422,21 @@ function bindSettings() {
   }
   $('#saveSettingsBtn').addEventListener('click', saveSettings);
   $('#voicePreviewBtn').addEventListener('click', () => previewVoice($('#voicePreviewBtn')));
+  $('#voiceCompareBtn').addEventListener('click', () => withBusy($('#voiceCompareBtn'), async () => {
+    const box = $('#voiceCompareList');
+    box.textContent = '';
+    const done = el('p', 'muted small', '同一句话正在发给各个引擎，本地那个要先加载模型，稍慢…');
+    box.appendChild(done);
+    try {
+      const data = await api('/api/voice/compare', { method: 'POST', body: {} });
+      box.textContent = '';
+      for (const item of data.results || []) box.appendChild(compareRow(item));
+      toast(`出了声的 ${data.results.filter((x) => x.ok).length} 个，听完点「就用这个」。`);
+    } catch (error) {
+      box.textContent = `对比失败：${error.message}`;
+      toast(error.message, 'error');
+    }
+  }));
   $('#voiceQqBtn').addEventListener('click', () => withBusy($('#voiceQqBtn'), async () => {
     try {
       const data = await api('/api/qq/test-voice', {

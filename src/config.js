@@ -26,13 +26,33 @@ function loadDotEnv(file) {
 
 if (process.env.BIZHI_TEST_MODE !== '1') loadDotEnv(path.join(ROOT, '.env'));
 
+// 防呆：测试进程必须落在隔离目录里。
+// 我踩过这个坑 —— 直接 `node --test tests/xxx.test.js` 时没走 tools/test.mjs 的 --import 隔离，
+// 测试把假 QQ 号写进了生产 config/settings.json 和生产库。这里让这种情况自己兜住：
+// 只要识别出是测试进程又没给隔离目录，就强制换到 data/test-isolated-*，并在 stderr 喊一声。
+function testGuardedDirs() {
+  const explicit = process.env.BIZHI_DATA_DIR ? path.resolve(process.env.BIZHI_DATA_DIR) : '';
+  const looksLikeTest = Boolean(process.env.NODE_TEST_CONTEXT) || process.env.BIZHI_TEST_MODE === '1';
+  if (!looksLikeTest) {
+    return { data: explicit || path.join(ROOT, 'data'), settings: process.env.BIZHI_SETTINGS_FILE ? path.resolve(process.env.BIZHI_SETTINGS_FILE) : path.join(ROOT, 'config', 'settings.json') };
+  }
+  if (explicit) return { data: explicit, settings: process.env.BIZHI_SETTINGS_FILE ? path.resolve(process.env.BIZHI_SETTINGS_FILE) : path.join(explicit, 'settings.json') };
+  const forced = path.join(ROOT, 'data', `test-isolated-guard-${process.pid}`);
+  process.stderr.write(`[bizhi] 测试进程没有隔离数据目录，已强制改用 ${forced}（生产 data/ 与 config/settings.json 不受影响）\n`);
+  return { data: forced, settings: path.join(forced, 'settings.json') };
+}
+
+const guarded = testGuardedDirs();
+process.env.BIZHI_DATA_DIR = guarded.data;
+process.env.BIZHI_SETTINGS_FILE = guarded.settings;
+
 export const paths = {
   root: ROOT,
   src: SRC_DIR,
   web: path.join(ROOT, 'web'),
   assets: path.join(ROOT, 'assets'),
   config: path.join(ROOT, 'config'),
-  data: process.env.BIZHI_DATA_DIR ? path.resolve(process.env.BIZHI_DATA_DIR) : path.join(ROOT, 'data'),
+  data: guarded.data,
   get logs() { return path.join(this.data, 'logs'); },
   get media() { return path.join(this.data, 'media'); },
   get publicMedia() { return path.join(this.data, 'public-media'); },
@@ -187,15 +207,19 @@ export function normalizeSettings(settings) {
   s.tts.enabled = s.tts?.enabled !== false;
   const ttsVoice = String(s.tts?.voice || '').trim();
   s.tts.voice =
-    ttsVoice === 'local-piper' || /^[a-z]{2}-[A-Z]{2}(-[A-Za-z0-9]+)*Neural$/.test(ttsVoice)
+    ttsVoice === 'local-piper' || ttsVoice === 'local-matcha' || /^[a-z]{2}-[A-Z]{2}(-[A-Za-z0-9]+)*Neural$/.test(ttsVoice)
       ? ttsVoice
       : 'zh-CN-XiaoxiaoNeural';
   s.tts.rate = /^[+-][0-9]{1,3}%$/.test(String(s.tts?.rate || '')) ? String(s.tts.rate) : '+8%';
   s.tts.pitch = /^[+-][0-9]{1,3}Hz$/.test(String(s.tts?.pitch || '')) ? String(s.tts.pitch) : '+2Hz';
+  s.tts.volume = /^[+-][0-9]{1,3}%$/.test(String(s.tts?.volume || '')) ? String(s.tts.volume) : '';
   s.tts.listen = s.tts.listen !== false;
   s.tts.maxPerDay = Math.min(30, Math.max(0, numberOr(s.tts?.maxPerDay, 8)));
   s.tts.maxChars = Math.min(200, Math.max(20, numberOr(s.tts?.maxChars, 120)));
   s.tts.chance = Math.min(1, Math.max(0, numberOr(s.tts?.chance, 0.18)));
+  s.tts.callEnabled = s.tts?.callEnabled === true;
+  s.tts.callDailyMax = Math.min(80, Math.max(0, numberOr(s.tts?.callDailyMax, 40)));
+  s.tts.callMinIntervalSeconds = Math.min(120, Math.max(0, numberOr(s.tts?.callMinIntervalSeconds, 8)));
 
   s.qq.selfFollowUp = s.qq.selfFollowUp !== false;
   s.qq.selfFollowUpChance = Math.min(1, Math.max(0, numberOr(s.qq.selfFollowUpChance, 0.25)));

@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { env, paths } from './config.js';
 import { logger } from './logger.js';
 import { ensureDir } from './util.js';
+import { LocalTtsRunner } from './local-tts.js';
 
 export const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
 
@@ -20,11 +21,23 @@ export const VOICE_CATALOG = [
   { id: 'zh-CN-YunxiNeural', label: '云希 · 阳光男声', note: '想换男声' },
   { id: 'zh-CN-YunxiaNeural', label: '云夏 · 少年男声', note: '年纪小' },
   { id: 'zh-CN-YunjianNeural', label: '云健 · 低沉男声', note: '体育解说味' },
-  { id: 'local-piper', label: '本地离线 · 不联网', note: '音色一般，断网兜底' },
+  { id: 'local-matcha', label: '本地离线 · Matcha 中文女声', note: '不联网；先跑 npm run tts:install-local' },
+  { id: 'local-piper', label: '本地离线 · piper 华言', note: '音色一般，断网兜底' },
 ];
 
 export function ttsVoices() {
   return VOICE_CATALOG;
+}
+
+// 子进程只在真的选了这个引擎时才起来（见 src/local-tts.js 的约束）。
+const localRunner = new LocalTtsRunner();
+
+export function localTts() {
+  return localRunner;
+}
+
+export function localTtsReady() {
+  return localRunner.status().installed;
 }
 
 export function normalizeVoice(voice) {
@@ -61,6 +74,7 @@ export function ttsStatus() {
     edge: Boolean(edgeCli()),
     piper: Boolean(piperPaths()),
     sapi: process.platform === 'win32',
+    local: localRunner.status(),
   };
 }
 
@@ -96,23 +110,14 @@ function runSpawn(exe, args, { timeoutMs = 25000, expectFile, stdin = '' }) {
   });
 }
 
-async function edgeCliSynthesize(text, { voice, rate, pitch }, file) {
+async function edgeCliSynthesize(text, { voice, rate, pitch, volume }, file) {
   const cli = edgeCli();
   if (!cli) throw new Error('没装 edge 音色环境（voice/pyenv）');
-  const args = [
-    '-m',
-    'edge_tts',
-    '--voice',
-    voice,
-    '--rate',
-    rate,
-    '--pitch',
-    pitch,
-    '--text',
-    text,
-    '--write-media',
-    file,
-  ];
+  const args = ['-m', 'edge_tts', '--voice', voice, '--rate', rate, '--pitch', pitch];
+  // 没显式给音量就一个参数都不多加：默认调用形态必须和改动前逐字一致。
+  const vol = signed(volume, /^[+-][0-9]{1,3}%$/, '');
+  if (vol) args.push('--volume', vol);
+  args.push('--text', text, '--write-media', file);
   await runSpawn(cli.python, args, { timeoutMs: 30000, expectFile: file });
   return file;
 }
@@ -161,7 +166,7 @@ export function piperReady() {
 
 export async function synthesizeSpeech(
   text,
-  { voice = DEFAULT_VOICE, rate = '+8%', pitch = '+2Hz', maxChars = 160 } = {},
+  { voice = DEFAULT_VOICE, rate = '+8%', pitch = '+2Hz', volume = '', maxChars = 160 } = {},
 ) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
   if (!clean) throw new Error('没有要说的话');
@@ -169,10 +174,23 @@ export async function synthesizeSpeech(
   const chosen = normalizeVoice(voice);
   const stamp = `${Date.now()}-${randomUUID()}`;
 
+  if (chosen === 'local-matcha') {
+    const wav = path.join(paths.media, `voice-${stamp}.wav`);
+    try {
+      const result = await localRunner.synthesize(clean, { out: wav });
+      const bytes = fs.statSync(wav).size;
+      logger.info('语音已合成（本地 matcha）', { bytes, chars: clean.length, ms: result.ms, seconds: result.seconds });
+      return { file: wav, bytes, mime: 'audio/wav', engine: 'local-matcha', voice: chosen, text: clean, seconds: result.seconds, sampleRate: result.sampleRate };
+    } catch (error) {
+      logger.warn('本地 matcha 不通，退回在线音色', { error: error.message });
+      removeQuietly(wav);
+    }
+  }
+
   if (chosen !== 'local-piper') {
     const mp3 = path.join(paths.media, `voice-${stamp}.mp3`);
     try {
-      await edgeCliSynthesize(clean, { voice: chosen, rate: signed(rate, /^[+-][0-9]{1,3}%$/, '+8%'), pitch: signed(pitch, /^[+-][0-9]{1,3}Hz$/, '+2Hz') }, mp3);
+      await edgeCliSynthesize(clean, { voice: chosen, rate: signed(rate, /^[+-][0-9]{1,3}%$/, '+8%'), pitch: signed(pitch, /^[+-][0-9]{1,3}Hz$/, '+2Hz'), volume: signed(volume, /^[+-][0-9]{1,3}%$/, '') }, mp3);
       const bytes = fs.statSync(mp3).size;
       logger.info('语音已合成（edge 音色）', { bytes, chars: clean.length, voice: chosen });
       return { file: mp3, bytes, mime: 'audio/mpeg', engine: 'edge', voice: chosen, text: clean };

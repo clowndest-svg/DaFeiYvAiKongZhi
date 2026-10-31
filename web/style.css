@@ -995,6 +995,39 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .owner-bind-row button { flex: 0 0 auto; }
 .phone-login-box { margin: 10px 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,0.02); }
 .phone-login-box > label, .phone-login-box .owner-bind-row { margin-top: 6px; }
+.compare-list {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+
+.compare-row {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+
+.compare-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  align-items: baseline;
+  min-width: 0;
+}
+
+.compare-row audio {
+  width: 100%;
+  max-width: 420px;
+  min-height: var(--control-h);
+}
+
+.compare-row .icon-btn {
+  justify-self: start;
+}
+
 .voice-preview { width: 100%; margin: 6px 0; }
 .num-sm { width: 80px; }
 .alert-warn { margin: 8px 0; padding: 8px 10px; border: 1px solid rgba(255, 122, 144, 0.45); border-radius: 10px; background: rgba(255, 122, 144, 0.1); color: #ffc2cc; font-size: 13px; }
