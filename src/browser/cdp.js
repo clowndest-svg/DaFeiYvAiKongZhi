@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { WebSocket } from 'ws';
 import { logger } from '../logger.js';
 import { env } from '../config.js';
@@ -23,6 +23,43 @@ function findBrowser() {
       return false;
     }
   }) || '';
+}
+
+// 归属核实的唯一判据：那个浏览器的 --user-data-dir 必须正好是本项目的专用目录。
+// CDP 的 getBrowserCommandLine 要求浏览器带 --enable-automation 启动，
+// 老窗口（或别的构建起的窗口）不带这个参数就会直接报错，所以还要能从操作系统侧读到命令行。
+export function parseUserDataDir(commandLine) {
+  const match = /--user-data-dir=("[^"]*"|[^\s]+)/i.exec(String(commandLine || ''));
+  return match ? match[1].replace(/^"|"$/g, '') : '';
+}
+
+export function ownsProfileDir(commandLine, profileDir) {
+  const found = parseUserDataDir(commandLine);
+  if (!found) return false;
+  return path.resolve(found).toLowerCase() === path.resolve(String(profileDir || '')).toLowerCase();
+}
+
+function windowsCommandLineForPort(port) {
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+  const script = [
+    '$ErrorActionPreference="SilentlyContinue"',
+    `$l=@(Get-NetTCPConnection -LocalPort ${port} -State Listen | ForEach-Object { $_.OwningProcess } | Select-Object -Unique)`,
+    'if ($l.Count -ne 1) { exit }',
+    '$c=(Get-CimInstance Win32_Process -Filter "ProcessId=$($l[0])").CommandLine',
+    'if ($c) { [Console]::Out.WriteLine($c) }',
+  ].join('\n');
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 8000,
+      maxBuffer: 1024 * 1024,
+    });
+    return String(out || '').trim();
+  } catch (error) {
+    logger.debug('读取调试端口进程命令行失败', { error: error.message });
+    return '';
+  }
 }
 
 export class CdpBrowser {
@@ -99,17 +136,33 @@ export class CdpBrowser {
   }
 
   async assertOwnership() {
-    const command = await this.send('Browser.getBrowserCommandLine', {}, 5000);
-    const expected = path.resolve(this.profileDir).toLowerCase();
-    const argument = (command?.arguments || []).find((value) => value.startsWith('--user-data-dir='));
-    if (!argument || path.resolve(argument.slice(16)).toLowerCase() !== expected) throw new Error('浏览器调试端口不属于本项目，拒绝接管');
+    let reason = '';
+    try {
+      const command = await this.send('Browser.getBrowserCommandLine', {}, 5000);
+      const argument = (command?.arguments || []).find((value) => value.startsWith('--user-data-dir='));
+      if (argument) {
+        return ownsProfileDir(argument, this.profileDir) ? '' : '浏览器调试端口不属于本项目，拒绝接管';
+      }
+      reason = 'CDP 没给出启动参数';
+    } catch (error) {
+      reason = error.message;
+    }
+    // 读不到不等于不是我们的：老窗口不带 --enable-automation 时 CDP 会拒绝回答，
+    // 这时改用操作系统侧的进程命令行复核，判据完全一样（必须指向本项目专用数据目录）。
+    const windowsLine = windowsCommandLineForPort(this.port);
+    if (windowsLine && ownsProfileDir(windowsLine, this.profileDir)) {
+      logger.info('专用浏览器归属改用系统命令行核实通过', { reason, port: this.port });
+      return '';
+    }
+    return `无法核实专用浏览器归属（${reason}）；调试端口上的浏览器数据目录不是 ${this.profileDir}${windowsLine ? '' : '，也没读到该端口的进程命令行'}`;
   }
 
   async shutdown() {
     if (env.testMode) { await this.close(); return; }
     if (!(await this.alive())) { await this.close(); return; }
     await this.ensure();
-    await this.assertOwnership();
+    const beforeClose = await this.assertOwnership();
+    if (beforeClose) throw new Error(beforeClose);
     await this.send('Browser.close', {}, 5000).catch(() => {});
     await this.close();
     for (let i = 0; i < 30; i += 1) { if (!(await this.alive())) return; await sleep(100); }
@@ -169,8 +222,11 @@ export class CdpBrowser {
     await this.send('Page.enable');
     await this.send('Runtime.enable');
     await this.send('Network.enable');
-    try { await this.assertOwnership(); }
-    catch (error) { await this.close(); throw new Error('无法核实专用浏览器归属，请关闭旧专用窗口后重新登录：' + error.message); }
+    const ownership = await this.assertOwnership();
+    if (ownership) {
+      await this.close();
+      throw new Error(ownership + '；若旧窗口占着调试端口，关掉它再重新登录');
+    }
   }
 
   send(method, params = {}, timeoutMs = 20000) {
