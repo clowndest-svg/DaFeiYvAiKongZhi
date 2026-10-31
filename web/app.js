@@ -3445,8 +3445,8 @@ function renderForgetting(data) {
     bar.appendChild(fill);
     row.appendChild(el('span', 'forget-text', item.content || '（空）'));
     row.appendChild(bar);
-    row.appendChild(el('span', 'forget-value', `${Math.round(item.strength * 100)}%`));
-    row.title = `重要度 ${item.importance} · 想起过 ${item.useCount} 次 · 半衰期 ${item.halfLifeDays} 天`;
+    row.appendChild(el('span', 'forget-value', `${Math.min(100, Math.round(item.strength * 100))}%`));
+    row.title = `重要度 ${item.importance} · 想起过 ${item.useCount} 次 · 半衰期 ${item.halfLifeDays} 天 · 原始强度 ${item.strength}`;
     row.addEventListener('click', () => {
       api(`/api/presence/curve?id=${item.id}`)
         .then((result) => drawForgetting($('#forgetCanvas'), result.curve))
