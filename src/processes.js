@@ -43,7 +43,10 @@ export async function startNapCat() {
   const qq=command&&path.join(path.dirname(command),'QQ.exe');if(!qq||!fs.existsSync(qq))throw new Error('找不到 QQ 安装位置');
   const log=fs.openSync(path.join(paths.logs,'napcat.out'),'a');
   const child=spawn(exe,[qq,path.join(paths.root,'napcat','NapCatWinBootHook.dll'),account],{
-    cwd:path.join(paths.root,'napcat'), detached:true,windowsHide:true,stdio:['ignore',log,log],
+    // 不能用 detached：Windows 上它等于 DETACHED_PROCESS（子进程没有控制台），
+    // 于是还要往 stdout 写的 QQ.exe 会被系统另建一个可见控制台窗口（标题就是它的 exe 路径），
+    // 桌面上那个黑框就是这么冒出来的。改成继承一个隐藏控制台，QQ 复用同一个控制台，不再新建窗口。
+    cwd:path.join(paths.root,'napcat'), detached:false,windowsHide:true,stdio:['ignore',log,log],
     env:{...process.env,NAPCAT_LOAD_PATH:path.join(paths.root,'napcat','loadNapCat.js'),NAPCAT_INJECT_PATH:path.join(paths.root,'napcat','NapCatWinBootHook.dll'),NAPCAT_MAIN_PATH:path.join(paths.root,'napcat','napcat.mjs'),NAPCAT_PATCH_PACKAGE:path.join(paths.root,'napcat','qqnt.json')},
   });
   await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});fs.closeSync(log);child.unref();return {started:true};
