@@ -11,6 +11,7 @@
     "test:local": "node tools/test.mjs --local",
     "check": "node tools/check.mjs",
     "test:browser": "node --test tests/browser.e2e.js tests/presence.e2e.js",
+    "audit:ui": "node tools/ui-audit.mjs",
     "smoke": "node tools/smoke-llm.js"
   },
   "engines": {
