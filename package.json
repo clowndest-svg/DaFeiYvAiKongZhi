@@ -12,6 +12,7 @@
     "check": "node tools/check.mjs",
     "test:browser": "node --test tests/browser.e2e.js tests/presence.e2e.js",
     "audit:ui": "node tools/ui-audit.mjs",
+    "tts:install-local": "node tools/install-local-tts.mjs",
     "smoke": "node tools/smoke-llm.js"
   },
   "engines": {

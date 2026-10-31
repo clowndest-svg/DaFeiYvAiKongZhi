@@ -1224,6 +1224,45 @@ async function handleApi(req, res, pathname, url) {
     }
   }
 
+  if (pathname === '/api/voice/compare' && method === 'POST') {
+    // 同一句文本喂给所有候选音色：文本固定，听感差异就只能来自引擎本身。
+    // 自然度不由我断言，出声给用户盲听，选中的才写回设置。
+    const body = await readJsonBody(req);
+    const cfg = loadSettings().tts || {};
+    const catalog = ttsVoices();
+    const labelOf = (id) => (catalog.find((item) => item.id === id) || {}).label || id;
+    const text = String(body.text || '').trim().slice(0, 60) || '今天怎么啦？听起来你有点累，要不要先喝口水。';
+    const fallback = [...catalog.filter((item) => /^zh-/.test(item.id)).map((item) => item.id), 'local-matcha', 'local-piper'];
+    const queue = (Array.isArray(body.voices) && body.voices.length ? body.voices : fallback).slice(0, 10).map(String);
+    const results = [];
+    const lane = async () => {
+      while (queue.length) {
+        const voice = queue.shift();
+        const t0 = Date.now();
+        try {
+          const audio = await synthesizeSpeech(text, { voice, rate: cfg.rate, pitch: cfg.pitch, volume: cfg.volume || '', maxChars: 80 });
+          results.push({
+            voice,
+            label: labelOf(voice),
+            ok: true,
+            engine: audio.engine,
+            ms: Date.now() - t0,
+            bytes: audio.bytes,
+            // wav 有精确样本数；mp3 没有解码器，宁可报未测量，也不拿估算冒充。
+            seconds: audio.seconds ?? null,
+            url: `/api/voice/audio?file=${encodeURIComponent(path.basename(audio.file))}`,
+          });
+        } catch (error) {
+          results.push({ voice, label: labelOf(voice), ok: false, error: errorMessage(error) });
+        }
+      }
+    };
+    await Promise.all([lane(), lane(), lane()]);
+    const spoken = results.filter((item) => item.ok).length;
+    addEvent('voice_compare', `一次音色试听对比：${spoken}/${results.length} 个出了声`, { text: text.length });
+    return sendJson(res, 200, { ok: true, text, results });
+  }
+
   if (pathname === '/api/voice/echo' && method === 'POST') {
     try {
       const body = await readJsonBody(req);

@@ -119,9 +119,13 @@
     "voice": "zh-CN-XiaoxiaoNeural",
     "rate": "+8%",
     "pitch": "+2Hz",
+    "volume": "",
     "listen": true,
     "maxPerDay": 8,
     "maxChars": 120,
-    "chance": 0.18
+    "chance": 0.18,
+    "callEnabled": false,
+    "callDailyMax": 40,
+    "callMinIntervalSeconds": 8
   }
 }
