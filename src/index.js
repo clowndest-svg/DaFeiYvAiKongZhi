@@ -1232,7 +1232,19 @@ async function handleApi(req, res, pathname, url) {
     const catalog = ttsVoices();
     const labelOf = (id) => (catalog.find((item) => item.id === id) || {}).label || id;
     const text = String(body.text || '').trim().slice(0, 60) || '今天怎么啦？听起来你有点累，要不要先喝口水。';
-    const fallback = [...catalog.filter((item) => /^zh-/.test(item.id)).map((item) => item.id), 'local-matcha', 'local-piper'];
+    // 试听名单显式排：基线女声 + 几个差异大的中文音色 + 两个本地离线引擎都要在列，
+    // 否则「抓前 N 个」会把本地那两个挤掉（第一版就是这么漏的）。
+    const preferred = [
+      'zh-CN-XiaoxiaoNeural',
+      'zh-CN-XiaoyiNeural',
+      'zh-TW-HsiaoYuNeural',
+      'zh-CN-shaanxi-XiaoniNeural',
+      'zh-CN-YunxiNeural',
+      'local-matcha',
+      'local-piper',
+    ];
+    const known = new Set(catalog.map((item) => item.id));
+    const fallback = preferred.filter((id) => known.has(id));
     const queue = (Array.isArray(body.voices) && body.voices.length ? body.voices : fallback).slice(0, 10).map(String);
     const results = [];
     const lane = async () => {
