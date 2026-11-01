@@ -12,11 +12,11 @@ import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
-const PORT = 7795;
-const BASE = `http://127.0.0.1:${PORT}`;
+const PORT = 0;
+let BASE = '';
 const PASSWORD = 'ui-audit-password';
 const VIEWS = ['chat', 'presence', 'memory', 'social', 'settings'];
-const WIDTHS = [1440, 1024, 768, 390, 337];
+const WIDTHS = [1440, 1024, 768, 390, 337, 320];
 const wantShots = process.argv.includes('--shots');
 const shotDir = path.join(ROOT, 'data', 'ui-audit', 'run');
 
@@ -24,8 +24,7 @@ const installedChromium = () => ['C:/Program Files/Google/Chrome/Application/chr
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((file) => fs.existsSync(file));
 
 function startDemo() {
-  const data = path.join(ROOT, 'data', 'ui-audit-demo');
-  fs.mkdirSync(data, { recursive: true });
+  const data = fs.mkdtempSync(path.join(ROOT, 'data', 'ui-audit-demo-'));
   const settingsFile = path.join(data, 'settings.json');
   fs.writeFileSync(settingsFile, JSON.stringify({
     companion: { name: '鲸鲸', nickname: '笨蛋', intro: '有点小傲娇、但很会照顾人的女朋友' },
@@ -52,8 +51,10 @@ function startDemo() {
   child.stderr.on('data', (d) => { logs += d; });
   const ready = (async () => {
     for (let i = 0; i < 80; i += 1) {
+      const port = logs.match(/BIZHI_READY:(\d+)/)?.[1];
+      if (port) BASE = `http://127.0.0.1:${port}`;
       try {
-        if ((await fetch(`${BASE}/api/health`)).status === 200) return;
+        if (BASE && (await fetch(`${BASE}/api/health`)).status === 200) return;
       } catch {
         /* 还在起 */
       }
@@ -61,7 +62,7 @@ function startDemo() {
     }
     throw new Error(`演示实例没起来：${logs.slice(-400)}`);
   })();
-  return { child, ready };
+  return { child, ready, data };
 }
 
 async function seed() {
@@ -212,7 +213,7 @@ async function probeInPage() {
     if (fg === null || bg === null) continue;
     const size = parseFloat(style.fontSize);
     const weight = Number(style.fontWeight) || 400;
-    const large = size >= 18.66 || (size >= 14 && weight >= 700);
+    const large = size >= 24 || (size >= 18.6667 && weight >= 700);
     const got = ratio(fg, bg);
     if (got < (large ? 3 : 4.5)) out.contrast.push(`${label(node)}.${String(node.className).split(' ')[0]} ${got.toFixed(2)} "${text.slice(0, 12)}"`);
   }
@@ -232,13 +233,14 @@ if (!executable) {
   process.exitCode = 2;
 } else {
   const demo = startDemo();
-  const context = await chromium.launchPersistentContext(path.join(ROOT, 'data', 'ui-audit', '.profile'), {
+  let context;
+  let failures = 0;
+  try {
+  context = await chromium.launchPersistentContext(path.join(demo.data, '.profile'), {
     executablePath: executable,
     headless: true,
     viewport: { width: 1440, height: 900 },
   });
-  let failures = 0;
-  try {
     await demo.ready;
     await seed();
     const page = await context.newPage();
@@ -248,6 +250,17 @@ if (!executable) {
       await page.click('#loginSubmit');
       await page.waitForFunction(() => document.querySelector('#loginScreen').classList.contains('hidden'));
     }
+    // 正向对照：19px普通字、约4.43:1，应按普通正文判为不达标。
+    // 若探针无法检出这个故意制造的问题，不允许输出“全部达标”。
+    await page.evaluate(() => {
+      const node=document.createElement('p');node.id='audit-positive-control';node.textContent='contrast-positive-control';
+      Object.assign(node.style,{position:'fixed',left:'160px',top:'150px',width:'260px',height:'44px',color:'#999',backgroundColor:'#333',fontSize:'19px',fontWeight:'400',zIndex:'2147483647'});
+      document.body.appendChild(node);
+    });
+    const positiveControl=await page.evaluate(probeInPage);
+    await page.evaluate(()=>document.querySelector('#audit-positive-control').remove());
+    if(!positiveControl.contrast.some(item=>item.includes('contrast-pos')))throw new Error('对比度正向对照未被检出，探针不可用于验收');
+    console.log('✓ 对比度正向对照已检出');
     if (wantShots) fs.mkdirSync(shotDir, { recursive: true });
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: width < 800 ? 880 : 900 });
@@ -255,6 +268,7 @@ if (!executable) {
         await page.goto(`${BASE}/?view=${view}`);
         await page.waitForFunction((name) => document.querySelector(`#view-${name}`)?.classList.contains('active'), view);
         await page.waitForTimeout(700);
+        if (wantShots) await page.screenshot({ path: path.join(shotDir, `${width}-${view}-first.png`) });
         const metrics = await page.evaluate(probeInPage);
         const bad = metrics.overflow > 0 || metrics.occluded.length || metrics.clipped.length
           || metrics.offscreen.length || metrics.tiny.length || metrics.contrast.length;
@@ -267,9 +281,15 @@ if (!executable) {
       }
     }
   } finally {
-    await context.close();
-    demo.child.kill();
+    await context?.close();
+    if (demo.child.exitCode === null) {
+      const stopped = new Promise(resolve=>demo.child.once('close',resolve));
+      demo.child.kill();await stopped;
+    }
+    const relative = path.relative(path.join(ROOT,'data'),demo.data);
+    if (!relative.startsWith('ui-audit-demo-') || relative.includes('..') || path.isAbsolute(relative)) throw new Error('Invalid audit cleanup path');
+    fs.rmSync(demo.data,{recursive:true,force:true,maxRetries:10,retryDelay:100});
   }
-  console.log(failures ? `界面体检：${failures} 项不达标` : '界面体检：25 组全部达标');
+  console.log(failures ? `界面体检：${failures} 项不达标` : `界面体检：${WIDTHS.length * VIEWS.length} 组全部达标`);
   process.exitCode = failures ? 1 : 0;
 }

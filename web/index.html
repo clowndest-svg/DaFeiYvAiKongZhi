@@ -13,13 +13,15 @@
   <div class="login-screen hidden" id="loginScreen">
     <form class="login-card" id="loginForm">
       <h1>小知控制台</h1>
-      <p class="muted">输入控制台密码。密码在电脑 <code>.env</code> 的 <code>CONSOLE_PASSWORD</code>；没设就用 <code>CONSOLE_TOKEN</code>。</p>
+      <p class="muted">请输入控制台访问密码。</p>
       <label>密码 <input id="loginPassword" type="password" maxlength="200" autocomplete="current-password" required></label>
       <button id="loginSubmit" type="submit">登录</button>
       <p class="login-error" id="loginError"></p>
+      <details><summary>在哪里查看密码？</summary><p class="muted small">电脑项目目录的 <code>.env</code> 文件中，<code>CONSOLE_PASSWORD</code> 是访问密码；未设置时使用 <code>CONSOLE_TOKEN</code>。</p></details>
       <p class="muted small">登录一次后 30 天内免登录；外网访问也用这个页面。</p>
     </form>
   </div>
+  <dialog id="historyDialog" aria-labelledby="historyTitle"><form method="dialog"><button>关闭历史</button></form><h2 id="historyTitle">历史会话</h2><label for="historySessionSelect">选择会话</label><select id="historySessionSelect"></select><div id="historyRows" class="history-rows"></div><button id="historyMoreBtn" type="button">加载更早的消息</button></dialog>
   <div class="app">
     <aside class="rail" aria-label="主导航">
       <div class="logo" title="小知">知</div>
@@ -57,7 +59,7 @@
           <img src="/assets/avatar.png" alt="小知" class="top-avatar" id="topAvatar">
           <div class="top-text">
             <h1 id="topName">小知</h1>
-            <p id="topStatus"><span class="dot"></span><span id="topStatusText">在线</span></p>
+            <p id="topStatus"><span class="dot"></span><span id="topStatusText">正在连接</span></p>
           </div>
         </div>
         <button class="mood-chip" id="moodChip" title="看看她现在的状态">正在感受…</button>
@@ -74,6 +76,8 @@
         <section class="view active" id="view-chat">
           <div class="chat-grid">
             <section class="chat-panel">
+              <button type="button" id="olderMessagesBtn">查看更早的对话</button>
+              <button type="button" id="historyBrowserBtn">查看历史会话</button>
               <div class="messages" id="messages" aria-live="polite"></div>
               <div class="typing hidden" id="typing">
                 <img src="/assets/avatar.png" alt="">
@@ -134,13 +138,13 @@
                 <button class="link-btn" data-view="memory">查看全部记忆</button>
               </div>
 
-              <div class="card stats-card">
+              <details class="card diagnostics"><summary>服务与用量</summary><div class="stats-card">
                 <div><span class="muted">今日花费</span><strong id="todayCost">--</strong></div>
                 <div><span class="muted">今日 tokens</span><strong id="todayTokens">--</strong></div>
                 <div><span class="muted">本周花费</span><strong id="weekCost">--</strong></div>
                 <div><span class="muted">当前上下文 tokens</span><strong id="sessionTokens">--</strong></div>
                 <div><span class="muted">QQ</span><strong id="qqState">未连接</strong></div>
-              </div>
+              </div></details>
             </aside>
           </div>
         </section>
@@ -153,7 +157,7 @@
                   <img class="pet-figure" id="petFigure" src="/char/normal.png" alt="小知">
                   <img class="pet-figure pet-next" id="petFigureNext" src="/char/normal.png" alt="">
                 </div>
-                <span class="pet-tag" id="petTag">她在看你</span>
+                <span class="pet-tag" id="petTag">陪你待着</span>
                 <div class="pet-pip hidden" id="camPip">
                   <video id="camVideo" playsinline muted></video>
                   <canvas id="camCanvas" width="640" height="480"></canvas>
@@ -180,6 +184,8 @@
             </section>
 
             <aside class="presence-side">
+              <section class="card presence-welcome"><h2>陪你待一会儿</h2><p>可以说说今天的事，也可以安静待着。想让她看看眼前的画面时，先打开摄像头，再点「让她看一眼」。</p><p class="muted">摄像头与麦克风的开关、采集提示始终留在角色旁边。</p></section>
+              <details class="diagnostics" id="presenceDiagnostics"><summary>内在状态与运行详情</summary><p class="muted small">以下是软件模拟状态和本地数据统计，用于了解与调试陪伴行为。</p>
               <section class="card">
                 <h3>情绪基础（神经递质）</h3>
                 <div class="neuro-list" id="neuroList"><p class="muted small">没开：设置页「陪伴与感官」里打开「神经递质情绪底座」。</p></div>
@@ -208,6 +214,7 @@
                 <h3>人格锚与配额</h3>
                 <div class="kv-lines" id="presenceBudget"><p class="muted small">正在读…</p></div>
               </section>
+              </details>
             </aside>
           </div>
         </section>
@@ -233,7 +240,7 @@
             <div class="memory-grid">
               <div class="card-list" id="memoryContent"></div>
               <aside class="card add-memory">
-                <h3>手动塞给她一条记忆</h3>
+                <h3>想让她记住的事</h3>
                 <p class="muted small">适合写：你的生日、忌口、重要约定、她绝对不要做的事。</p>
                 <textarea id="memoryContentInput" rows="4" maxlength="500" placeholder="例如：他每年 3 月 14 日生日，不喜欢香菜。"></textarea>
                 <label class="range-label">重要度 <input id="memoryImportance" type="range" min="1" max="5" value="5"> <span id="memoryImportanceValue">5</span></label>
@@ -314,7 +321,8 @@
               </div>
               <label>标题（最多 40 字）<input id="xhsNoteTitle" maxlength="40" placeholder="例如：今天也被小事治愈了"></label>
               <label>正文（最多 1000 字）<textarea id="xhsNoteBody" rows="4" maxlength="1000"></textarea></label>
-              <label>配图（按住 Ctrl 多选，最多 18 张）<select id="xhsNoteImages" multiple size="6"></select></label>
+              <label class="hidden">配图<select id="xhsNoteImages" multiple size="6"></select></label>
+              <fieldset class="image-picker"><legend>选择配图（最多18张）</legend><div id="xhsImageGrid" class="image-grid"></div><p id="xhsImageCount" aria-live="polite">已选择0张</p></fieldset>
               <div class="btn-row">
                 <label class="check"><input type="checkbox" id="xhsNoteConfirm"> 我确认这条要真的发出去</label>
                 <button id="xhsNotePublish" class="danger-btn">确认发布</button>
@@ -350,20 +358,30 @@
                 <h2>设置</h2>
                 <p>改完点最下面的保存。API Key 在 .env 里改，改完重启。</p>
               </div>
+              <button type="button" id="reloadSettingsBtn">重新载入设置</button>
             </div>
             <nav class="settings-jump" aria-label="设置分区">
-              <a href="#set-card-identity">称呼</a>
+              <details><summary>角色与称呼</summary><a href="#set-card-identity">称呼</a><a href="#set-card-persona">人设（单独保存）</a><button type="button" data-save-scope="identity">保存称呼</button></details>
+              <details><summary>聊天与记忆</summary>
               <a href="#set-card-model">模型</a>
               <a href="#set-card-memory">记忆</a>
+              <button type="button" data-save-scope="chat">保存模型与记忆</button>
+              </details><details><summary>主动陪伴</summary>
               <a href="#set-card-proactive">主动</a>
+              <button type="button" data-save-scope="proactive">保存主动陪伴</button>
+              </details><details><summary>语音与感官</summary>
               <a href="#set-card-presence">陪伴</a>
+              <a href="#set-card-qq">QQ语音</a><button type="button" data-save-scope="voice">保存语音与感官</button></details><details><summary>账号与社交</summary>
               <a href="#set-card-qq">QQ</a>
               <a href="#set-card-qq-login">QQ 登录</a>
               <a href="#set-card-social">社交</a>
               <a href="#set-card-xhs">小红书</a>
+              <button type="button" data-save-scope="channels">保存账号与社交</button>
+              </details><details><summary>界面与系统</summary>
               <a href="#set-card-ui">界面</a>
-              <a href="#set-card-persona">人设</a>
               <a href="#set-card-data">数据</a>
+              <button type="button" data-save-scope="system">保存界面与费用</button>
+              </details>
             </nav>
             <div class="settings-grid">
               <section class="card" id="set-card-identity">

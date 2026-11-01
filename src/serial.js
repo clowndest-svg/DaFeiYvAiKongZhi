@@ -41,3 +41,33 @@ export class SerialQueue {
 }
 
 export const conversationQueue = new SerialQueue();
+
+// 同一个键最多保留一个待执行任务，正在执行的任务不被中断。
+export class LatestTaskQueue {
+  constructor({ maxPending = 32, onError = () => {} } = {}) {
+    this.maxPending = maxPending;
+    this.onError = onError;
+    this.pending = new Map();
+    this.running = false;
+    this.completion = Promise.resolve();
+    this.merged = 0;
+  }
+  enqueue(key, task) {
+    if (this.pending.has(key)) this.merged += 1;
+    else if (this.pending.size >= this.maxPending) return Promise.reject(Object.assign(new Error('后台任务排队已满'), { status: 409 }));
+    this.pending.set(key, task);
+    if (!this.running) {
+      this.running = true;
+      this.completion = Promise.resolve().then(async () => {
+        try {
+        while (this.pending.size) {
+          const [nextKey, run] = this.pending.entries().next().value;
+          this.pending.delete(nextKey);
+          try { await run(); } catch (error) { this.onError(error); }
+        }
+        } finally { this.running = false; }
+      });
+    }
+    return this.completion;
+  }
+}

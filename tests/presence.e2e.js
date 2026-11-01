@@ -107,6 +107,7 @@ test(
     assert.ok(firstX < 0 && secondX > 0, `往左和往右要真的反向：${firstX} / ${secondX}`);
 
     // 状态读数：神经递质、大脑、人格锚
+    await page.locator('#presenceDiagnostics > summary').click();
     await page.waitForFunction(() => document.querySelectorAll('#neuroList .neuro-row').length === 5);
     const widths = await page.evaluate(() => [...document.querySelectorAll('#neuroList .neuro-bar i')].map((node) => node.style.width));
     assert.ok(widths.every((value) => /%$/.test(value)), '五根递质条都要有真实宽度');
@@ -211,13 +212,21 @@ test(
     assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.rail')).display), 'none', '小窗不该留导航');
     assert.equal(await page.evaluate(() => getComputedStyle(document.querySelector('.presence-side')).display), 'none', '小窗不该留读数侧栏');
     assert.ok(await page.evaluate(() => document.querySelector('#petFigure').getBoundingClientRect().height > 200), '立绘要真的占满窗口');
+    const petLayout = await page.evaluate(() => ({
+      main: document.querySelector('.main').getBoundingClientRect().width,
+      app: document.querySelector('.app').getBoundingClientRect().width,
+      figure: document.querySelector('#petFigure').getBoundingClientRect().width,
+    }));
+    assert.ok(petLayout.main >= petLayout.app - 1, '隐藏导航后桌宠主区必须占满应用宽度，不能留在 86px 导航列');
+    assert.ok(petLayout.figure > 200, '桌宠立绘宽度也必须可见，只有高度达标不够');
     await page.screenshot({ path: path.join(shots, 'presence-pet.png') });
 
     // 窄屏不许横向溢出，而且递质条不能被压成 0 宽
-    for (const width of [768, 390, 337]) {
+    for (const width of [768, 390, 337, 320]) {
       await page.setViewportSize({ width, height: 844 });
       await page.goto(`${server.base}/?view=presence`);
       await page.waitForFunction(() => document.querySelector('#view-presence').classList.contains('active'));
+      await page.locator('#presenceDiagnostics > summary').click();
       await page.waitForFunction(() => document.querySelectorAll('#neuroList .neuro-row').length === 5);
       const layout = await page.evaluate(() => ({
         overflow: document.documentElement.scrollWidth > window.innerWidth + 1,

@@ -4,7 +4,7 @@ import { WebSocketServer } from 'ws';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { env, loadSettings } from '../config.js';
 import { DeliveryUnknownError } from '../effects.js';
-import { addEvent, createSession, getSession, kvGet, kvGetJson, kvSet, kvSetJson } from '../db.js';
+import { addEvent, createSession, getSession, kvGet, kvGetJson, kvSet, kvSetJson, lastUserMessageAt } from '../db.js';
 import { costBlocked, noteCostSkip } from '../budget.js';
 import { getLearnedImageBase64, lastLearnedImage, learnImage, listLearnedImages, randomLearnedImage } from '../learned-images.js';
 import { logger } from '../logger.js';
@@ -1002,6 +1002,7 @@ ${history}
 
   async runSelfFollowUp({ conversationKey, target, hisText, replyText, scheduledAt }) {
     if (!this.clients.size) return;
+    if (Date.parse(lastUserMessageAt() || '') > scheduledAt) return;
     if ((this.lastInboundAt.get(conversationKey) || 0) > scheduledAt) return;
     if (this.buffers.has(conversationKey)) return;
 
@@ -1032,6 +1033,7 @@ ${history}
       mockKind: 'follow_up',
     });
     const decision = parseFollowUpDecision(result.content);
+    if (Date.parse(lastUserMessageAt() || '') > scheduledAt) return;
     if (!decision.send) {
       logger.debug('她决定这次不补话', { reason: decision.reason });
       return;
@@ -1041,6 +1043,7 @@ ${history}
     await sleep(Math.min(4200, 900 + decision.text.length * 40));
     if ((this.lastInboundAt.get(conversationKey) || 0) > scheduledAt || !loadSettings().qq.selfFollowUp || costBlocked('selfFollowUp')) return;
     for (const [index, chunk] of splitForQQ(decision.text).entries()) {
+      if (Date.parse(lastUserMessageAt() || '') > scheduledAt) return;
       if ((this.lastInboundAt.get(conversationKey) || 0) > scheduledAt) return;
       await this.sendToTarget(target, chunk);
       if (index < splitForQQ(decision.text).length - 1) await sleep(350);

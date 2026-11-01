@@ -24,9 +24,13 @@ import {
   countPendingPosts,
   costSummary,
   deleteMemory,
+  reviseMemory,
   deletePost,
   getActiveSession,
   getMessage,
+  getMessagePage,
+  getSession,
+  listSessions,
   getMessagesForPrompt,
   getPost,
   kvGet,
@@ -570,16 +574,24 @@ async function handleApi(req, res, pathname, url) {
       llmLastError: llm.lastError,
       lastUserMessageAt: lastUserMessageAt(),
       health: healthAlerts(),
+      runtime: { pid: process.pid, uptimeSeconds: Math.round(process.uptime()), memory: process.memoryUsage() },
       cost: readCostState(),
     });
   }
 
   if (pathname === '/api/messages' && method === 'GET') {
     const limit = Math.min(200, Math.max(10, Number(url.searchParams.get('limit')) || 80));
-    const session = getActiveSession();
-    const messages = getMessagesForPrompt(session.id, limit);
+    const requestedSession = url.searchParams.get('sessionId');
+    const session = requestedSession ? getSession(requestedSession) : getActiveSession();
+    if (!session) return sendJson(res, 404, { error: '会话不存在' });
+    const page = getMessagePage(session.id, { limit, before: url.searchParams.get('before') });
+    const messages = page.messages;
     const summary = kvGet(`session_summary:${session.id}`) || '';
-    return sendJson(res, 200, { session, messages, summary });
+    return sendJson(res, 200, { session, messages, summary, hasMore: page.hasMore });
+  }
+
+  if (pathname === '/api/sessions' && method === 'GET') {
+    return sendJson(res, 200, { sessions: listSessions(200).map(({id,title,status,created_at})=>({id,title,status,created_at})) });
   }
 
   const singleMessage = pathname.match(/^\/api\/messages\/(\d+)$/);
@@ -692,6 +704,12 @@ async function handleApi(req, res, pathname, url) {
   }
 
   const memoryDelete = pathname.match(/^\/api\/memories\/(\d+)$/);
+  if (memoryDelete && method === 'PUT') {
+    const body = await readJsonBody(req);
+    const memory = reviseMemory(Number(memoryDelete[1]), body.content, body.expectedUpdatedAt);
+    addEvent('memory_revised', '你更正了一条记忆', { id: memory.id });
+    return sendJson(res, 200, { memory });
+  }
   if (memoryDelete && method === 'DELETE') {
     deleteMemory(Number(memoryDelete[1]));
     addEvent('memory_deleted', '你删除了一条记忆', { id: Number(memoryDelete[1]) });
@@ -781,8 +799,10 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/settings' && method === 'GET') {
+    const settings = loadSettings();
     return sendJson(res, 200, {
-      settings: loadSettings(),
+      settings,
+      revision: crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex'),
       persona: getPersona(),
       meta: {
         keyMasked: maskKey(),
@@ -799,6 +819,8 @@ async function handleApi(req, res, pathname, url) {
     const body = await readJsonBody(req);
     try {
       const before = loadSettings();
+      const revision = crypto.createHash('sha256').update(JSON.stringify(before)).digest('hex');
+      if (req.headers['if-match'] && req.headers['if-match'] !== revision) return sendJson(res, 409, { error: '设置已被其他页面或后台更新，草稿已保留，请重新载入后合并修改。' });
       const settings = saveSettings(body);
       writeBotAccountFile(settings.qq?.botAccount);
       if (before.proactive.enabled !== settings.proactive.enabled) {
@@ -827,7 +849,7 @@ async function handleApi(req, res, pathname, url) {
         scheduler?.schedulePost();
       }
       addEvent('settings_saved', '设置已更新');
-      return sendJson(res, 200, { ok: true, settings });
+      return sendJson(res, 200, { ok: true, settings, revision: crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex') });
     } catch (error) {
       return sendJson(res, 400, { error: error.message });
     }
@@ -1304,6 +1326,12 @@ async function handleApi(req, res, pathname, url) {
     } catch (error) {
       return sendJson(res, 500, { error: errorMessage(error) });
     }
+  }
+
+  if (pathname === '/api/xhs/image' && method === 'GET') {
+    const image = listXhsImages().find((item) => item.name === url.searchParams.get('name'));
+    if (!image) return sendJson(res, 404, { error: '没有这张公开配图' });
+    return serveStatic(res, image.file);
   }
 
   if (pathname === '/api/xhs/profile/draft' && method === 'POST') {

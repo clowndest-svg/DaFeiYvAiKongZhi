@@ -162,6 +162,21 @@ export class Scheduler {
     if (!settings.social?.xhsEnabled) return null;
     if (this.costGate('xhsAuto', '小红书自动互动')) return null;
     if (!isWithinWindow(settings.social.activeStart, settings.social.activeEnd)) return null;
+    if (Date.parse(kvGet('xhs_cooldown_until') || '') > Date.now()) return null;
+    if (Date.now() < (this.xhsReadRetryAt || 0)) return null;
+    // 一轮只验证一次连接，登录/归属失败时不让通知、私信、关注关系各刷一遍错误。
+    const { verifyXhsLogin } = await import('./channels/xhs.js');
+    const connection = await verifyXhsLogin().catch(error => ({ loggedIn: false, lastError: error.message }));
+    if (!connection.loggedIn) {
+      this.xhsReadFailures = Math.min(4, (this.xhsReadFailures || 0) + 1);
+      this.xhsReadRetryAt = Date.now() + Math.min(60, 10 * 2 ** (this.xhsReadFailures - 1)) * 60000;
+      this.lastXhsError = connection.lastError || '小红书登录已失效，请打开专用登录窗口处理';
+      if (isRiskyError(this.lastXhsError)) triggerXhsCooldown(6, this.lastXhsError);
+      addEvent('xhs_connection_waiting', '小红书连接未就绪，已退避并暂停本轮读取', { retryAt: new Date(this.xhsReadRetryAt).toISOString() });
+      return null;
+    }
+    this.xhsReadFailures = 0;
+    this.xhsReadRetryAt = 0;
     const due = kvGet('next_xhs_at');
     // 私信要每 10 分钟看一次；逛/评论仍按 next_xhs_at 的 2–3.5 小时节奏，不能因为没到点就不读私信。
     const browseDue = !due || new Date(due).getTime() <= Date.now();
@@ -778,9 +793,20 @@ export class Scheduler {
   }
 
   async tickStep(name, run, { risky = false } = {}) {
+    this.stepMetrics ||= new Map();
+    const metric = this.stepMetrics.get(name) || { runs: 0, failures: 0, consecutiveFailures: 0 };
+    metric.runs += 1;
+    metric.startedAt = nowIso();
+    const started = Date.now();
+    this.stepMetrics.set(name, metric);
     try {
-      return await run();
+      const result = await run();
+      metric.consecutiveFailures = 0;
+      metric.lastSuccessAt = nowIso();
+      return result;
     } catch (error) {
+      metric.failures += 1;
+      metric.consecutiveFailures += 1;
       const message = String((error && error.message) || error);
       this.lastError = `${name}：${message}`;
       if (name === '小红书发笔记') this.lastXhsError = message;
@@ -794,6 +820,9 @@ export class Scheduler {
         addEvent('tick_step_failed', `${name}这次没做成，其他照旧`, { step: name, error: message.slice(0, 120) });
       }
       return null;
+    } finally {
+      metric.durationMs = Date.now() - started;
+      metric.finishedAt = nowIso();
     }
   }
 
@@ -880,8 +909,8 @@ export class Scheduler {
     if (this.busy || this.manualBusy) return;
     this.busy = true;
     try {
-      await this.tickStep('每日日记', () => this.maybeDailyDiary());
       await this.tickStep('花费看门狗', () => this.refreshCostState());
+      await this.tickStep('每日日记', () => this.maybeDailyDiary());
       await this.tickStep('身体状态', () => this.maybeBodyState());
       await this.tickStep('空间 Cookie', () => this.checkQzoneCookie());
       await this.tickStep('主动找你', () => this.maybeProactive());
@@ -1264,6 +1293,7 @@ export class Scheduler {
       manualBusy: this.manualBusy,
       qzoneBusy: this.qzoneBusy,
       lastTick: this.lastTick,
+      steps: Object.fromEntries(this.stepMetrics || []),
       lastError: this.lastError,
       nextProactiveAt: kvGet('next_proactive_at'),
       proactivePlan: kvGetJson('proactive_plan', null),

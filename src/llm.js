@@ -10,6 +10,16 @@ const USD_TO_CNY = 7.15;
 // DeepSeek 公开价（美元 / 百万 tokens，flash）。v4-pro 没有可靠公开价，统一按 flash 价估算。
 const FLASH_PRICE = { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 };
 
+export function pricingFor(model, input = process.env.BIZHI_PRICING_JSON || '') {
+  let table;
+  try { table = typeof input === 'string' ? JSON.parse(input) : input; } catch { table = null; }
+  const rate = table?.models?.[model];
+  const valid = rate && ['cacheHit', 'cacheMiss', 'output'].every(key => Number.isFinite(rate[key]) && rate[key] >= 0 && rate[key] < 1e6)
+    && Number.isFinite(table.usdToCny) && table.usdToCny > 0 && table.usdToCny < 10000;
+  return valid ? { ...rate, usdToCny: table.usdToCny, version: String(table.version || 'custom').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 32) || 'custom' }
+    : { ...FLASH_PRICE, usdToCny: USD_TO_CNY, version: 'legacy-flash-estimate' };
+}
+
 export class LlmError extends Error {
   constructor(message, { status = 0, code = '', cause = null } = {}) {
     super(message);
@@ -34,16 +44,17 @@ function normalizeUsage(usage) {
   return { prompt, completion, hit, miss, reasoning, total: prompt + completion };
 }
 
-function usageCostCny(usage) {
+function usageCostCny(usage, model) {
   const u = normalizeUsage(usage);
-  const usd = (u.hit / 1e6) * FLASH_PRICE.cacheHit + (u.miss / 1e6) * FLASH_PRICE.cacheMiss + (u.completion / 1e6) * FLASH_PRICE.output;
-  return Math.round(usd * USD_TO_CNY * 1e6) / 1e6;
+  const rate = pricingFor(model);
+  const usd = (u.hit / 1e6) * rate.cacheHit + (u.miss / 1e6) * rate.cacheMiss + (u.completion / 1e6) * rate.output;
+  return Math.round(usd * rate.usdToCny * 1e6) / 1e6;
 }
 
 function streamResult(messages, content, reasoning, raw, model) {
   const usageEstimated = !raw;
   const usageRaw = raw || { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: estimateTokens(content + reasoning), prompt_cache_hit_tokens: 0 };
-  return { usage: normalizeUsage(usageRaw), model, costCny: usageCostCny(usageRaw), usageEstimated };
+  return { usage: normalizeUsage(usageRaw), model, costCny: usageCostCny(usageRaw, model), usageEstimated, priceVersion: pricingFor(model).version };
 }
 
 function mockJson(mockKind) {
@@ -150,7 +161,9 @@ export class DeepSeek {
         }
         const data = await res.json();
         const message = data.choices?.[0]?.message || {};
-        const result = { content: message.content || '', reasoning: message.reasoning_content || '', usage: normalizeUsage(data.usage), model: data.model || body.model, costCny: usageCostCny(data.usage), usageEstimated: !data.usage };
+        const content = message.content || '';
+        const reasoning = message.reasoning_content || '';
+        const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model) };
         this.recordCost(result, opts);
         if (!result.content) throw new LlmError('模型没有产出有效回复', { code: 'EMPTY_REPLY' });
         this.lastCallAt = new Date().toISOString(); this.lastError = null;
@@ -247,7 +260,7 @@ export class DeepSeek {
     try {
       addCost({
         model: result.model,
-        kind: (opts.kind || 'chat') + (result.usageEstimated ? ':estimated' : ''),
+        kind: (opts.kind || 'chat') + (result.usageEstimated ? ':estimated' : '') + (result.priceVersion ? `:rate-${result.priceVersion}` : ''),
         promptTokens: result.usage.prompt,
         completionTokens: result.usage.completion,
         cacheHitTokens: result.usage.hit,

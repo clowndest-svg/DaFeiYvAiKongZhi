@@ -1,5 +1,5 @@
 import { loadSettings } from './config.js';
-import { conversationQueue } from './serial.js';
+import { conversationQueue, LatestTaskQueue } from './serial.js';
 import { addEvent, addMessage, getActiveSession, getMessagesForPrompt, getSession, updateMessageMeta } from './db.js';
 import { DeepSeek, LlmError } from './llm.js';
 import { logger } from './logger.js';
@@ -13,7 +13,16 @@ import { buildChatPayload } from './prompt.js';
 import { scheduleReflection } from './reflect.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
-let maintenanceChain = Promise.resolve();
+const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
+
+export function generationProfile(settings, mood = getMood()) {
+  const baseTemp = Number(settings.model.temperature) || 0.95;
+  const baseMax = Number(settings.model.chatMaxTokens) || 1400;
+  return {
+    temperature: Math.min(1.2, Math.max(0.55, baseTemp + (mood.valence - 0.2) * 0.12 + (mood.energy - 0.5) * 0.08)),
+    maxTokens: Math.round(Math.min(baseMax, Math.max(300, baseMax * (0.62 + mood.energy * 0.55)))),
+  };
+}
 
 function parseReply(text, name = '小知') {
   let hint = null;
@@ -174,8 +183,7 @@ export class Companion {
     try {
       const stream = this.llm.stream(prep.payload.messages, {
         model: prep.settings.model.name,
-        temperature: prep.settings.model.temperature,
-        maxTokens: prep.settings.model.chatMaxTokens,
+        ...generationProfile(prep.settings),
         reasoningEffort: prep.settings.model.reasoningEffort,
         kind: 'chat',
         sessionId: prep.session.id,
@@ -268,11 +276,7 @@ export class Companion {
     opts.signal?.throwIfAborted();
     const prep = this.prepare(opts);
     const startedAt = Date.now();
-    const mood = getMood();
-    const baseTemp = Number(prep.settings.model.temperature) || 0.95;
-    const temperature = Math.min(1.2, Math.max(0.55, baseTemp + (mood.valence - 0.2) * 0.12 + (mood.energy - 0.5) * 0.08));
-    const baseMax = Number(prep.settings.model.chatMaxTokens) || 1400;
-    const maxTokens = Math.round(Math.min(baseMax, Math.max(300, baseMax * (0.62 + mood.energy * 0.55))));
+    const { temperature, maxTokens } = generationProfile(prep.settings);
     const result = await this.llm.chat(prep.payload.messages, {
       model: prep.settings.model.name,
       temperature,
@@ -328,13 +332,13 @@ export class Companion {
       settings: prep.settings,
       messages: [...prep.history, message],
     });
-    maintenanceChain = maintenanceChain
-      .then(() => conversationQueue.run('owner', async () => {
+    // 后台任务不能继承已经结束的用户回合锁上下文。
+    conversationQueue.context.exit(() => maintenanceQueue.enqueue(prep.session.id, async () => {
+        if (getSession(prep.session.id)?.status !== 'active') return;
         const settings = loadSettings();
         await compactIfNeeded({ llm: this.llm, sessionId: prep.session.id, settings });
         await handoverIfNeeded({ llm: this.llm, sessionId: prep.session.id, settings });
-      }))
-      .catch((error) => logger.warn('会话维护失败', { error: error.message }));
+      }).catch(error => logger.warn('维护暂未入队，原话已保留', { error: error.message })));
   }
 
   saveFollowUpMessage(text, channel = 'qq') {

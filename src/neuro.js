@@ -32,8 +32,8 @@ const IMPULSES = {
   mood_down: { cortisol: 0.1, serotonin: -0.1 },
   rested: { serotonin: 0.12, cortisol: -0.1 },
   late_night: { cortisol: 0.08, dopamine: -0.05 },
-  channel_down: { cortisol: 0.14, noradrenaline: 0.08 },
-  budget_cut: { cortisol: 0.12, serotonin: -0.05 },
+  channel_down: {},
+  budget_cut: {},
   proud: { dopamine: 0.16, serotonin: 0.06 },
 };
 
