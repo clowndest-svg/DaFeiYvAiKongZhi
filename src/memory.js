@@ -553,13 +553,25 @@ export function readLetter(name) {
   throw new Error('信件不存在');
 }
 
+export function memoryLayerCounts() {
+  const out = { core: 0, mid: 0, long: 0 };
+  for (const row of getDb().prepare('SELECT layer, COUNT(*) AS n FROM memories GROUP BY layer').all()) {
+    if (row.layer in out) out[row.layer] = Number(row.n) || 0;
+  }
+  return out;
+}
+
 export function getMemoryOverview({ query = '' } = {}) {
   const settings = { memory: { retrieveBudgetTokens: 2200, retrieveCount: 10 } };
   const block = getMemoryBlock({ query, settings, recordUsage: false });
+  // 控制台要看到的是"她记得的全部"，不是"这次进提示词的切片"。
+  // 以前这里直接把 block 的切片返回给界面，53 条重点记忆只显示 10 条，
+  // 角标还拿切片长度当总数报，等于界面在撒谎。
   return {
-    core: block.core,
-    mid: block.mid,
-    long: block.long,
+    core: listMemories({ layer: 'core', limit: 200 }),
+    mid: listMemories({ layer: 'mid', limit: 200 }),
+    long: listMemories({ layer: 'long', limit: 200 }),
+    counts: memoryLayerCounts(),
     summary: block.summary,
     handover: block.handover,
     innerThoughts: block.innerThoughts,

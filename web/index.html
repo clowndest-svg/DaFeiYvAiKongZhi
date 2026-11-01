@@ -232,11 +232,18 @@
             <div class="tabs" id="memoryTabs">
               <button data-tab="core" class="active">核心档案 <b id="countCore">0</b></button>
               <button data-tab="mid">重点记忆 <b id="countMid">0</b></button>
-              <button data-tab="long">长期 / 周记 <b id="countLong">0</b></button>
-              <button data-tab="letters">信 <b id="countLetters">0</b></button>
+              <button data-tab="long">长期记忆 <b id="countLong">0</b></button>
+              <button data-tab="diary">日记 <b id="countDiary">0</b></button>
+              <button data-tab="weekly">周记 <b id="countWeekly">0</b></button>
+              <button data-tab="letters">交接信 <b id="countLetters">0</b></button>
             </div>
-            <p class="muted small memory-note" id="intentionLine">她还没有自己惦记的事。</p>
-            <p class="muted small memory-note" id="dreamLine">她还没有睡前一个人想过事。</p>
+            <div class="memory-notes">
+              <p class="muted small" id="intentionLine">她还没有自己惦记的事。</p>
+              <details class="dream-note">
+                <summary id="dreamSummary">她还没有睡前一个人想过事。</summary>
+                <p class="small" id="dreamLine"></p>
+              </details>
+            </div>
             <div class="memory-grid">
               <div class="card-list" id="memoryContent"></div>
               <aside class="card add-memory">
@@ -295,14 +302,17 @@
                 </div>
               </div>
               <div id="xhsDmList" class="dm-list"></div>
-              <label>回给谁（点上面某一行会自动填上）<input id="xhsDmTarget" maxlength="40" placeholder="对方昵称"></label>
-              <label>回什么（200 字以内）<textarea id="xhsDmText" rows="3" maxlength="200" placeholder="她想好了会填在这里，你也可以自己改"></textarea></label>
-              <div class="btn-row">
-                <button type="button" id="xhsDmDraft">让她想一句</button>
-                <button type="button" id="xhsDmBindOwner">确认这个会话是我</button>
-                <label class="check"><input type="checkbox" id="xhsDmConfirm"> 我确认真的把这条发出去</label>
-                <button type="button" id="xhsDmSend" class="danger-btn">发这条私信</button>
-              </div>
+              <details class="dm-reply">
+                <summary>回复某条私信（点上面一行会自动填好）</summary>
+                <label>回给谁<input id="xhsDmTarget" maxlength="40" placeholder="对方昵称"></label>
+                <label>回什么（200 字以内）<textarea id="xhsDmText" rows="3" maxlength="200" placeholder="她想好了会填在这里，你也可以自己改"></textarea></label>
+                <div class="btn-row">
+                  <button type="button" id="xhsDmDraft">让她想一句</button>
+                  <button type="button" id="xhsDmBindOwner">确认这个会话是我</button>
+                  <label class="check"><input type="checkbox" id="xhsDmConfirm"> 我确认真的把这条发出去</label>
+                  <button type="button" id="xhsDmSend" class="danger-btn">发这条私信</button>
+                </div>
+              </details>
               <p class="muted small" id="xhsDmResult">私信状态读取中…</p>
             </div>
 
