@@ -331,16 +331,24 @@ function renderStatus() {
   const intentionLine = $('#intentionLine');
   if (intentionLine) {
     const list = status.intentions || [];
+    const shown = list.slice(0, 2).map((i) => i.text).join('；');
     intentionLine.textContent = list.length
-      ? `她正惦记着：${list.map((i) => i.text).join('；')}。`
+      ? `她正惦记着：${shown}${list.length > 2 ? `（等 ${list.length} 件）` : ''}。`
       : '她目前没有自己惦记着要办的事。';
   }
   const dreamLine = $('#dreamLine');
-  if (dreamLine) {
+  const dreamSummary = $('#dreamSummary');
+  if (dreamLine && dreamSummary) {
+    // 整段睡前反思直接铺在列表上方，会把「记忆」这一屏压成一坨；收成一行，点开再看全文。
     const dream = status.scheduler && status.scheduler.lastDream;
-    dreamLine.textContent = dream
-      ? `她在 ${new Date(dream.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false })} 睡前想过：${dream.dream}${dream.used ? '' : '（还没跟你说）'}`
-      : '她还没有睡前一个人想过事。';
+    if (dream) {
+      const when = new Date(dream.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+      dreamSummary.textContent = `她在 ${when} 睡前想过一件事${dream.used ? '' : '（还没跟你说）'}`;
+      dreamLine.textContent = dream.dream;
+    } else {
+      dreamSummary.textContent = '她还没有睡前一个人想过事。';
+      dreamLine.textContent = '';
+    }
   }
   const hint = $('#proactiveHint');
   if (hint) {
@@ -966,17 +974,44 @@ function updateVoiceButton() {
 async function loadMemory() {
   const data = await api('/api/memory/overview');
   state.memory = data;
-  $('#countCore').textContent = (data.core || []).length;
-  $('#countMid').textContent = (data.mid || []).length;
-  $('#countLong').textContent = (data.long || []).length;
-  $('#countLetters').textContent = (data.letters || []).length;
+  const files = data.letters || [];
+  const counts = data.counts || {};
+  // 角标用库里的真数，不用"这一页有几条"——那会让 53 条显示成 10 条。
+  $('#countCore').textContent = counts.core ?? (data.core || []).length;
+  $('#countMid').textContent = counts.mid ?? (data.mid || []).length;
+  $('#countLong').textContent = counts.long ?? (data.long || []).length;
+  $('#countDiary').textContent = files.filter((item) => item.kind === '日记').length;
+  $('#countWeekly').textContent = files.filter((item) => item.kind === '周记').length;
+  $('#countLetters').textContent = files.filter((item) => item.kind === '交接信').length;
   renderMemory();
   renderMemoryPeek();
 }
 
+// 文件类标签：日记、周记、交接信是三件不同的东西，以前全塞在「信」里按时间倒出来，
+// 结果 5 篇日记/周记顶着「信」的名字，谁也不知道自己在看什么。
+const FILE_KIND = { diary: '日记', weekly: '周记', letters: '交接信' };
+
+function fileRows(kind) {
+  return (state.memory?.letters || []).filter((item) => item.kind === kind);
+}
+
+// DAILY-2026-10-31 → "2026 年 10 月 31 日那天"；XHSWEEK 单独标来源，不让她自己写的周记和小红书周记混成一样。
+function fileTitle(item) {
+  const base = String(item.name || '').replace(/\.md$/, '');
+  const match = base.match(/^(DAILY|WEEKLY|XHSWEEK|LETTER|HANDOVER)[-_](\d{4})[-_](\d{1,2})[-_](\d{1,2})(?:[-_](.+))?$/i);
+  if (!match) return { title: base, tag: '' };
+  const [, kind, y, m, d, rest] = match;
+  const date = `${y} 年 ${Number(m)} 月 ${Number(d)} 日`;
+  const key = kind.toUpperCase();
+  if (key === 'DAILY') return { title: `${date}那天`, tag: '' };
+  if (key === 'XHSWEEK') return { title: `截至 ${date} 的小红书一周`, tag: '小红书' };
+  if (key === 'WEEKLY') return { title: `截至 ${date} 这一周`, tag: '' };
+  return { title: `${date}${rest ? ` · ${rest}` : ''}`, tag: '' };
+}
+
 function memoryItems() {
   if (!state.memory) return [];
-  if (state.memoryTab === 'letters') return state.memory.letters || [];
+  if (FILE_KIND[state.memoryTab]) return fileRows(FILE_KIND[state.memoryTab]);
   return state.memory[state.memoryTab] || [];
 }
 
@@ -985,26 +1020,32 @@ function renderMemory() {
   if (box.querySelector('textarea')) return;
   box.innerHTML = '';
   const items = memoryItems();
+  const empties = {
+    core: '还没有核心档案。写点你希望她永远记得的事。',
+    mid: '还没有重点记忆。多聊几句，她会自己整理。',
+    long: '还没有长期记忆。聊得久了，她会自己把重要的事沉到这里。',
+    diary: '还没有日记。她每天晚上自己写一篇，也可以现在让她睡前想一遍。',
+    weekly: '还没有周记。周末晚上她会长篇写一次（小红书那一周单独存档）。',
+    letters: '这里还没有交接信。每次会话交接时她写给下一次的自己的信会存在这里。',
+  };
   if (!items.length) {
-    const messages = {
-      core: '还没有核心档案。写点你希望她永远记得的事。',
-      mid: '还没有重点记忆。多聊几句，她会自己整理。',
-      long: '还没有周记。周末晚上她会长篇写一次，也可以现在让她写。',
-      letters: '这里还没有信。你可以让她给未来写信；会话交接时的信也会保存在这里。',
-    };
-    box.appendChild(el('div', 'empty', messages[state.memoryTab] || '还没有内容。'));
+    box.appendChild(el('div', 'empty', empties[state.memoryTab] || '还没有内容。'));
     return;
   }
 
-  if (state.memoryTab === 'letters') {
+  if (FILE_KIND[state.memoryTab]) {
     for (const letter of items) {
       const row = el('div', 'letter-row');
-      const main = el('div');
-      main.appendChild(el('h4', '', `${letter.kind} · ${letter.name.replace(/\.md$/, '')}`));
-      main.appendChild(el('p', '', `${new Date(letter.mtime).toLocaleString('zh-CN')} · ${Math.ceil(letter.size / 1024)} KB`));
+      const main = el('div', 'letter-main');
+      const head = el('h4', 'letter-title');
+      const named = fileTitle(letter);
+      head.appendChild(el('span', 'letter-name', named.title));
+      if (named.tag) head.appendChild(el('span', 'tag', named.tag));
+      main.appendChild(head);
+      main.appendChild(el('p', 'letter-meta', `${new Date(letter.mtime).toLocaleString('zh-CN')} · ${Math.ceil(letter.size / 1024)} KB`));
       row.appendChild(main);
-      row.appendChild(el('span', '', '读一读'));
-      row.addEventListener('click', () => openLetter(letter.name));
+      row.appendChild(el('span', 'letter-open', '读一读'));
+      row.addEventListener('click', () => openLetter(letter));
       box.appendChild(row);
     }
     return;
@@ -1102,10 +1143,14 @@ async function addMemory() {
   }
 }
 
-async function openLetter(name) {
+async function openLetter(input) {
+  // 弹窗标题以前直接印文件名（DAILY-2026-10-31），现在和列表一样用人话；老调用传字符串也接得住。
+  const letter = typeof input === 'string' ? { name: input } : (input || {});
+  const name = String(letter.name || '');
+  const named = typeof input === 'string' ? { title: name.replace(/\.md$/, '') } : fileTitle(letter);
   try {
     const data = await api(`/api/letters/${encodeURIComponent(name)}`);
-    $('#letterTitle').textContent = name.replace(/\.md$/, '');
+    $('#letterTitle').textContent = named.title;
     $('#letterBody').textContent = data.content;
     $('#letterModal').hidden = false;
   } catch (error) {
@@ -1149,7 +1194,7 @@ function renderQzoneFeed(feed) {
     const card = el('div', 'qzone-post');
     const head = el('div', 'qzone-post-head');
     head.appendChild(el('span', '', post.createdAt ? new Date(post.createdAt).toLocaleString('zh-CN') : ''));
-    const likeText = post.likeCount == null ? '赞未提供' : `赞 ${post.likeCount}`;
+    const likeText = post.likeCount == null ? '点赞数没给全' : `赞 ${post.likeCount}`;
     head.appendChild(el('span', '', `${likeText} · 评论 ${post.commentCount || 0}`));
     card.appendChild(head);
     card.appendChild(el('div', 'qzone-post-body', post.content || '（空说说）'));
@@ -2304,6 +2349,9 @@ function renderDmList(items = [], perTargetUsed = {}) {
     row.addEventListener('click', () => {
       state.dmInbox = { target: item.name || '', message: item.preview || '', convId: item.convId || '' };
       $('#xhsDmTarget').value = item.name || '';
+      // 表单默认收起，点了某一行就替用户展开，省得整页一直摊着一个回复框。
+      const form = document.querySelector('.dm-reply');
+      if (form) form.open = true;
       $('#xhsDmResult').textContent = `要回的是「${item.name || '有人'}」，她那条写的是：${item.preview || '（看不到内容）'}`;
     });
     box.appendChild(row);
@@ -2513,7 +2561,10 @@ function bindSocial() {
         toast(data.skipped);
         return;
       }
-      $('#dreamLine').textContent = `她刚刚想了一遍：${data.dream}`;
+      $('#dreamLine').textContent = String(data.dream || '');
+      $('#dreamSummary').textContent = '她刚刚睡前想了一遍（还没跟你说）';
+      const note = document.querySelector('.dream-note');
+      if (note) note.open = true;
       toast('她睡前想完了，明天可能主动找你。');
     } catch (error) {
       toast(error.message, 'error');

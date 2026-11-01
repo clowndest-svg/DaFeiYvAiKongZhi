@@ -141,7 +141,10 @@ function healthAlerts() {
   if (qq && qq.connected && qq.identityOk === false) {
     out.push({ key: 'qq-identity', level: 'danger', text: `QQ 连着，但登录号不对：${qq.identityError}。所有发送已被拦下，先换回机器人小号。` });
   }
-  if (qq && loadSettings().qq.enabled && !qq.connected) out.push({ key: 'qq', level: 'danger', text: qq.autoRecover ? `QQ 断了 ${qq.downMinutes} 分钟，她在自己试着恢复；不行就要重新扫码` : 'QQ 通道断了，而且自愈是关的' });
+  // 刚起来的几十秒里 NapCat 正在回连，这时报"QQ 断了 0 分钟"是假警报（顶栏还写着在线，自相矛盾）。
+  if (qq && loadSettings().qq.enabled && !qq.connected && Number(qq.downMinutes) >= 1) {
+    out.push({ key: 'qq', level: 'danger', text: qq.autoRecover ? `QQ 断了 ${qq.downMinutes} 分钟，她在自己试着恢复；不行就要重新扫码` : 'QQ 通道断了，而且自愈是关的' });
+  }
   try {
     const settings = loadSettings();
     const legacy = listPosts({ status: 'posted', limit: 50 }).find(
