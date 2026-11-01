@@ -2274,6 +2274,23 @@ async function loadXhsStatus(verify = false) {
     if (data.ownerName) bits.push(`主人：${data.ownerName}`);
     if (data.ownerUserId) bits.push(`ID：${data.ownerUserId}`);
     if (data.lastError) bits.push(`最近错误：${data.lastError}`);
+    const plan = data.publishSchedule;
+    if (plan) {
+      const clock = plan.targetAt ? new Date(plan.targetAt).toTimeString().slice(0, 5) : '';
+      const state = plan.publishesToday > 0
+        ? `今天已发 ${plan.publishesToday}/${plan.publishPerDay}`
+        : plan.decidedAt
+          ? '今天她自己说不发'
+          : plan.noSpaceToday
+            ? '今天窗口没时间了'
+            : plan.attempts >= plan.attemptMax
+              ? `今天试了 ${plan.attempts} 次都没成`
+              : plan.targetAt
+                ? `今天 ${clock} 发`
+                : '今天还没排时间';
+      bits.push(`发笔记：${state}（活跃窗口 ${plan.window}）`);
+      if (plan.lastStep) bits.push(`最近一次：${plan.lastStep}`);
+    }
     box.textContent = bits.join(' · ');
     const line = $('#xhsAccountLine');
     if (line) {

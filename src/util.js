@@ -231,6 +231,22 @@ export function isWithinWindow(start, end, now = new Date()) {
   return h >= s || h < e;
 }
 
+// 挑一个"今天还来得及"的时刻：只在当天剩下的活动窗口里选，跨过午夜或贴到窗口收尾都算没空间。
+// 旧写法按 (24 - 当前小时) 估剩余分钟，随机出来的时间点跑到第二天去了，那一天就白等。
+export function pickMomentInWindow({ now = new Date(), activeStart, activeEnd, random = Math.random, guardMinutes = 3 } = {}) {
+  if (!isWithinWindow(activeStart, activeEnd, now)) return null;
+  const day = shanghaiDayKey(now);
+  let lastInside = 0;
+  for (let minutes = 1; minutes <= 1440; minutes += 1) {
+    const at = new Date(now.getTime() + minutes * 60000);
+    if (shanghaiDayKey(at) !== day || !isWithinWindow(activeStart, activeEnd, at)) break;
+    lastInside = minutes;
+  }
+  if (lastInside <= guardMinutes) return null;
+  const offset = 1 + Math.floor(random() * (lastInside - guardMinutes));
+  return new Date(now.getTime() + offset * 60000).toISOString();
+}
+
 export function relativeTimeCn(iso) {
   if (!iso) return '';
   const diff = Date.now() - new Date(iso).getTime();
