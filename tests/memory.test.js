@@ -23,6 +23,49 @@ const fakeLlm = {
   },
 };
 
+test('交接生成期间有新消息时不归档，主人仍能继续对话',async()=>{
+  const {conversationQueue}=await import('../src/serial.js');
+  const session=db.createSession('交接快照');
+  let release;
+  const waiting=memory.handoverIfNeeded({sessionId:session.id,settings:{memory:{}},force:true,llm:{chat:()=>new Promise(resolve=>release=()=>resolve({content:'过期交接信'}))}});
+  await conversationQueue.run('owner',async()=>db.addMessage({sessionId:session.id,role:'user',content:'新消息，先不交接'}));
+  release();assert.equal(await waiting,null);
+  assert.equal(db.getSession(session.id).status,'active');
+});
+
+test('两个并发压缩只提交一个快照，等待模型期间主人锁可用',async()=>{
+  const { conversationQueue } = await import('../src/serial.js');
+  const session=db.createSession('并发压缩');
+  for(let i=0;i<14;i++)db.addMessage({sessionId:session.id,role:'user',content:`并发原话${i}`,tokens:100});
+  const releases=[];
+  const llm={chat:()=>new Promise(resolve=>releases.push(()=>resolve({content:'并发摘要'})))};
+  const opts={llm,sessionId:session.id,settings:{memory:{shortTurns:8}},force:true};
+  const first=memory.compactIfNeeded(opts),second=memory.compactIfNeeded(opts);
+  assert.equal(releases.length,2);
+  assert.equal(await conversationQueue.run('owner',async()=>'可回复'),'可回复');
+  releases.forEach(release=>release());
+  assert.equal((await Promise.all([first,second])).filter(Boolean).length,1);
+  assert.equal(db.getUncompactedMessages(session.id).length,8);
+  db.getDb().prepare('DELETE FROM memories WHERE source_session=?').run(session.id);
+});
+
+test('超长消息分批覆盖，失败不推进且所有原文都进入摘要请求', async () => {
+  const session = db.createSession('长消息覆盖');
+  const source = Array.from({length:1200},(_,i)=>`片段${i};`).join('');
+  const first = db.addMessage({sessionId:session.id,role:'user',content:source,tokens:5000});
+  for(let i=0;i<9;i++) db.addMessage({sessionId:session.id,role:'user',content:`后续${i}`,tokens:10});
+  const opts={sessionId:session.id,settings:{memory:{shortTurns:8}},force:true};
+  await assert.rejects(memory.compactIfNeeded({...opts,llm:{chat:async()=>{throw new Error('synthetic failure');}}}));
+  assert.equal(db.kvGet(`compact_offset:${session.id}:${first.id}`),null);
+  let captured='';
+  const llm={chat:async(messages)=>{captured+=messages.at(-1).content;return {content:'有效摘要'};}};
+  for(let i=0;i<10 && db.getUncompactedMessages(session.id).length>8;i++) await memory.compactIfNeeded({...opts,llm});
+  assert.equal(db.getUncompactedMessages(session.id).length,8);
+  assert.equal(Number(db.kvGet(`compact_offset:${session.id}:${first.id}`)),source.length);
+  assert.ok(captured.includes('片段0;') && captured.includes('片段1199;'));
+  db.getDb().prepare('DELETE FROM memories WHERE source_session = ?').run(session.id);
+});
+
 test('相似记忆会合并，不会越记越多', () => {
   const first = db.addMemory({ layer: 'mid', content: '他喜欢吃草莓蛋糕', importance: 3 });
   const second = db.addMemory({ layer: 'mid', content: '他喜欢吃草莓', importance: 4 });

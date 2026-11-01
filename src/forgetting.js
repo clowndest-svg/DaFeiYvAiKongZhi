@@ -30,7 +30,7 @@ export function memoryStrength(memory = {}, now = Date.now()) {
   });
   const imp = clamp(finite(memory.importance, 3), 1, 5);
   const uses = Math.max(0, finite(memory.use_count ?? memory.useCount, 0));
-  const decay = Math.exp(-ageDays / halfLife);
+  const decay = Math.exp(-Math.LN2 * ageDays / halfLife);
   const floor = (0.4 + imp * 0.15) * (1 + Math.min(0.6, uses * 0.05));
   return clamp(decay * floor, 0, MAX_STRENGTH);
 }
@@ -51,7 +51,8 @@ export function forgettingCurve(memory = {}, { days = 60, points = 13 } = {}) {
   const total = clamp(Number(days) || 60, 7, 365);
   const count = clamp(Number(points) || 13, 5, 40);
   const start = Date.now();
-  const probe = { ...memory, updated_at: new Date(start).toISOString(), created_at: new Date(start).toISOString() };
+  const probe = { ...memory };
+  if (!Number.isFinite(Date.parse(probe.updated_at || probe.created_at || ''))) probe.updated_at = new Date(start).toISOString();
   const out = [];
   for (let i = 0; i < count; i += 1) {
     const ageDays = (total * i) / (count - 1);

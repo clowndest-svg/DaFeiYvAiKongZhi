@@ -32,28 +32,111 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  await page.emulateMedia({reducedMotion:'reduce'});
  await page.waitForTimeout(150);
  await page.screenshot({path:path.join(shots,'chat-desktop.png')});
+ await page.locator('#historyBrowserBtn').click();
+ await page.locator('#historyRows .history-message').first().waitFor();
+ assert.ok((await page.locator('#historyRows').innerText()).includes('停下之后的新消息'));
+ await page.screenshot({path:path.join(shots,'history-desktop.png')});
+ await page.getByRole('button',{name:'关闭历史',exact:true}).click();
  await page.locator('.rail-btn[data-view="settings"]').click();
  await page.locator('#setName').fill('保留未保存内容');await page.waitForTimeout(4500);
  assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
+ // 快捷朗读开关不得提交其它陪伴草稿，也不得覆盖跨页面的姓名草稿。
+ const beforePresence=await page.locator('#setCameraDailyMax').inputValue();
+ await page.locator('#setCameraDailyMax').fill('7');
+ await page.locator('.rail-btn[data-view="presence"]').click();
+ const toggleSaved=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
+ await page.locator('#speakBtn').click();
+ const toggleResponse=await toggleSaved;
+ assert.deepEqual(toggleResponse.request().postDataJSON(),{presence:{speakReplies:true}});
+ const persisted=(await toggleResponse.json()).settings.presence;
+ assert.equal(String(persisted.cameraDailyMax),beforePresence,'快捷开关不能保存未提交的摄像头额度');
+ await page.locator('.rail-btn[data-view="settings"]').click();
+ assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
+ assert.equal(await page.locator('#setCameraDailyMax').inputValue(),'7');
+ assert.equal(await page.locator('#setSpeakReplies').isChecked(),true,'未编辑的朗读复选框应同步，避免下次保存撤销快捷动作');
+ await page.locator('.settings-jump summary').filter({hasText:'语音与感官'}).click();
+ const groupSaved=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
+ await page.locator('[data-save-scope="voice"]').click();
+ const grouped=await (await groupSaved).json();
+ assert.equal(grouped.settings.presence.cameraDailyMax,7);
+ assert.equal(grouped.settings.companion.name,'测试鲸鲸','保存语音组不能提交姓名草稿');
+ assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
+ assert.equal(await page.locator('#setCameraDailyMax').inputValue(),'7');
  await page.locator('#setMaxPerDay').fill('0');await page.locator('#saveSettingsBtn').click();
  await page.waitForFunction(()=>document.querySelector('#saveHint').textContent==='已保存');
  assert.equal(await page.locator('#setMaxPerDay').inputValue(),'0');
+ // 保存请求在路上时继续输入，响应不能把这段新草稿覆盖掉。
+ let releaseSave,markCaptured,pauseNext=true;
+ const saveGate=new Promise(resolve=>releaseSave=resolve),capturedSave=new Promise(resolve=>markCaptured=resolve);
+ const holdSettings=async route=>{if(route.request().method()==='PUT'&&pauseNext){pauseNext=false;markCaptured();await saveGate;}await route.continue();};
+ await page.route('**/api/settings',holdSettings);
+ await page.locator('#setName').fill('提交时的名称');
+ const inFlightSave=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
+ await page.locator('#saveSettingsBtn').click();await capturedSave;
+ await page.locator('#setName').fill('请求期间的新草稿');releaseSave();await inFlightSave;
+ await page.waitForFunction(()=>!document.querySelector('#saveSettingsBtn').disabled);
+ assert.equal(await page.locator('#setName').inputValue(),'请求期间的新草稿');
+ assert.ok((await page.locator('#saveHint').innerText()).includes('未保存'));
+ await page.unroute('**/api/settings',holdSettings);
+ await page.locator('#saveSettingsBtn').click();
+ await page.waitForFunction(()=>document.querySelector('#saveHint').textContent==='已保存');
  await page.screenshot({path:path.join(shots,'settings-desktop.png')});
  await page.locator('.rail-btn[data-view="memory"]').click();
  await page.locator('#memoryContentInput').fill('浏览器测试：喜欢喝温水');await page.locator('#addMemoryBtn').click();
  await page.waitForFunction(()=>document.querySelector('#memoryContent').innerText.includes('喜欢喝温水'));
+ await page.getByRole('button',{name:'更正',exact:true}).first().click();
+ await page.getByRole('textbox',{name:'更正这条记忆',exact:true}).fill('浏览器测试：现在喜欢喝常温水');
+ const refreshedMemory=page.waitForResponse(r=>r.url().endsWith('/api/memory/overview'));
+ await page.locator('#refreshMemory').click();await refreshedMemory;
+ assert.equal(await page.getByRole('textbox',{name:'更正这条记忆',exact:true}).inputValue(),'浏览器测试：现在喜欢喝常温水','后台刷新不能丢掉更正草稿');
+ await page.getByRole('button',{name:'保存更正',exact:true}).click();
+ await page.waitForFunction(()=>document.querySelector('#memoryContent').innerText.includes('现在喜欢喝常温水'));
  await page.locator('.rail-btn[data-view="social"]').click();
+ await page.locator('#xhsImageGrid input').first().waitFor();
+ const imageReply=await context.request.get(app.base+'/api/xhs/image?name='+encodeURIComponent(await page.locator('#xhsNoteImages option').first().getAttribute('value')));
+ assert.equal(imageReply.status(),200);
+ assert.match(imageReply.headers()['content-type'],/^image\//);
+ assert.equal((await context.request.get(app.base+'/api/xhs/image?name=..%2F.env')).status(),404);
+ await page.locator('#xhsImageGrid input').first().check();
+ assert.equal(await page.locator('#xhsNoteImages').evaluate(el=>el.selectedOptions.length),1);
+ await page.locator('#xhsImageGrid input').first().uncheck();
+ await page.screenshot({path:path.join(shots,'social-new.png')});
  await page.locator('[data-post-kind="qzone"]').click();
  await page.waitForFunction(()=>document.querySelectorAll('.post-card').length>0);
- for(const width of [768,390,337]){
+ for(const width of [768,390,337,320]){
   await page.setViewportSize({width,height:844});
   for(const view of ['chat','memory','social','settings']){
    await page.locator(`.rail-btn[data-view="${view}"]`).click();
    const overflow=await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1);
    assert.equal(overflow,false,`${width}px ${view} overflow`);
+   const target={chat:'#sendBtn',memory:'#addMemoryBtn',social:'#xhsNotePublish',settings:'#saveSettingsBtn'}[view];
+   await page.locator(target).scrollIntoViewIfNeeded();
+   const reachable=await page.locator(target).evaluate(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return !!hit&&(hit===node||node.contains(hit));});
+   if(!reachable){
+    await page.screenshot({path:path.join(shots,'occluded-target.png')});
+    console.log('OCCLUDED='+JSON.stringify(await page.locator(target).evaluate(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {target:node.id,rect:{x:r.x,y:r.y,width:r.width,height:r.height},hit:hit?.outerHTML.slice(0,200),view:node.closest('.view')?.getBoundingClientRect().toJSON()};})));
+   }
+   assert.equal(reachable,true,`${width}px ${view} 主操作必须真正露出，不被底栏遮挡`);
   }
   await page.screenshot({path:path.join(shots,`settings-${width}.png`)});
  }
+ await page.locator('.rail-btn[data-view="chat"]').click();
+ await page.evaluate(()=>{const rail=document.querySelector('.rail'),box=document.querySelector('#sendBtn').getBoundingClientRect();Object.assign(rail.style,{height:'100px',top:`${box.top-5}px`,bottom:'auto'});});
+ const occluded=await page.locator('#sendBtn').evaluate(node=>{const r=node.getBoundingClientRect();const hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return !hit||!(hit===node||node.contains(hit));});
+ assert.equal(occluded,true,'故意把导航覆盖在发送按钮上时，遮挡判据必须检出问题');
+ await page.evaluate(()=>{const style=document.querySelector('.rail').style;style.height='';style.top='';style.bottom='';});
  assert.deepEqual(errors,[],'浏览器不得有未处理的 JS 错误');
- console.log(JSON.stringify({browser:'installed Chromium',viewports:[1440,768,390,337],screenshots:path.relative(process.cwd(),shots),pageErrors:errors.length}));
+ // 两个页面同时改配置时，旧页面必须保留草稿并拒绝覆盖新配置。
+ await page.locator('.rail-btn[data-view="settings"]').click();
+ await page.locator('#setName').fill('发生冲突时保留的草稿');
+ const current=await (await context.request.get(app.base+'/api/settings')).json();
+ const remote=await context.request.put(app.base+'/api/settings',{headers:{origin:app.base,'x-bizhi-request':'1','If-Match':current.revision},data:{companion:{intro:'另一个页面的新配置'}}});
+ assert.equal(remote.status(),200);
+ const conflict=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
+ await page.locator('#saveSettingsBtn').click();
+ assert.equal((await conflict).status(),409);
+ assert.equal(await page.locator('#setName').inputValue(),'发生冲突时保留的草稿');
+ const afterConflict=await (await context.request.get(app.base+'/api/settings')).json();
+ assert.equal(afterConflict.settings.companion.intro,'另一个页面的新配置');
+ console.log(JSON.stringify({browser:'installed Chromium',viewports:[1440,768,390,337,320],screenshots:path.relative(process.cwd(),shots),pageErrors:errors.length}));
 });

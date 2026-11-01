@@ -174,7 +174,6 @@ function formatTranscript(messages, maxEach = 500, maxChars = 5000) {
 }
 
 export async function compactIfNeeded({ llm, sessionId, settings, force = false, locked = false }) {
-  if (!locked) return conversationQueue.run('owner', () => compactIfNeeded({ llm, sessionId, settings, force, locked: true }));
   if (costBlocked('compact')) return null;
   const all = getUncompactedMessages(sessionId);
   const storedTokens = all.reduce((sum, m) => sum + Number(m.tokens || 0), 0);
@@ -182,12 +181,28 @@ export async function compactIfNeeded({ llm, sessionId, settings, force = false,
   if (!force && totalTokens < Number(settings.memory.compactTokens || 24000)) return null;
 
   const keepCount = Math.max(8, Number(settings.memory.shortTurns || 24));
-  if (all.length <= keepCount + 2) return null;
+  if (all.length <= keepCount) return null;
   const older = all.slice(0, all.length - keepCount);
-  if (older.length < 3) return null;
+  // 只提交本批实际覆盖的内容；超长单条用持久化偏移续传，绝不截断后标整条完成。
+  const covered = [];
+  const segments = [];
+  let budget = 5000;
+  for (const message of older) {
+    const content = String(message.content || '（图片）');
+    const key = `compact_offset:${sessionId}:${message.id}`;
+    const start = Math.max(0, Math.min(content.length, Number(kvGet(key, '0')) || 0));
+    const size = Math.min(content.length - start, budget - 80);
+    if (size <= 0) break;
+    const end = start + size;
+    segments.push({ id: message.id, key, start, end, complete: end === content.length });
+    covered.push(`[消息 ${message.id}，字符 ${start}-${end}] ${message.role === 'user' ? '他' : '小知'}：${content.slice(start, end)}`);
+    budget -= size + 80;
+    if (end < content.length) break;
+  }
+  if (!segments.length) return null;
 
   const prev = kvGet(`session_summary:${sessionId}`) || '';
-  const transcript = formatTranscript(older, 600);
+  const transcript = covered.join('\n');
   const result = await llm.chat(
     [
       { role: 'system', content: '你负责把对话压缩成可供长期记忆使用的摘要，只输出摘要正文。' },
@@ -213,7 +228,18 @@ export async function compactIfNeeded({ llm, sessionId, settings, force = false,
   const db = getDb();
   db.exec('BEGIN');
   try {
-    markMessagesCompacted(older.map((m) => m.id));
+    // LLM计算期间不占主人对话锁；提交时检查快照，过期结果不能覆盖新摘要。
+    const unchanged = (kvGet(`session_summary:${sessionId}`) || '') === prev
+      && getSession(sessionId)?.status === 'active'
+      && segments.every(part => {
+        const row = db.prepare('SELECT content, compacted FROM messages WHERE id = ? AND session_id = ?').get(part.id, sessionId);
+        return row && !row.compacted && row.content === older.find(message => message.id === part.id)?.content
+          && (Number(kvGet(part.key, '0')) || 0) === part.start;
+      });
+    if (!unchanged) { db.exec('ROLLBACK'); return null; }
+    markMessagesCompacted(segments.filter((part) => part.complete).map((part) => part.id));
+    for (const part of segments) kvSet(part.key, String(part.end));
+    kvSet(`compact_coverage:${sessionId}:${segments[0].id}:${segments[0].start}`, JSON.stringify(segments));
     kvSet(`session_summary:${sessionId}`, summary);
     addMemory({
       layer: 'mid',
@@ -232,9 +258,10 @@ export async function compactIfNeeded({ llm, sessionId, settings, force = false,
     }
     throw error;
   }
-  addEvent('compact', `把 ${older.length} 条旧消息压成了一段摘要`, { sessionId });
-  logger.info('会话压缩完成', { sessionId, messages: older.length, summaryLength: summary.length });
-  return { summary, count: older.length };
+  const count = segments.filter((part) => part.complete).length;
+  addEvent('compact', `本批压缩 ${segments.length} 段内容，完成 ${count} 条消息`, { sessionId, coverage: segments });
+  logger.info('会话压缩完成', { sessionId, messages: count, summaryLength: summary.length });
+  return { summary, count, pending: older.length - count };
 }
 
 export function exportSessionMarkdown(sessionId) {
@@ -291,7 +318,7 @@ function writeLetterFile(prefix, text, dateOverride = null) {
 }
 
 export async function dailyDiary({ llm, settings, force = false, date = null, locked = false }) {
-  if (!locked) return conversationQueue.run('owner', () => dailyDiary({ llm, settings, force, date, locked: true }));
+  const previousDaily = kvGet('last_daily_at');
   if (costBlocked('daily')) return null;
   const targetDate = date || localDateString();
   const start = new Date(`${targetDate}T00:00:00+08:00`);
@@ -342,6 +369,7 @@ export async function dailyDiary({ llm, settings, force = false, date = null, lo
     diary = stripMarkdownLite(result.content).slice(0, 2400);
   }
   if (!diary) return null;
+  if (kvGet('last_daily_at') !== previousDaily) return null;
   if (!digest) digest = diary.replace(/\s+/g, ' ').slice(0, 120);
 
   const file = writeLetterFile('DAILY', diary, targetDate);
@@ -356,7 +384,6 @@ export async function dailyDiary({ llm, settings, force = false, date = null, lo
 }
 
 export async function handoverIfNeeded({ llm, sessionId, settings, force = false, locked = false }) {
-  if (!locked) return conversationQueue.run('owner', () => handoverIfNeeded({ llm, sessionId, settings, force, locked: true }));
   if (costBlocked('handover')) return null;
   const session = getSession(sessionId);
   if (!session || session.status !== 'active') return null;
@@ -375,6 +402,7 @@ export async function handoverIfNeeded({ llm, sessionId, settings, force = false
   if (!due) return null;
 
   const summary = kvGet(`session_summary:${sessionId}`) || '';
+  const snapshotLastId = getDb().prepare('SELECT MAX(id) id FROM messages WHERE session_id = ?').get(sessionId).id;
   const core = listMemories({ layer: 'core', limit: 40 });
   const weeklies = listMemories({ layer: 'long', limit: 5 });
   const recent = formatTranscript(all.slice(-24), 400);
@@ -398,8 +426,16 @@ export async function handoverIfNeeded({ llm, sessionId, settings, force = false
   const letter = stripMarkdownLite(result.content).slice(0, 2600);
   if (!letter) return null;
 
+  return conversationQueue.run('owner', () => {
+  // 写信时允许继续对话；若期间出现新消息或新摘要，放弃旧结果，绝不把新对话归档掉。
+  if (getSession(sessionId)?.status !== 'active'
+    || getDb().prepare('SELECT MAX(id) id FROM messages WHERE session_id = ?').get(sessionId).id !== snapshotLastId
+    || (kvGet(`session_summary:${sessionId}`) || '') !== summary) return null;
   exportSessionMarkdown(sessionId);
   const file = writeLetterFile('LETTER', letter);
+  const db = getDb();
+  db.exec('BEGIN');
+  try {
   addMemory({
     layer: 'long',
     content: letter,
@@ -408,9 +444,6 @@ export async function handoverIfNeeded({ llm, sessionId, settings, force = false
     reasoning: '上下文交接时写给未来自己的信',
     sourceSession: sessionId,
   });
-  const db = getDb();
-  db.exec('BEGIN');
-  try {
   archiveSession(sessionId, letter);
   const next = createSession(`${localDateString()} 起的新一页`);
   setActiveSession(next.id);
@@ -424,10 +457,10 @@ export async function handoverIfNeeded({ llm, sessionId, settings, force = false
   addEvent('handover', '她给未来的自己写了一封信，并开启了新会话', { sessionId, next: next.id, file: file.name });
   logger.info('完成会话交接', { sessionId, next: next.id, letter: file.name });
   return { letter, file: file.file, name: file.name, nextSession: next, archived: sessionId };
+  });
 }
 
 export async function weeklyDiary({ llm, settings, force = false, locked = false }) {
-  if (!locked) return conversationQueue.run('owner', () => weeklyDiary({ llm, settings, force, locked: true }));
   if (costBlocked('weekly')) return null;
   const last = kvGet('last_weekly_at');
   if (!force && last && Date.now() - new Date(last).getTime() < 6 * 86400000) return null;
@@ -469,6 +502,7 @@ export async function weeklyDiary({ llm, settings, force = false, locked = false
   );
   const diary = stripMarkdownLite(result.content).slice(0, 2200);
   if (!diary) return null;
+  if (kvGet('last_weekly_at') !== last) return null;
   const file = writeLetterFile('WEEKLY', diary);
   addMemory({
     layer: 'long',

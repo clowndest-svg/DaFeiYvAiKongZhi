@@ -308,6 +308,15 @@ export function getRecentMessages(sessionId, limit = 24, includeCompacted = fals
   return getDb().prepare(sql).all(sessionId, limit).reverse().map(mapMessage);
 }
 
+export function getMessagePage(sessionId, { before = Number.MAX_SAFE_INTEGER, limit = 80 } = {}) {
+  const size = Math.min(200, Math.max(1, Math.floor(Number(limit) || 80)));
+  const cursor = Number.isSafeInteger(Number(before)) && Number(before) > 0 ? Number(before) : Number.MAX_SAFE_INTEGER;
+  const rows = getDb().prepare('SELECT * FROM messages WHERE session_id = ? AND id < ? ORDER BY id DESC LIMIT ?').all(sessionId, cursor, size + 1);
+  const hasMore = rows.length > size;
+  const messages = rows.slice(0, size).reverse().map(mapMessage);
+  return { messages, hasMore, before: messages[0]?.id || null };
+}
+
 export function getMessagesForPrompt(sessionId, limit = 24) {
   return getRecentMessages(sessionId, limit, false).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.meta?.aborted);
 }
@@ -411,9 +420,12 @@ export function addMemory({
   tags = [],
   reasoning = '',
   sourceSession = null,
+  mergeSimilar = true,
 }) {
   const norm = normalizeMemoryText(content);
   if (!norm) return null;
+  const superseded = kvGet(`memory_superseded:${layer}:${hashText(norm.toLowerCase())}`);
+  if (superseded) return mapMemory(getDb().prepare('SELECT * FROM memories WHERE id = ?').get(Number(superseded)));
   const safeImportance = Math.min(5, Math.max(1, Number(importance) || 3));
   const safeTags = Array.isArray(tags) ? tags.slice(0, 8) : [];
 
@@ -422,10 +434,10 @@ export function addMemory({
   const keyword = keywordSet(norm);
   const numbersOf = (text) => (String(text).match(/\d+/g) || []).sort().join(',');
   const newNumbers = numbersOf(norm);
-  const candidates = getDb()
+  const candidates = mergeSimilar ? getDb()
     .prepare('SELECT * FROM memories WHERE layer = ? ORDER BY updated_at DESC LIMIT 200')
     .all(layer)
-    .map(mapMemory);
+    .map(mapMemory) : [];
   for (const existing of candidates) {
     const score = overlapScore(keyword, existing.content);
     if (score > 0.68) {
@@ -434,6 +446,7 @@ export function addMemory({
       const hasNegation = (text) => /(?:^|[^不])不|没|别|勿|无需/.test(String(text));
       if (hasNegation(norm) !== hasNegation(existing.content)) continue;
       const useNew = norm.length > existing.content.length;
+      if (kvGet(`memory_versions:${existing.id}`)) return existing;
       const mergedTags = [...new Set([...(existing.tags || []), ...safeTags])].slice(0, 8);
       getDb()
         .prepare(
@@ -500,6 +513,27 @@ export function touchMemories(ids) {
 
 export function deleteMemory(id) {
   getDb().prepare('DELETE FROM memories WHERE id = ?').run(id);
+}
+
+export function reviseMemory(id, content, expectedUpdatedAt) {
+  const value = String(content || '').trim();
+  if (!value || value.length > 1000) throw Object.assign(new Error('记忆需要1–1000字'), { status: 400 });
+  const db = getDb();
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    const current = db.prepare('SELECT * FROM memories WHERE id = ?').get(id);
+    if (!current) throw Object.assign(new Error('记忆不存在'), { status: 404 });
+    if (current.updated_at !== expectedUpdatedAt) throw Object.assign(new Error('这条记忆已被更新，请刷新后再修改'), { status: 409 });
+    const key = `memory_versions:${id}`;
+    const versions = kvGetJson(key, []);
+    kvSetJson(key, [...versions, current].slice(-20));
+    kvSet(`memory_superseded:${current.layer}:${hashText(normalizeMemoryText(current.content).toLowerCase())}`, String(id));
+    const updatedAt = new Date(Math.max(Date.now(), Date.parse(current.updated_at) + 1)).toISOString();
+    db.prepare('UPDATE memories SET content = ?, updated_at = ?, reasoning = ?, dedupe = ? WHERE id = ?')
+      .run(value, updatedAt, '由你在控制台更正；原版本保存在本地修订记录中', hashText(`${current.layer}|${normalizeMemoryText(value).toLowerCase()}`), id);
+    db.exec('COMMIT');
+    return mapMemory(db.prepare('SELECT * FROM memories WHERE id = ?').get(id));
+  } catch (error) { db.exec('ROLLBACK'); throw error; }
 }
 
 export function countMemories() {

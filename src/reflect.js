@@ -11,23 +11,22 @@ import { applyMood, getMood } from './mood.js';
 import { noteBrainLink } from './brain.js';
 import { applyNeuroEvent } from './neuro.js';
 import { addSense } from './senses.js';
-import { addIntention } from './intentions.js';
+import { addIntention, listIntentions, completeIntention } from './intentions.js';
 import { buildReflectionPrompt } from './prompt.js';
 import { logger } from './logger.js';
 import { costBlocked } from './budget.js';
-import { clamp, parseJsonLoose, truncate } from './util.js';
+import { clamp, parseJsonLoose, truncate, keywordSet, overlapScore } from './util.js';
+import { LatestTaskQueue } from './serial.js';
 
-let chain = Promise.resolve();
+const reflectionQueue = new LatestTaskQueue({ onError: error => logger.warn('事后反思失败', { error: error.message }) });
 
 function squash(text) {
   return String(text || '').replace(/[\s，。！？、,.!?~～：:；;“”"'‘’（）()【】\[\]]/g, '');
 }
 
 export function scheduleReflection(ctx) {
-  chain = chain
-    .then(() => reflect(ctx))
-    .catch((error) => logger.warn('事后反思失败', { error: error.message }));
-  return chain;
+  return reflectionQueue.enqueue(ctx.sessionId, () => reflect(ctx))
+    .catch(error => logger.warn('反思暂未入队，原话已保留', { error: error.message }));
 }
 
 export async function reflect({ llm, sessionId, assistantMessageId, settings, messages }) {
@@ -53,6 +52,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
   const userSaid = squash(recent.filter((m) => m.role === 'user').map((m) => m.content).join(''));
   const mood = getMood();
   const core = listMemories({ layer: 'core', limit: 20 });
+  const openIntentions = listIntentions({ limit: 12 });
 
   const result = await llm.chat(
     [
@@ -62,7 +62,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
       },
       {
         role: 'user',
-        content: buildReflectionPrompt({ settings, mood, transcript, coreMemories: core }),
+        content: buildReflectionPrompt({ settings, mood, transcript, coreMemories: core, openIntentions }),
       },
     ],
     {
@@ -111,13 +111,23 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
   for (const item of memories) {
     const content = String(item?.content || '').trim();
     if (content.length < 4) continue;
+    const evidence = String(item?.evidence || '').trim();
+    const normalized = squash(evidence);
+    const source = recent.find((message) => message.role === 'user' && normalized.length >= 3 && String(message.content || '').includes(evidence));
+    if (evidence.length > 280) continue;
+    if (!source) {
+      addEvent('reflect_memory_rejected', '没有主人原话依据的重点记忆已跳过');
+      continue;
+    }
     const row = addMemory({
       layer: 'mid',
-      content: content.slice(0, 300),
+      // 保留原话的主语、否定和时态，避免模型改写把第三人的经历归到主人身上。
+      content: `他说：「${String(source.content).length <= 280 ? source.content : evidence}」`,
       importance: clamp(Number(item.importance) || 3, 1, 5),
       tags: Array.isArray(item.tags) ? item.tags.map((t) => String(t).slice(0, 12)).slice(0, 5) : [],
-      reasoning: String(item.reasoning || '').slice(0, 160),
+      reasoning: `消息 ${source.id || '本轮'} 原话「${evidence.slice(0, 100)}」；${String(item.reasoning || '').slice(0, 40)}`,
       sourceSession: sessionId,
+      mergeSimilar: false,
     });
     if (row) added.push(row);
   }
@@ -128,8 +138,8 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
     if (content.length < 3) continue;
     const evidence = String(item?.evidence || '').trim();
     const normalized = squash(evidence);
-    const source = recent.find((message) => message.role === 'user' && squash(message.content).includes(normalized));
-    if (normalized.length < 3 || !source) {
+    const source = recent.find((message) => message.role === 'user' && String(message.content || '').includes(evidence));
+    if (normalized.length < 3 || !source || evidence.length > 280) {
       addEvent('reflect_profile_rejected', '这次反思想把一句没被他说过的话记成事实，已拒绝', {
         content: content.slice(0, 60),
         evidence: evidence.slice(0, 40),
@@ -144,16 +154,26 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
     if (duplicate) continue;
     const row = addMemory({
       layer: 'core',
-      content: content.slice(0, 300),
+      content: `他说：「${String(source.content).length <= 280 ? source.content : evidence}」`,
       importance: 5,
       tags: ['核心档案', '自动'],
       reasoning: `消息 ${source.id || '本轮'} 里他说过「${evidence.slice(0, 80)}」`,
       sourceSession: sessionId,
+      mergeSimilar: false,
     });
     if (row) added.push(row);
   }
 
   const intentions = Array.isArray(data.intentions) ? data.intentions.slice(0, 1) : [];
+  for (const item of (Array.isArray(data.completed_intentions) ? data.completed_intentions : []).slice(0, 2)) {
+    const evidence = squash(item?.evidence);
+    const source = recent.find(m => m.role === 'user' && evidence.length >= 3 && squash(m.content).includes(evidence));
+    const said = String(source?.content || '');
+    const explicitDone = /做完了|办完了|完成了|结束了|已经完成|取消了|不用提醒|不需要再提醒/.test(said)
+      && !/还没|没做|没有|如果|假如|明天|以后|了吗|[?？]|朋友|他说|她说/.test(said);
+    const intention = openIntentions.find(i => i.id === item.id);
+    if (source && explicitDone && intention && overlapScore(keywordSet(intention.text), said) >= 0.12) completeIntention(item.id, `主人原话：${String(item.evidence).slice(0, 45)}`);
+  }
   let intentionAdded = 0;
   for (const item of intentions) {
     const text = String(item?.text || item?.content || '').trim();

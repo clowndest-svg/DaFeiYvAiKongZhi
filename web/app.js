@@ -30,6 +30,7 @@ const state = {
   view: 'chat',
   liveBusy: false,
   settingsDirty: false,
+  settingsDirtyFields: new Set(),
   chatEpoch: 0,
   messagesRequest: 0,
   xhsLoggedIn: null,
@@ -146,8 +147,8 @@ async function submitLogin(password) {
   location.reload();
 }
 
-async function api(path, { method = 'GET', body, signal } = {}) {
-  const headers = { 'X-BiZhi-Request': '1', ...(body ? { 'Content-Type': 'application/json' } : {}) };
+async function api(path, { method = 'GET', body, signal, headers: extraHeaders = {} } = {}) {
+  const headers = { 'X-BiZhi-Request': '1', ...(body ? { 'Content-Type': 'application/json' } : {}), ...extraHeaders };
   const timeout = AbortSignal.timeout(method === 'GET' ? 15000 : 240000);
   const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
   const res = await fetch(withToken(path), {
@@ -193,6 +194,7 @@ async function withBusy(button, fn) {
 function switchView(name) {
   const previousView = state.view;
   state.view = name;
+  renderHealth(state.status?.health || []);
   $$('.rail-btn').forEach((btn) => btn.classList.toggle('active', btn.dataset.view === name));
   $$('.view').forEach((view) => view.classList.toggle('active', view.id === `view-${name}`));
   if (name === 'settings') {
@@ -293,7 +295,7 @@ function renderStatus() {
     : status.keyConfigured
     ? `${qq.connected ? '在线 · QQ 已连接' : '在线 · 本地'}${mood.label ? ` · ${mood.label}` : ''}`
     : '未配置 API Key';
-  $('#topStatus .dot').style.background = status.keyConfigured ? 'var(--ok)' : 'var(--danger)';
+  $('#topStatus .dot').style.background = status.mock ? 'var(--warn)' : status.keyConfigured ? 'var(--ok)' : 'var(--danger)';
   $('#railQqDot').classList.toggle('on', Boolean(qq.connected));
 
   $('#moodChip').textContent = `${mood.label || '正在感受'} · ${affectionLabel(mood.affection)}`;
@@ -371,6 +373,7 @@ function renderStatus() {
 function renderHealth(list) {
   const box = $('#healthBanner');
   if (!box) return;
+  list = list.filter(item => !(item.key === 'qzone' && item.level === 'info' && !['social','settings'].includes(state.view)));
   box.textContent = '';
   box.classList.toggle('hidden', !list.length);
   box.hidden = !list.length;
@@ -468,10 +471,79 @@ async function loadMessages() {
   const request = ++state.messagesRequest;
   const data = await api('/api/messages?limit=120');
   if (state.streaming || epoch !== state.chatEpoch || request !== state.messagesRequest) return;
+  const keepHistory = state.historyExpanded && state.sessionId === data.session.id;
   state.sessionId = data.session.id;
-  state.messages = data.messages || [];
+  state.messages = keepHistory ? [...new Map([...state.messages, ...(data.messages || [])].map(m => [m.id, m])).values()].sort((a,b)=>a.id-b.id) : data.messages || [];
+  if (!keepHistory) {
+    state.historyExpanded = false;
+    $('#olderMessagesBtn').hidden = !data.hasMore;
+  }
   renderMessages();
 }
+
+$('#olderMessagesBtn').addEventListener('click', async () => {
+  if (state.streaming) return;
+  const button = $('#olderMessagesBtn');
+  button.disabled = true;
+  const session = state.sessionId;
+  const epoch = state.chatEpoch;
+  try {
+    const before = state.messages[0]?.id;
+    const data = await api(`/api/messages?limit=120&before=${before || ''}`);
+    if (session !== state.sessionId || session !== data.session.id || epoch !== state.chatEpoch || state.streaming) return;
+    const box = $('#messages'), height = box.scrollHeight, top = box.scrollTop;
+    state.historyExpanded = true;
+    state.messages = [...new Map([...data.messages, ...state.messages].map(m=>[m.id,m])).values()].sort((a,b)=>a.id-b.id);
+    renderMessages();
+    box.scrollTop = top + box.scrollHeight - height;
+    button.hidden = !data.hasMore;
+  } catch (error) { toast(error.message, 'error'); }
+  finally { button.disabled = false; }
+});
+
+let historyCursor = null;
+let historyRequest = 0;
+async function loadHistoryPage(reset = false) {
+  const request = ++historyRequest;
+  const button = $('#historyMoreBtn');
+  button.disabled = true;
+  try {
+    const sessionId = $('#historySessionSelect').value;
+    const data = await api(`/api/messages?sessionId=${encodeURIComponent(sessionId)}&limit=80&before=${reset ? '' : historyCursor || ''}`);
+    if (request !== historyRequest) return;
+    const box = $('#historyRows');
+    if (reset) box.replaceChildren();
+    const fragment = document.createDocumentFragment();
+    for (const message of data.messages) {
+      const row = el('article', 'history-message');
+      row.append(el('small', 'muted', `${message.role === 'user' ? '你' : '她'} · ${message.channel} · ${fmtDate(message.created_at)}`), el('p', '', message.content));
+      fragment.appendChild(row);
+    }
+    box.prepend(fragment);
+    historyCursor = data.messages[0]?.id || null;
+    button.hidden = !data.hasMore;
+    if (reset && !data.messages.length) box.textContent = '这个会话还没有消息。';
+  } catch (error) { toast(error.message, 'error'); }
+  finally { if (request === historyRequest) button.disabled = false; }
+}
+$('#historyBrowserBtn').addEventListener('click', async () => {
+  try {
+    const data = await api('/api/sessions');
+    const select = $('#historySessionSelect');
+    select.replaceChildren();
+    for (const session of data.sessions) {
+      const option = document.createElement('option');
+      option.value = session.id;
+      option.textContent = `${session.status === 'active' ? '当前' : '已归档'} · ${session.title || fmtDate(session.created_at)}`;
+      select.appendChild(option);
+    }
+    if (data.sessions.some(s => s.id === state.sessionId)) select.value = state.sessionId;
+    $('#historyDialog').showModal();
+    await loadHistoryPage(true);
+  } catch (error) { toast(error.message, 'error'); }
+});
+$('#historySessionSelect').addEventListener('change', () => loadHistoryPage(true));
+$('#historyMoreBtn').addEventListener('click', () => loadHistoryPage());
 
 function isNearBottom() {
   const box = $('#messages');
@@ -910,6 +982,7 @@ function memoryItems() {
 
 function renderMemory() {
   const box = $('#memoryContent');
+  if (box.querySelector('textarea')) return;
   box.innerHTML = '';
   const items = memoryItems();
   if (!items.length) {
@@ -917,7 +990,7 @@ function renderMemory() {
       core: '还没有核心档案。写点你希望她永远记得的事。',
       mid: '还没有重点记忆。多聊几句，她会自己整理。',
       long: '还没有周记。周末晚上她会长篇写一次，也可以现在让她写。',
-      letters: '还没有信。她会把告别和惦记都写下来。',
+      letters: '这里还没有信。你可以让她给未来写信；会话交接时的信也会保存在这里。',
     };
     box.appendChild(el('div', 'empty', messages[state.memoryTab] || '还没有内容。'));
     return;
@@ -948,8 +1021,31 @@ function renderMemory() {
     if (item.reasoning) meta.appendChild(el('span', '', item.reasoning));
     main.appendChild(meta);
     card.appendChild(main);
+    const edit = el('button', '', '更正');
+    edit.addEventListener('click', () => {
+      if ($('#memoryContent textarea')) { toast('请先保存或取消正在更正的记忆'); return; }
+      const input = document.createElement('textarea');
+      input.value = item.content;
+      input.maxLength = 1000;
+      input.setAttribute('aria-label', '更正这条记忆');
+      const save = el('button', '', '保存更正');
+      const cancel = el('button', '', '取消');
+      cancel.addEventListener('click', () => { input.remove(); save.remove(); cancel.remove(); renderMemory(); });
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        try {
+          await api(`/api/memories/${item.id}`, { method: 'PUT', body: { content: input.value, expectedUpdatedAt: item.updated_at } });
+          input.remove(); save.remove(); cancel.remove();
+          await loadMemory();
+        } catch (error) { toast(error.message, 'error'); save.disabled = false; }
+      });
+      main.append(input, save, cancel);
+      input.focus();
+    });
+    card.appendChild(edit);
     const del = el('button', 'del', '删除');
     del.addEventListener('click', async () => {
+      if ($('#memoryContent textarea')) { toast('请先保存或取消更正'); return; }
       if (!confirm('删掉这条记忆？删掉之后她就不记得了。')) return;
       try {
         await api(`/api/memories/${item.id}`, { method: 'DELETE' });
@@ -982,6 +1078,7 @@ function renderMemoryPeek() {
 }
 
 function setMemoryTab(tab) {
+  if (tab !== state.memoryTab && $('#memoryContent textarea')) { toast('请先保存或取消正在更正的记忆'); return; }
   state.memoryTab = tab;
   $$('#memoryTabs button').forEach((btn) => btn.classList.toggle('active', btn.dataset.tab === tab));
   renderMemory();
@@ -1360,14 +1457,38 @@ async function loadXhsNoteImages() {
     const data = await api('/api/xhs/images');
     const images = data.images || [];
     sel.innerHTML = '';
+    const grid = $('#xhsImageGrid');
+    grid.replaceChildren();
     for (const image of images) {
       const option = document.createElement('option');
       option.value = image.name;
       option.textContent = `${image.name}（${Math.round((image.bytes || 0) / 1024)}KB）`;
       sel.appendChild(option);
+      const label = document.createElement('label');
+      label.className = 'image-choice';
+      const check = document.createElement('input');
+      check.type = 'checkbox';
+      check.setAttribute('aria-label', `选择 ${image.name}`);
+      const img = document.createElement('img');
+      img.src = `/api/xhs/image?name=${encodeURIComponent(image.name)}`;
+      img.alt = image.name;
+      img.loading = 'lazy';
+      const caption = document.createElement('span');
+      caption.textContent = image.name;
+      check.addEventListener('change', () => {
+        if (check.checked && sel.selectedOptions.length >= 18) {
+          check.checked = false;
+          toast('最多选择18张图片');
+          return;
+        }
+        option.selected = check.checked;
+        $('#xhsImageCount').textContent = `已选择${sel.selectedOptions.length}张，按图片列表顺序发布`;
+      });
+      label.append(img, check, caption);
+      grid.appendChild(label);
     }
     $('#xhsNoteResult').textContent = images.length
-      ? `本机有 ${images.length} 张可选图片，按住 Ctrl 可以多选。`
+      ? `本机有 ${images.length} 张可选图片，点击缩略图选择。`
       : '本机没有可选图片，先把公开素材放进 data/public-media 再刷新。';
   } catch (error) {
     $('#xhsNoteResult').textContent = `读取可选图片失败：${error.message}`;
@@ -1580,6 +1701,7 @@ async function loadSettings() {
   const data = await api('/api/settings');
   if (state.settingsDirty) return;
   state.settings = data.settings;
+  state.settingsRevision = data.revision;
   state.meta = data.meta;
   state.persona = data.persona;
   state.ttsAuto = Boolean(data.settings?.ui?.autoSpeak);
@@ -1862,25 +1984,55 @@ function collectSettings() {
   };
 }
 
-async function saveSettings() {
+function settingsDraftValues() {
+  return new Map($$('#view-settings input[id^="set"], #view-settings select[id^="set"], #view-settings textarea[id^="set"]').map(node => [node.id, node.type === 'checkbox' ? node.checked : node.value]));
+}
+
+async function saveSettings(scope = 'all') {
+  if (state.savingSettings) return;
+  const domains = { identity: ['companion'], chat: ['model','memory'], proactive: ['proactive'], voice: ['presence','tts'], channels: ['qq','social'], system: ['ui','cost'] };
+  const collected = collectSettings();
+  const body = scope === 'all' ? collected : Object.fromEntries((domains[scope] || []).map(key => [key, collected[key]]));
+  const submitted = settingsDraftValues();
+  state.savingSettings = true;
+  const buttons = $$('#saveSettingsBtn, [data-save-scope]');
+  buttons.forEach(button => button.disabled = true);
   try {
-    const data = await api('/api/settings', { method: 'PUT', body: collectSettings() });
-    state.settingsDirty = false;
+    const data = await api('/api/settings', { method: 'PUT', body, headers: state.settingsRevision ? { 'If-Match': state.settingsRevision } : {} });
+    const current = settingsDraftValues();
     state.settings = data.settings;
+    state.settingsRevision = data.revision;
     state.ttsAuto = Boolean(data.settings.ui?.autoSpeak);
     updateVoiceButton();
     fillSettings();
+    const remaining = new Set();
+    for (const id of state.settingsDirtyFields) {
+      const node = document.getElementById(id);
+      if (!node) continue;
+      const value = current.get(id);
+      const normalized = node.type === 'checkbox' ? node.checked : node.value;
+      const editedDuringRequest = value !== submitted.get(id);
+      if (value !== normalized && (scope !== 'all' || editedDuringRequest || id === 'setPersona')) {
+        if (node.type === 'checkbox') node.checked = value; else node.value = value;
+        remaining.add(id);
+      }
+    }
+    state.settingsDirtyFields = remaining;
+    state.settingsDirty = remaining.size > 0;
     const hint = $('#saveHint');
     if (hint) {
-      hint.textContent = '已保存';
-      hint.classList.remove('dirty');
-      hint.classList.add('saved');
+      hint.textContent = state.settingsDirty ? '本次设置已保存，仍有未保存的修改' : '已保存';
+      hint.classList.toggle('dirty', state.settingsDirty);
+      hint.classList.toggle('saved', !state.settingsDirty);
     }
     toast('设置保存好了。');
     await loadStatus();
     if (state.messages.length) renderMessages();
   } catch (error) {
     toast(error.message, 'error');
+  } finally {
+    state.savingSettings = false;
+    buttons.forEach(button => button.disabled = false);
   }
 }
 
@@ -1893,6 +2045,8 @@ async function savePersona() {
   try {
     await api('/api/persona', { method: 'PUT', body: { persona } });
     state.persona = persona;
+    if ($('#setPersona').value.trim() === persona) state.settingsDirtyFields.delete('setPersona');
+    state.settingsDirty = state.settingsDirtyFields.size > 0;
     toast('人设保存好了，下一句话就生效。');
   } catch (error) {
     toast(error.message, 'error');
@@ -2405,11 +2559,19 @@ function bindSocial() {
 }
 
 function bindSettings() {
+  $('#reloadSettingsBtn').addEventListener('click', async () => {
+    if (state.settingsDirty && !confirm('重新载入会放弃当前未保存修改。请先复制需要保留的内容。继续？')) return;
+    const wasDirty = state.settingsDirty;
+    state.settingsDirty = false;
+    try { await loadSettings(); state.settingsDirtyFields.clear(); $('#saveHint').textContent = '已载入最新设置'; }
+    catch(error) { state.settingsDirty = wasDirty; toast(error.message, 'error'); }
+  });
   const settingsView = $('#view-settings');
   if (settingsView) {
     const markDirty = (event) => {
       if (!event.target?.id?.startsWith('set')) return;
       state.settingsDirty = true;
+      state.settingsDirtyFields.add(event.target.id);
       const hint = $('#saveHint');
       if (hint) {
         hint.textContent = '有未保存的修改';
@@ -2420,7 +2582,8 @@ function bindSettings() {
     settingsView.addEventListener('input', markDirty);
     settingsView.addEventListener('change', markDirty);
   }
-  $('#saveSettingsBtn').addEventListener('click', saveSettings);
+  $('#saveSettingsBtn').addEventListener('click', () => saveSettings());
+  $$('[data-save-scope]').forEach(button => button.addEventListener('click', () => saveSettings(button.dataset.saveScope)));
   $('#voicePreviewBtn').addEventListener('click', () => previewVoice($('#voicePreviewBtn')));
   $('#voiceCompareBtn').addEventListener('click', () => withBusy($('#voiceCompareBtn'), async () => {
     const box = $('#voiceCompareList');
@@ -2878,7 +3041,7 @@ function setPetExpression(name, { blink = false } = {}) {
   }, 240);
   pet.expression = name;
   const tag = $('#petTag');
-  if (tag) tag.textContent = { happy: '她挺开心', shy: '她有点闷', surprised: '她来精神了', normal: '她在看你' }[name] || '她在看你';
+  if (tag) tag.textContent = { happy: '她挺开心', shy: '她有点闷', surprised: '她来精神了', normal: '陪你待着' }[name] || '陪你待着';
 }
 
 function applyBreathing() {
@@ -3359,7 +3522,7 @@ function updatePetFromState(data) {
   const tag = $('#petTag');
   const mood = data.mood || {};
   setPetExpression(expressionForMood(mood));
-  if (tag && data.neuro?.enabled && data.neuro.dominant) {
+  if (tag && $('#presenceDiagnostics')?.open && data.neuro?.enabled && data.neuro.dominant) {
     const item = (data.neuro.items || []).find((i) => i.key === data.neuro.dominant);
     if (item) tag.textContent = `${item.label} ${item.delta > 0 ? '偏高' : '偏低'}`;
   }
@@ -3647,15 +3810,29 @@ function bindPresence() {
 }
 
 async function savePresenceToggle(patch) {
+  const button = $('#speakBtn');
+  if (button?.disabled) return;
+  const speakDraft = $('#setSpeakReplies');
+  const initialSpeak = speakDraft?.checked;
+  const hadSpeakDraft = initialSpeak !== Boolean(state.settings?.presence?.speakReplies);
+  if (button) button.disabled = true;
   try {
-    const collected = collectSettings();
-    const next = await api('/api/settings', { method: 'PUT', body: { presence: { ...collected.presence, ...patch } } });
+    // 快捷动作只保存点击的字段，不能顺带提交设置页尚未保存的草稿。
+    const next = await api('/api/settings', { method: 'PUT', body: { presence: patch }, headers: state.settingsRevision ? { 'If-Match': state.settingsRevision } : {} });
     state.settings = next.settings;
-    fillSettings();
+    state.settingsRevision = next.revision;
+    if (!state.settingsDirty) {
+      fillSettings();
+    } else if (!hadSpeakDraft && speakDraft?.checked === initialSpeak) {
+      // 同步未编辑的对应控件，保留其它字段以及请求期间的新编辑。
+      speakDraft.checked = Boolean(next.settings?.presence?.speakReplies);
+    }
     await loadPresenceState();
     updatePresenceButtons();
   } catch (error) {
     toast(error.message, 'error');
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -3728,7 +3905,7 @@ async function init() {
     loadQqSetup().catch(() => {});
     loadQzoneStatus().catch(() => {});
     loadXhsStatus().catch(() => {});
-    if (state.status && !state.status.keyConfigured) {
+    if (state.status && !state.status.mock && !state.status.keyConfigured) {
       toast('还没有配置 DeepSeek API Key：编辑 .env 里的 DEEPSEEK_API_KEY，然后重启。', 'error');
     }
     if (['chat', 'memory', 'social', 'settings', 'presence', 'pet'].includes(initialView)) {

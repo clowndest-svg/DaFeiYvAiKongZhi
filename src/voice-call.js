@@ -152,6 +152,7 @@ export class VoiceCall {
 
   // 唯一的发送裁决点：校验、扣额度、登记提交状态，全程同步，返回后调用方立刻发消息。
   markCommitting(scope, { dailyCount = 0 } = {}) {
+    this.pruneTickets();
     if (!scope || !scope.callSessionId || !this.session) return { ok: false, reason: '不在语音会话里，不能按会话额度发' };
     if (!this.isCurrent(scope)) return { ok: false, reason: '回合已作废或会话已结束' };
     const s = this.session;
@@ -192,7 +193,17 @@ export class VoiceCall {
       if (s && s.committingTurn === ticket.turnGeneration) delete s.committingTurn;
       ticket.state = 'REFUNDED';
     }
+    this.pruneTickets();
     return { ok: true, state: ticket.state };
+  }
+
+  pruneTickets() {
+    // 已结算记录只承担近期幂等判据；淘汰后迟到回执仍会被拒绝，绝不再扣量。
+    for (const [id, ticket] of this.tickets) {
+      if (ticket.state === 'COMMITTING') continue;
+      if (this.tickets.size <= 512 && this.now() - ticket.at < 86400000) continue;
+      this.tickets.delete(id);
+    }
   }
 
   // 只用一个看门狗定时器串起「空闲挂断」和「到点挂断」，会话结束即清除。

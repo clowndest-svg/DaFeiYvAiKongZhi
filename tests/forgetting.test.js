@@ -25,6 +25,14 @@ const { getMemoryBlock } = await import('../src/memory.js');
 const DAY = 86400000;
 const ago = (days) => new Date(Date.now() - days * DAY).toISOString();
 
+test('名义半衰期恰好减半，老记忆曲线从当前强度开始', () => {
+  const now=Date.now();
+  const memory={importance:3,use_count:0,updated_at:new Date(now).toISOString()};
+  assert.ok(Math.abs(memoryStrength(memory,now+memoryHalfLifeDays({importance:3})*DAY)/memoryStrength(memory,now)-0.5)<1e-9);
+  const old={...memory,updated_at:ago(30)};
+  assert.ok(Math.abs(forgettingCurve(old)[0].strength-memoryStrength(old))<0.001);
+});
+
 test('越重要、越常被想起，半衰期越长（这是“越记越牢”的全部依据）', () => {
   assert.ok(memoryHalfLifeDays({ importance: 5, useCount: 0 }) > memoryHalfLifeDays({ importance: 1, useCount: 0 }));
   assert.ok(memoryHalfLifeDays({ importance: 3, useCount: 8 }) > memoryHalfLifeDays({ importance: 3, useCount: 0 }));

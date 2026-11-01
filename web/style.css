@@ -69,6 +69,25 @@
   --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
 }
 
+.diagnostics summary { cursor: pointer; min-height: 44px; font-weight: 600; }
+.diagnostics[open] summary { margin-bottom: 12px; }
+.settings-jump details { flex: 1 1 140px; border: 1px solid var(--line-strong); border-radius: 10px; padding: 4px 8px; }
+.settings-jump summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; font-size: 14px; }
+.settings-jump details a { display: block; margin: 4px 0; white-space: normal; overflow-wrap: anywhere; }
+.settings-jump details button { width: 100%; margin-top: 8px; padding: 8px 6px; font-size: 13px; }
+.image-picker { border: 1px solid var(--line-strong); border-radius: 12px; min-width: 0; }
+.image-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); gap: 12px; }
+.image-choice { position: relative; display: flex; flex-direction: column; gap: 6px; cursor: pointer; min-width: 0; }
+.image-choice img { width: 100%; aspect-ratio: 1; object-fit: contain; background: var(--surface-1); border-radius: 8px; }
+.image-choice input { position: absolute; top: 6px; right: 6px; }
+.image-choice span { font-size: 13px; overflow-wrap: anywhere; }
+.history-rows { max-height: 55dvh; overflow-y: auto; padding: 12px 0; }
+.history-message { border-bottom: 1px solid var(--line); padding: 8px 0; }
+.history-message p { white-space: pre-wrap; overflow-wrap: anywhere; }
+#historyDialog { width: min(760px, calc(100vw - 24px)); max-height: 90dvh; overflow: auto; background: var(--surface-1); color: var(--text); border: 1px solid var(--line-strong); border-radius: 16px; padding: 20px; }
+#historyDialog::backdrop { background: rgba(0,0,0,.7); }
+.image-choice:has(input:checked) { outline: 2px solid var(--cyan); outline-offset: 3px; border-radius: 8px; }
+
 
 * { box-sizing: border-box; }
 
@@ -708,6 +727,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
   align-items: flex-start;
 }
 .mem-card .mem-main { min-width: 0; }
+.mem-card > button { flex: 0 0 auto; min-width: 44px; padding: 8px; }
 .mem-card p { white-space: pre-wrap; word-break: break-word; }
 .mem-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 7px; color: var(--faint); font-size: 11px; }
 .tag {
@@ -931,7 +951,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
   .rail-nav { flex-direction: row; justify-content: space-around; gap: 2px; }
   .rail-btn { flex: 1; padding: 5px 2px; border-radius: 12px; }
   .rail-btn svg { width: 19px; height: 19px; }
-  .rail-btn span { font-size: 9px; }
+  .rail-btn span { font-size: 12px; line-height: 1.3; }
   .main { height: 100dvh; }
   .topbar { padding: 0 14px; gap: 10px; height: 64px; flex-basis: 64px; }
   .top-id { min-width: 0; }
@@ -1072,7 +1092,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 }
 
 .login-card {
-  width: min(380px, 100%);
+  width: min(360px, 100%);
   padding: 28px;
   border: 1px solid var(--line-strong);
   border-radius: var(--radius);
@@ -1114,8 +1134,8 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 
 /* ---------- settings polish ---------- */
 .settings-jump {
-  position: sticky;
-  top: 0;
+  position: relative;
+  top: auto;
   z-index: 6;
   display: flex;
   flex-wrap: wrap;
@@ -1225,6 +1245,13 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
   min-width: 0;
 }
 .presence-side .card { min-width: 0; }
+.presence-side > details { border: 1px solid var(--line-strong); border-radius: 16px; padding: 14px; }
+.presence-side > details .card { margin-top: 12px; }
+.presence-welcome p { line-height: 1.75; }
+@media (max-width: 520px) {
+  .presence-welcome { padding: 12px; }
+  .presence-welcome h2 { font-size: 18px; margin: 0 0 8px; }
+}
 .pet-stage {
   position: relative;
   overflow: hidden;
@@ -1232,6 +1259,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
   aspect-ratio: 2 / 3;
   max-height: 58vh;
   background:
+    radial-gradient(ellipse 38% 6% at 50% 94%, rgba(125, 217, 219, 0.19), transparent 100%),
     radial-gradient(120% 80% at 50% 0%, rgba(122, 167, 255, 0.18), transparent 60%),
     linear-gradient(180deg, #0b1224, #070a12);
   border: 1px solid var(--line);
@@ -1379,6 +1407,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .kv-row b { text-align: right; }
 
 /* 桌宠小窗：只留立绘、字幕和说话按钮 */
+body.mode-pet .app { grid-template-columns: minmax(0, 1fr); }
 body.mode-pet .rail,
 body.mode-pet .topbar,
 body.mode-pet .health-banner,
@@ -1413,6 +1442,7 @@ body.mode-pet .presence-row { justify-content: center; }
 @media (max-width: 860px) {
   /* 真正滚动的是 .view：给它留底部净空，滚到底时最后一行才逃得出浮动导航 */
   .view { padding-bottom: calc(var(--rail-h) + 30px + env(safe-area-inset-bottom, 0px)); }
+  .view { scroll-padding-bottom: calc(var(--rail-h) + 30px + env(safe-area-inset-bottom, 0px)); }
   #view-chat.active { padding-bottom: 0; }
   .chat-panel { padding-bottom: calc(var(--rail-h) + env(safe-area-inset-bottom, 0px)); }
   .page { padding-bottom: calc(var(--rail-h) + 24px + env(safe-area-inset-bottom, 0px)); }
@@ -1423,6 +1453,9 @@ body.mode-pet .presence-row { justify-content: center; }
 }
 @media (max-width: 520px) {
   :root { --avatar: 30px; --chat-max: 100%; --control-h: 44px; }
+  .page-head { flex-wrap: wrap; gap: 8px; }
+  .page-head > div { flex: 1 1 100%; }
+  .settings-jump { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .msg { column-gap: 8px; }
   .bubble-wrap { max-width: min(88%, 100%); }
   .bubble { padding: 9px 12px; font-size: var(--font-sm); }
