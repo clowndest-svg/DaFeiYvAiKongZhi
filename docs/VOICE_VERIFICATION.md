@@ -54,13 +54,13 @@
 
 | 被写坏的东西 | 污染值 | 恢复值 | 依据 |
 |---|---|---|---|
-| kv `qq_owner_id` | 10000002 | 2379323670 | 00:00 备份 |
-| kv `qq_self_id` | 10000001 | 2830200971 | 00:00 备份 + NapCat 配置文件名 + 空间 feed uin 三处一致 |
-| kv `qzone_cookie_bad` | 「NapCat 登录号 2830200971 不是机器人小号 10000001」 | 空 | 生产实例拿假 `botAccount` 去比对，把当天 13:03 还验证通过的 Cookie 误判成失效 |
+| kv `qq_owner_id` | 10000002 | 237\*\*\*\*670（主人号，打码） | 00:00 备份 |
+| kv `qq_self_id` | 10000001 | 283\*\*\*\*971（NapCat 登录号，打码） | 00:00 备份 + NapCat 配置文件名 + 空间 feed uin 三处一致 |
+| kv `qzone_cookie_bad` | 「NapCat 登录号 283\*\*\*\*971 不是机器人小号 10000001」 | 空 | 生产实例拿假 `botAccount` 去比对，把当天 13:03 还验证通过的 Cookie 误判成失效 |
 | kv `qzone_cookie_alert_at` / `checked_at` / `qq_identity_alert_at` | 测试时刻 | 备份值 | 让下一次真实检查重新计时 |
 | kv `voice_day:2026-10-31` | 2 | 0 | 当天 00:00 备份里没有这个键，两条都是测试提交计入的 |
 | 事件表 **46** 条测试噪声与误报 | id 623→679：`qq_call_tts_error` 16、`qq_call_begin` 10、`qq_call_end` 10、`qq_call_stale` 4、`qq_call_voice` 2、`qq_call_voice_error` 2、`qq_identity_mismatch` 1、`qzone_cookie_expired` 1 | 逐条列出 id 后删除；`qq_down`（QQ 通道真的断了 65 分钟）这类真实事件保留 |
-| `settings.qq` 的 `botAccount/sendStickers/selfFollowUp/sleepyMode` | 假号 + 三个 false | 2830200971 + 三个 true | 02:49 的 file-history 快照 + 三处一致的机器人号证据 |
+| `settings.qq` 的 `botAccount/sendStickers/selfFollowUp/sleepyMode` | 假号 + 三个 false | 283\*\*\*\*971（NapCat 登录号，打码）+ 三个 true | 02:49 的 file-history 快照 + 三处一致的机器人号证据 |
 | `settings.tts` 的 `callEnabled/callDailyMax/callMinIntervalSeconds` | true / 80 / 0 | false / 40 / 8 | 默认值 |
 
 **没有丢东西**：`data/bizhi.db`、`bizhi.db-wal`、`config/settings.json` 三份修复前副本都留在 `data/*.before-repair-1435`；真实消息 144 条、记忆 66 条、群白名单、`companion`（鲸鲸）、`presence.speakReplies=true` 等今天真实改动逐项复核过仍在。有一条消息命中我搜「在干嘛」的关键词，核对后确认是 10-29 主人真实发言，**没有删**。

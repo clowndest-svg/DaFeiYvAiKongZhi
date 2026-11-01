@@ -1267,6 +1267,31 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 }
 .dm-reply[open] > summary { margin-bottom: var(--space-2); }
 
+.search-results {
+  display: grid;
+  gap: var(--space-3);
+  margin-top: var(--space-3);
+}
+.search-row {
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-2);
+}
+.search-row strong { display: block; color: var(--text); font-size: var(--font-sm); }
+.search-row p { margin: 4px 0 0; }
+.search-url {
+  display: inline-block;
+  margin-top: 4px;
+  color: var(--cyan);
+  font-size: var(--font-xs);
+  word-break: break-all;
+  min-height: var(--control-h);
+  line-height: 1.6;
+}
+#searchTestQuery { flex: 1; min-width: 160px; }
+
 #view-settings { scroll-padding-bottom: 180px; }
 @media (max-width: 860px) { .login-card input { font-size: 16px; } }
 .peek-item { text-decoration: none; }
