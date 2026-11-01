@@ -194,6 +194,7 @@ import {
   tryAutoPublish,
   PLATFORM_LABELS,
 } from './social.js';
+import { noteSearchEvent, searchStatus, searchWeb } from './search.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -444,6 +445,7 @@ const EXPENSIVE_API = new Set([
   '/api/stickers/find',
   '/api/stickers/memes',
   '/api/voice/preview',
+  '/api/search/test',
   '/api/voice/echo',
   '/api/qq/test-voice',
   '/api/qq/token/reveal',
@@ -573,6 +575,7 @@ async function handleApi(req, res, pathname, url) {
       pendingPosts: countPendingPosts(),
       costs: costSummary(7),
       scheduler: scheduler?.status() || null,
+      search: searchStatus(),
       qq: onebot?.status() || null,
       llmLastError: llm.lastError,
       lastUserMessageAt: lastUserMessageAt(),
@@ -1298,6 +1301,28 @@ async function handleApi(req, res, pathname, url) {
     const spoken = results.filter((item) => item.ok).length;
     addEvent('voice_compare', `一次音色试听对比：${spoken}/${results.length} 个出了声`, { text: text.length });
     return sendJson(res, 200, { ok: true, text, results });
+  }
+
+  if (pathname === '/api/search/test' && method === 'POST') {
+    // 控制台的「试搜一下」：走的是她聊天时同一条路，不是另写一套能通的假演示。
+    const body = await readJsonBody(req);
+    const query = String(body.query || '').trim().slice(0, 60);
+    if (!query) throw new HttpError(400, '要搜什么总得写一句');
+    const cfg = loadSettings().search;
+    const found = await searchWeb(query, { limit: cfg.maxResults, timeoutMs: cfg.timeoutSeconds * 1000 });
+    noteSearchEvent(found, 'web');
+    addEvent(found.ok ? 'web_search_test' : 'web_search_test_failed', found.ok ? `控制台试搜了一次（${found.engine}，${found.items.length} 条）` : '控制台试搜没搜到', {
+      ms: found.ms || null,
+      reason: found.reason || null,
+    });
+    return sendJson(res, 200, {
+      ok: found.ok,
+      engine: found.engine || null,
+      ms: found.ms || null,
+      reason: found.reason || null,
+      items: found.items || [],
+      status: searchStatus(),
+    });
   }
 
   if (pathname === '/api/voice/echo' && method === 'POST') {

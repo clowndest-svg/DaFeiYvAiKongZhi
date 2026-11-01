@@ -1656,6 +1656,20 @@ function fillVoiceSelect(selected) {
   if (selected) sel.value = selected;
 }
 
+function renderSearchLine() {
+  const line = $('#searchStatusLine');
+  if (!line) return;
+  const s = state.status?.search;
+  if (!s) {
+    line.textContent = '正在读取搜索状态…';
+    return;
+  }
+  // 只报真实计数，不预告"能不能搜通"——那要真搜一次才知道。
+  line.textContent = s.enabled
+    ? `联网搜索：开着 · 今天已用 ${s.today}/${s.dailyMax} 次 · 引擎 ${s.engines.join(' → ')}`
+    : '联网搜索：已关闭。她不会再上网查，被问「最新」的事只会说不知道。';
+}
+
 function renderVoiceLine() {
   const line = $('#voiceStatusLine');
   if (!line) return;
@@ -1771,6 +1785,11 @@ function fillSettings() {
   $('#setHandoverTokens').value = settings.memory?.handoverTokens ?? 48000;
   $('#setShortTurns').value = settings.memory?.shortTurns ?? 24;
   $('#setRetrieveCount').value = settings.memory?.retrieveCount ?? 10;
+  $('#setSearchEnabled').checked = settings.search?.enabled !== false;
+  $('#setSearchDailyMax').value = settings.search?.dailyMax ?? 20;
+  $('#setSearchResults').value = settings.search?.maxResults ?? 5;
+  $('#setSearchTimeout').value = settings.search?.timeoutSeconds ?? 8;
+  renderSearchLine();
   $('#setReflectMaxTokens').value = settings.model?.reflectMaxTokens ?? 450;
   $('#setReflectEvery').value = settings.model?.reflectEvery ?? 2;
   $('#setMaxContextTokens').value = settings.memory?.maxContextTokens ?? 64000;
@@ -1913,6 +1932,13 @@ function collectSettings() {
       maxContextTokens: Number($('#setMaxContextTokens').value) || 64000,
       maxPromptTokens: Number($('#setMaxPromptTokens').value) || 6000,
       retrieveBudgetTokens: Number($('#setRetrieveBudget').value) || 2200,
+    },
+    search: {
+      ...(prev.search || {}),
+      enabled: $('#setSearchEnabled').checked,
+      dailyMax: Number($('#setSearchDailyMax').value) || 0,
+      maxResults: Number($('#setSearchResults').value) || 5,
+      timeoutSeconds: Number($('#setSearchTimeout').value) || 8,
     },
     proactive: {
       ...(prev.proactive || {}),
@@ -2636,6 +2662,43 @@ function bindSettings() {
   $('#saveSettingsBtn').addEventListener('click', () => saveSettings());
   $$('[data-save-scope]').forEach(button => button.addEventListener('click', () => saveSettings(button.dataset.saveScope)));
   $('#voicePreviewBtn').addEventListener('click', () => previewVoice($('#voicePreviewBtn')));
+  $('#searchTestBtn').addEventListener('click', () => withBusy($('#searchTestBtn'), async () => {
+    const box = $('#searchTestResult');
+    const query = String($('#searchTestQuery').value || '').trim();
+    box.textContent = '';
+    if (!query) {
+      box.textContent = '先写一句要查什么。';
+      return;
+    }
+    try {
+      const data = await api('/api/search/test', { method: 'POST', body: { query } });
+      if (!data.ok) {
+        box.textContent = `没搜到：${data.reason || '未知原因'}`;
+        toast('这次没搜到，原因写在下面了。', 'error');
+      } else {
+        box.textContent = '';
+        for (const item of data.items) {
+          const row = el('div', 'search-row');
+          row.appendChild(el('strong', '', item.title));
+          row.appendChild(el('p', 'muted small', item.snippet || '（这条没有摘要）'));
+          const link = el('a', 'search-url', item.url);
+          link.href = item.url;
+          link.target = '_blank';
+          link.rel = 'noreferrer noopener';
+          row.appendChild(link);
+          box.appendChild(row);
+        }
+        toast(`搜到 ${data.items.length} 条（${data.engine}，${data.ms}ms）。`);
+      }
+      if (data.status) {
+        state.status = state.status || {};
+        state.status.search = data.status;
+        renderSearchLine();
+      }
+    } catch (error) {
+      box.textContent = `试搜失败：${error.message}`;
+    }
+  }));
   $('#voiceCompareBtn').addEventListener('click', () => withBusy($('#voiceCompareBtn'), async () => {
     const box = $('#voiceCompareList');
     box.textContent = '';

@@ -3,7 +3,7 @@ import { loadSettings } from './config.js';
 import { logger } from './logger.js';
 import { nowIso, shanghaiDayKey } from './util.js';
 
-export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'qzoneAuto', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover'];
+export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'qzoneAuto', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
 
 export function evaluateBudget({ balanceCny = null, todayCostCny = 0, settings }) {
   const cost = settings?.cost || {};

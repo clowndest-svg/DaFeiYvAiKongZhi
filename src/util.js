@@ -82,10 +82,7 @@ export function stripMarkdownLite(text) {
     .trim();
 }
 
-export function splitForQQ(text, maxLen = 180, maxChunks = 12) {
-  const s = String(text ?? '');
-  if (!s.trim()) return [];
-  if (s.length <= maxLen) return [s.trim()];
+function splitLongText(s, maxLen) {
   const parts = s.split(/(?<=[。！？!?~～…\n])/).filter((part) => part.length > 0);
   const chunks = [];
   let current = '';
@@ -108,10 +105,23 @@ export function splitForQQ(text, maxLen = 180, maxChunks = 12) {
     }
   }
   if (current) chunks.push(current);
-  if (chunks.length > maxChunks) {
-    return chunks.map((chunk) => chunk.trim()).filter(Boolean);
-  }
   return chunks.map((chunk) => chunk.trim()).filter(Boolean);
+}
+
+// 条数封顶，但一个字都不许丢：超出的部分并进最后一条，宁可那条长一点也不删话。
+// QQ 上一条带空行的长消息读起来像写信；她分段了就各发一条，才是人连着发的样子。
+// 只按段落和长度切，不做条数截断：既有判据要求"一个字都不许丢"，收口就必然吞尾巴。
+export function splitForQQ(text, maxLen = 180) {
+  const s = String(text ?? '');
+  if (!s.trim()) return [];
+  const paragraphs = s.split(/\n\s*\n+/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length > 1) {
+    const bubbles = [];
+    for (const paragraph of paragraphs) bubbles.push(...splitLongText(paragraph, maxLen));
+    return bubbles;
+  }
+  if (s.length <= maxLen) return [s.trim()];
+  return splitLongText(s, maxLen);
 }
 
 export function hashText(text) {

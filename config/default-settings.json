@@ -22,6 +22,12 @@
     "retrieveCount": 10,
     "retrieveBudgetTokens": 2200
   },
+  "search": {
+    "enabled": true,
+    "dailyMax": 20,
+    "maxResults": 5,
+    "timeoutSeconds": 8
+  },
   "proactive": {
     "enabled": true,
     "idleMinutesMin": 25,

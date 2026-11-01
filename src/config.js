@@ -178,6 +178,11 @@ export function normalizeSettings(settings) {
   s.memory.retrieveCount = Math.min(30, Math.max(3, numberOr(s.memory.retrieveCount, 10)));
   s.memory.retrieveBudgetTokens = Math.min(8000, Math.max(500, numberOr(s.memory.retrieveBudgetTokens, 2200)));
 
+  s.search.enabled = s.search?.enabled !== false;
+  s.search.dailyMax = Math.min(100, Math.max(0, numberOr(s.search?.dailyMax, 20)));
+  s.search.maxResults = Math.min(8, Math.max(1, numberOr(s.search?.maxResults, 5)));
+  s.search.timeoutSeconds = Math.min(20, Math.max(2, numberOr(s.search?.timeoutSeconds, 8)));
+
   s.proactive.enabled = s.proactive.enabled !== false;
   s.proactive.idleMinutesMin = Math.min(720, Math.max(1, numberOr(s.proactive.idleMinutesMin, 25)));
   s.proactive.idleMinutesMax = Math.min(1440, Math.max(s.proactive.idleMinutesMin, numberOr(s.proactive.idleMinutesMax, 120)));

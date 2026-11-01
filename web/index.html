@@ -441,6 +441,21 @@
 
               </section>
 
+              <section class="card" id="set-card-search">
+                <h3>联网查资料</h3>
+                <p class="muted small">只有他问「最新」「今天」「多少钱」这类要现查的事才会去搜；查询词里出现你的账号、住址、真名会被挡下，不发到外面。</p>
+                <label class="check"><input type="checkbox" id="setSearchEnabled"> 允许她上网查（Bing 优先，失败退回 Sogou）</label>
+                <label>每天最多查几次（0–100）<input id="setSearchDailyMax" type="number" min="0" max="100"></label>
+                <label>一次带回几条（1–8）<input id="setSearchResults" type="number" min="1" max="8"></label>
+                <label>单次最多等几秒（2–20）<input id="setSearchTimeout" type="number" min="2" max="20"></label>
+                <div class="btn-row">
+                  <input id="searchTestQuery" maxlength="60" placeholder="想让她查什么，写一句">
+                  <button type="button" class="icon-btn" id="searchTestBtn">试搜一下</button>
+                </div>
+                <p class="muted small" id="searchStatusLine">正在读取搜索状态…</p>
+                <div id="searchTestResult" class="search-results"></div>
+              </section>
+
               <section class="card" id="set-card-proactive">
                 <h3>主动</h3>
                 <label class="check"><input type="checkbox" id="setProactiveEnabled"> 允许她主动找你</label>

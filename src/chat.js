@@ -11,6 +11,7 @@ import { applyNeuroEvent, neuroStatus, noteHisMessage } from './neuro.js';
 import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection } from './reflect.js';
+import { formatSearchNote, needsSearch, noteSearchEvent, searchWeb } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
@@ -142,7 +143,8 @@ export class Companion {
 
   async *streamReplyLocked(opts) {
     opts.signal?.throwIfAborted();
-    const prep = this.prepare(opts);
+    const note = await this.searchNoteFor(opts);
+    const prep = this.prepare(note ? { ...opts, extraContext: [opts.extraContext, note].filter(Boolean).join('\n') } : opts);
     let content = '';
     let usage = null;
     let model = prep.settings.model.name;
@@ -267,6 +269,22 @@ export class Companion {
     };
   }
 
+  // 她能不能上网查，取决于这一步真的有没有拿到结果；搜索本身永远不许拖垮回复。
+  async searchNoteFor(opts = {}) {
+    const channel = opts.channel || 'web';
+    // 群聊和访客的话不发到外部引擎：那是别人的原话，也不是主人的请求。
+    if (['qq-group', 'qq-guest'].includes(channel)) return '';
+    try {
+      if (!needsSearch(opts.text || '')) return '';
+      const found = await searchWeb(opts.text);
+      noteSearchEvent(found, channel);
+      return formatSearchNote(found);
+    } catch (error) {
+      logger.warn('联网搜索这一步没跑成，先照常回复', { error: String(error.message).slice(0, 80) });
+      return '';
+    }
+  }
+
   async reply(opts) {
     const key = ['qq-group', 'qq-guest'].includes(opts.channel) ? opts.sessionId || opts.channel : 'owner';
     return conversationQueue.run(key, () => this.replyLocked(opts), { signal: opts.signal });
@@ -274,7 +292,8 @@ export class Companion {
 
   async replyLocked(opts) {
     opts.signal?.throwIfAborted();
-    const prep = this.prepare(opts);
+    const note = await this.searchNoteFor(opts);
+    const prep = this.prepare(note ? { ...opts, extraContext: [opts.extraContext, note].filter(Boolean).join('\n') } : opts);
     const startedAt = Date.now();
     const { temperature, maxTokens } = generationProfile(prep.settings);
     const result = await this.llm.chat(prep.payload.messages, {
