@@ -31,7 +31,7 @@ import {
   buildSystemPrompt,
 } from './prompt.js';
 import { generatePost, PLATFORM_LABELS, tryAutoPublish } from './social.js';
-import { isWithinWindow, localHour, nextShanghaiClock, nowIso, parseJsonLoose, randInt, shanghaiDayKey, sleep } from './util.js';
+import { isWithinWindow, localHour, nextShanghaiClock, nowIso, parseJsonLoose, pickMomentInWindow, randInt, shanghaiDayKey, sleep } from './util.js';
 import { processXhsExplore, processXhsOwnComments } from './channels/xhs-actions.js';
 
 function localDayKey(date = new Date()) {
@@ -39,7 +39,9 @@ function localDayKey(date = new Date()) {
 }
 
 function readCount(key) {
-  return Number(kvGet(key, '0') || 0);
+  const value = Number(kvGet(key, '0') || 0);
+  // 旧版本往这些键里写过 ISO 时间串；Number() 会变成 NaN，NaN >= 3 永远不成立，上限就形同没有。
+  return Number.isFinite(value) ? value : 0;
 }
 
 function bumpCount(key) {
@@ -688,20 +690,36 @@ export class Scheduler {
     if (Number(kvGet(dayKey, '0') || 0) >= Number(social.xhsPublishPerDay)) return null;
     const lastAt = kvGet('xhs_last_publish_at');
     if (lastAt && Date.now() - new Date(lastAt).getTime() < 20 * 3600000) return null;
+    // 她自己说过"今天不想发"或被隐私闸门拦下，就算今天决定过了，别每小时再问一遍。
+    if (kvGet(`xhs_publish_decided:${day}`)) return null;
+    // 真失败允许当天再试（最多三次、间隔半小时）。旧版一个 attempt 标记写死一整天：
+    // 10-31 11:39 那次撞上专用浏览器归属问题之后，窗口还开着十一个小时，她再没试过。
+    const attempts = readCount(`xhs_publish_attempt:${day}`);
+    if (attempts >= 3) return null;
+    const lastTry = readCount(`xhs_publish_last_try:${day}`);
+    if (Date.now() - lastTry < 30 * 60000) return null;
     // 不每天固定 09:30 交作业：当天在窗口内随机挑一个时间点，没到就继续过自己的。
     const targetKey = `xhs_publish_target:${day}`;
     let targetAt = kvGet(targetKey);
+    if (targetAt === 'none') return null;
     if (!targetAt) {
-      const now = Date.now();
-      const remaining = Math.max(1, Math.floor((24 - localHour()) * 60));
-      let minutes = 0;
-      while (minutes < remaining && isWithinWindow(social.activeStart, social.activeEnd, new Date(now + minutes * 60000))) minutes += 1;
-      targetAt = new Date(now + Math.max(1, Math.floor(this.random() * Math.max(1, minutes - 1))) * 60000).toISOString();
+      targetAt = pickMomentInWindow({
+        now: new Date(),
+        activeStart: social.activeStart,
+        activeEnd: social.activeEnd,
+        random: this.random,
+      });
+      if (!targetAt) {
+        kvSet(targetKey, 'none');
+        addEvent('xhs_publish_nowindow', '今天留给发笔记的时间不够了，明天再挑个时间', {});
+        return null;
+      }
       kvSet(targetKey, targetAt);
+      logger.info('她给自己挑了发笔记的时间', { at: targetAt });
     }
     if (Date.now() < new Date(targetAt).getTime()) return null;
-    if (kvGet(`xhs_publish_attempt:${day}`)) return null;
-    kvSet(`xhs_publish_attempt:${day}`, nowIso());
+    kvSet(`xhs_publish_attempt:${day}`, String(attempts + 1));
+    kvSet(`xhs_publish_last_try:${day}`, String(Date.now()));
 
     const willResult = await this.llm.chat(
       [
@@ -728,6 +746,7 @@ export class Scheduler {
     );
     const will = parseJsonLoose(willResult.content);
     if (will.want !== true && will.want !== 'true') {
+      kvSet(`xhs_publish_decided:${day}`, nowIso());
       addEvent('xhs_publish_pass', `她今天不想发笔记：${String(will.reason || '没理由').slice(0, 40)}`);
       logger.info('她今天不想发笔记', { reason: String(will.reason || '').slice(0, 40) });
       return { skipped: true, reason: String(will.reason || '') };
@@ -743,6 +762,7 @@ export class Scheduler {
       hisMessages: recentUserMessages(60),
     });
     if (!gate.ok) {
+      kvSet(`xhs_publish_decided:${day}`, nowIso());
       addEvent('xhs_publish_blocked', '她写的笔记里有不该公开的内容，机器闸门拦下了，没发', { reason: gate.reason, kind: gate.kind });
       logger.warn('公开内容被隐私闸门拦下', { reason: gate.reason });
       return { skipped: true, blocked: true, reason: '内容太私密，没敢发' };

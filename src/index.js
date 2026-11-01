@@ -173,6 +173,26 @@ function balanceText() {
 function shanghaiDay() {
   return shanghaiDayKey();
 }
+
+// 「她今天到底会不会发笔记」不能靠人猜：把排期、试过几次、卡在哪一步原样吐给界面。
+function xhsPublishSchedule() {
+  const social = loadSettings().social || {};
+  const day = shanghaiDay();
+  const target = kvGet(`xhs_publish_target:${day}`) || '';
+  const blocked = listEvents(200).find((e) => ['xhs_publish_error', 'xhs_publish_blocked', 'xhs_publish_nowindow', 'xhs_publish_pass', 'xhs_publish_skip'].includes(e.type) && String(e.created_at || '').startsWith(day));
+  return {
+    window: `${social.activeStart || '09:30'}-${social.activeEnd || '22:30'}`,
+    targetAt: target === 'none' ? '' : target,
+    noSpaceToday: target === 'none',
+    attempts: Number(kvGet(`xhs_publish_attempt:${day}`, '0') || 0),
+    attemptMax: 3,
+    decidedAt: kvGet(`xhs_publish_decided:${day}`) || '',
+    publishesToday: Number(kvGet(`xhs_publish_day:${day}`) || 0),
+    publishPerDay: Number(social.xhsPublishPerDay ?? 1),
+    lastPublishAt: kvGet('xhs_last_publish_at') || '',
+    lastStep: blocked ? `${blocked.message}｜${String(blocked.created_at || '').slice(11, 16)}` : '',
+  };
+}
 import { writeXhsWeekly } from './weekly-report.js';
 import {
   compactIfNeeded,
@@ -973,6 +993,7 @@ async function handleApi(req, res, pathname, url) {
       const status = xhsBrowserBusy() && url.searchParams.get('verify') !== '1'
         ? { loggedIn: kvGet('xhs_logged_in') === '1', browserRunning: true, busy: true, selfName: kvGet('xhs_self_name'), selfUserId: kvGet('xhs_self_user_id'), lastError: scheduler?.lastXhsError }
         : await withXhsBrowser(() => xhsBrowserStatus({ verify: url.searchParams.get('verify') === '1' }));
+      status.publishSchedule = xhsPublishSchedule();
       status.ownerBinding = kvGetJson('xhs_owner_binding', null);
       status.notificationBadge = Number(kvGet('xhs_notification_badge', '0') || 0);
       status.notificationCheckedAt = kvGet('xhs_notification_checked_at') || null;
@@ -1148,13 +1169,15 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/xhs/budget' && method === 'GET') {
     const cooldown = xhsCooldownUntil();
+    const schedule = xhsPublishSchedule();
     return sendJson(res, 200, {
       ok: true,
       ...xhsBudgetStatus(),
       cooldownUntil: cooldown && new Date(cooldown).getTime() > Date.now() ? cooldown : '',
-      publishesToday: Number(kvGet(`xhs_publish_day:${shanghaiDay()}`) || 0),
-      publishPerDay: loadSettings().social?.xhsPublishPerDay ?? 1,
-      lastPublishAt: kvGet('xhs_last_publish_at') || '',
+      publishesToday: schedule.publishesToday,
+      publishPerDay: schedule.publishPerDay,
+      lastPublishAt: schedule.lastPublishAt,
+      publishSchedule: schedule,
     });
   }
 
