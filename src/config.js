@@ -203,7 +203,6 @@ export function normalizeSettings(settings) {
   s.qq.sendStickers = s.qq.sendStickers !== false;
   s.qq.stickerChance = Math.min(1, Math.max(0, numberOr(s.qq.stickerChance, 0.2)));
   s.qq.learnImages = s.qq.learnImages !== false;
-  s.qq.autoRecover = s.qq.autoRecover !== false;
   s.qq.autoBindWhitelist = s.qq.autoBindWhitelist !== false;
   s.qq.sleepyMode = s.qq.sleepyMode !== false;
   s.qq.botAccount = /^[0-9]{5,12}$/.test(String(s.qq.botAccount || '').trim())

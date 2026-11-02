@@ -524,7 +524,7 @@
                 <div id="voiceCompareList" class="compare-list"></div>
                 <p class="muted small" id="voiceStatusLine">正在读取音色与识别状态…</p>
                 <label class="check"><input type="checkbox" id="setQqAutoBind"> 白名单里的 QQ 第一次私聊就直接当主人（关掉则都要在控制台确认）</label>
-                <label class="check"><input type="checkbox" id="setQqAutoRecover"> QQ 断了 5 分钟后她自己重启登录进程试着恢复（可能要你再扫一次码）</label>
+                <p class="muted small">QQ 断了之后她只等 NapCat 自己回连（它每 3 秒试一次），不再自动重启登录进程——那会踢掉登录、还要重新扫码。断够久会在下面提示需要你扫码；只有开机后一直没连上且确认 QQ 没在跑时，她才会自己拉一次。</p>
                 <label class="check"><input type="checkbox" id="setSleepyMode"> 深夜（00:30–08:30）她回得慢一点、短一点，不发语音和表情</label>
                 <details class="settings-group">
                   <summary>群聊与白名单（高级）</summary>

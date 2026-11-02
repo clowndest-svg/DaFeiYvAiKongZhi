@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { WebSocketServer } from 'ws';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { env, loadSettings } from '../config.js';
+import { env, loadSettings, paths } from '../config.js';
 import { DeliveryUnknownError } from '../effects.js';
 import { addEvent, createSession, getSession, kvGet, kvGetJson, kvSet, kvSetJson, lastUserMessageAt } from '../db.js';
 import { costBlocked, noteCostSkip } from '../budget.js';
@@ -153,19 +153,57 @@ export function parseFollowUpDecision(raw) {
   };
 }
 
+// 开机自愈的唯一判据：四条同时成立才启动 NapCat。任何一条"查不到"都按不动作处理——
+// 宁可什么都不做，也不能把正在登录/正在被扫码的 QQ 踢掉。运行期不再有第二种自动动作。
+export function shouldBootStartNapCat({
+  enabled = true,
+  connected = false,
+  everConnected = false,
+  withinWindow = true,
+  qqProcessState = 'unknown',
+  launcherCount = 0,
+  alreadyTried = false,
+} = {}) {
+  if (alreadyTried) return { start: false, reason: '本进程已经试过一次开机自愈' };
+  if (!enabled) return { start: false, reason: 'QQ 通道是关着的' };
+  if (connected || everConnected) return { start: false, reason: '已经连上了' };
+  if (!withinWindow) return { start: false, reason: '开机自愈窗口（3 分钟）已过' };
+  if (qqProcessState === 'present') return { start: false, reason: 'QQ 进程还在，可能正在自己重连' };
+  if (qqProcessState !== 'absent') return { start: false, reason: `QQ 进程状态查不到（${qqProcessState}），不动` };
+  if (launcherCount > 0) return { start: false, reason: 'NapCat 启动器还在跑' };
+  return { start: true, reason: '开机后一直没连上、QQ 进程确认不在、启动器也不在' };
+}
+
 export class OneBotChannel {
-  constructor({ server, companion, onNeedRecover = null, onCommand = null, synthesize = synthesizeSpeech }) {
+  constructor({ server, companion, onCommand = null, synthesize = synthesizeSpeech, qrPath = null } = {}) {
     this.companion = companion;
     this.synthesizeSpeech = synthesize;
+    // NapCat 只在"要扫码"时写这张图；测试用注入路径，不去碰真 NapCat 的缓存目录。
+    this.qrPath = qrPath || path.join(paths.root, 'napcat', 'cache', 'qrcode.png');
     this.outboundScope = new AsyncLocalStorage();
     this.generation = 0;
-    this.onNeedRecover = onNeedRecover;
     this.onCommand = onCommand;
     this.downSince = null;
     this.lastDownEventAt = 0;
-    this.lastRecoverAt = 0;
-    this.recoverTimestamps = [];
     this.recoverError = null;
+    // 恢复相关的观测集中放这里。每个信号各自记"什么时候看到的"，谁都不替谁下结论：
+    // 连接着不等于账号在线，有二维码不等于登录失败，查不到进程不等于进程没了。
+    this.recovery = {
+      bootAt: Date.now(),
+      everConnected: false,
+      account: { state: 'unknown', checkedAt: null, reason: '' },
+      client: { state: 'unknown', count: null, checkedAt: null, reason: '' },
+      qrSeenAt: null,
+      qrMtime: null,
+      scanLockUntil: 0,
+      scanLockReason: '',
+      rejected: { count: 0, lastReason: '', lastAt: null },
+      bootStart: null,
+      lastTickAt: 0,
+      monitorGaps: [],
+      outage: null,
+    };
+    this.accountProbeAt = 0;
     this.wss = new WebSocketServer({ server, path: '/onebot', maxPayload: 8 * 1024 * 1024 });
     this.clients = new Set();
     this.pending = new Map();
@@ -228,41 +266,161 @@ export class OneBotChannel {
     }, 30000);
   }
 
+  // 主人点过按钮或 NapCat 刚写出新二维码 → 这段时间里我们承诺不碰进程，也不再换码。
+  noteScanLock(minutes, reason) {
+    const until = Date.now() + minutes * 60000;
+    if (until > this.recovery.scanLockUntil) {
+      this.recovery.scanLockUntil = until;
+      this.recovery.scanLockReason = reason;
+    }
+    return this.recovery.scanLockUntil;
+  }
+
+  scanLocked() {
+    return this.recovery.scanLockUntil > Date.now();
+  }
+
+  openOutage(now, cause) {
+    this.recovery.outage = { startedAt: new Date(now).toISOString(), endedAt: null, minutes: 0, cause: cause || 'unknown', autoStarts: 0, scanned: false };
+  }
+
+  closeOutage(cause) {
+    const outage = this.recovery.outage;
+    if (!outage) return null;
+    const endedAt = Date.now();
+    outage.endedAt = new Date(endedAt).toISOString();
+    outage.minutes = Math.max(1, Math.round((endedAt - new Date(outage.startedAt).getTime()) / 60000));
+    if (cause) outage.cause = cause;
+    this.recovery.outage = null;
+    const log = kvGetJson('qq_outage_log', []);
+    const list = Array.isArray(log) ? log : [];
+    list.push(outage);
+    kvSetJson('qq_outage_log', list.slice(-200));
+    return outage;
+  }
+
+  refreshQrSignal() {
+    const file = this.qrPath;
+    let mtime = null;
+    try {
+      mtime = fs.statSync(file).mtime.toISOString();
+    } catch {
+      mtime = null;
+    }
+    const rec = this.recovery;
+    if (!mtime) return;
+    if (rec.qrMtime === mtime) return;
+    rec.qrMtime = mtime;
+    rec.qrSeenAt = mtime;
+    // 只证明"这张码是刚写出来的"。NapCat 自己也可能换码，所以界面承诺的是"我们不再换"。
+    if (Date.now() - new Date(mtime).getTime() < 5 * 60000) {
+      this.noteScanLock(15, `发现 ${new Date(mtime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 生成的登录二维码`);
+    }
+  }
+
+  // 连上了不代表账号在线：NapCat 有过"账号静默离线、进程和 ws 都还活着"的故障模型。
+  probeAccount() {
+    const now = Date.now();
+    if (now - this.accountProbeAt < 60000) return;
+    this.accountProbeAt = now;
+    this.recovery.account.checkedAt = new Date(now).toISOString();
+    this.sendAction('get_status', {}, 5000)
+      .then((res) => {
+        const data = res && res.data ? res.data : res;
+        if (!data || typeof data.online !== 'boolean') {
+          this.recovery.account = { state: 'unknown', checkedAt: new Date().toISOString(), reason: 'get_status 没给 online 字段' };
+          return;
+        }
+        this.recovery.account = { state: data.online ? 'online' : 'offline', checkedAt: new Date().toISOString(), reason: data.good === false ? 'good=false' : '' };
+        if (data.online && this.recovery.outage) this.recovery.outage.scanned = true;
+      })
+      .catch((error) => {
+        this.recovery.account = { state: 'unknown', checkedAt: new Date().toISOString(), reason: String(error.message).slice(0, 60) };
+      });
+  }
+
+  // 给状态接口/界面用的恢复快照。字段名一旦定了界面就照着显示，别处不许另算一套口径。
+  recoverySnapshot() {
+    const rec = this.recovery;
+    const now = Date.now();
+    const log = kvGetJson('qq_outage_log', []);
+    const list = Array.isArray(log) ? log : [];
+    const week = list.filter((o) => o && o.endedAt && now - new Date(o.endedAt).getTime() < 7 * 86400000);
+    const totalMinutes = week.reduce((sum, o) => sum + Number(o.minutes || 0), 0);
+    return {
+      policy: '运行期不自动重启 NapCat（它自己每 3 秒重连）；只有开机后一直没连上且确认 QQ 不在时才启动一次',
+      connected: this.clients.size > 0,
+      everConnected: rec.everConnected,
+      account: rec.account,
+      client: rec.client,
+      qrSeenAt: rec.qrSeenAt,
+      scanLocked: rec.scanLockUntil > now,
+      scanLockUntil: rec.scanLockUntil,
+      scanLockReason: rec.scanLockReason,
+      rejected: rec.rejected,
+      monitorGaps: rec.monitorGaps.slice(-5),
+      outage: rec.outage,
+      bootStart: rec.bootStart || null,
+      stats7d: {
+        count: week.length,
+        totalMinutes,
+        avgMinutes: week.length ? Math.round(totalMinutes / week.length) : null,
+        lastCause: week.length ? week[week.length - 1].cause || '' : '',
+      },
+    };
+  }
+
   checkConnectionHealth() {
     const settings = loadSettings();
     const now = Date.now();
-    if (!settings.qq?.enabled || this.clients.size) {
+    const rec = this.recovery;
+    // 我们自己的定时器停了 >3 分钟：只能证明"这段时间没在看"，不能断定是睡眠还是被挂起。
+    if (rec.lastTickAt && now - rec.lastTickAt > 3 * 60000) {
+      rec.monitorGaps.push({ at: new Date(rec.lastTickAt).toISOString(), minutes: Math.round((now - rec.lastTickAt) / 60000) });
+      rec.monitorGaps = rec.monitorGaps.slice(-50);
+      if (rec.outage && rec.outage.cause === 'unknown') rec.outage.cause = 'monitor_gap';
+    }
+    rec.lastTickAt = now;
+
+    if (!settings.qq?.enabled) {
       this.downSince = null;
+      this.closeOutage('disabled');
+      return { downMinutes: 0, recovered: false };
+    }
+    if (this.clients.size) {
+      rec.everConnected = true;
+      if (this.downSince) this.closeOutage(rec.outage && rec.outage.cause === 'monitor_gap' ? 'monitor_gap' : 'napcat_closed');
+      this.downSince = null;
+      this.identityError = this.identityError || '';
+      this.probeAccount();
       return { downMinutes: 0, recovered: false };
     }
     if (!this.downSince) {
       this.downSince = now;
+      this.openOutage(now, rec.monitorGaps.length && now - new Date(rec.monitorGaps[rec.monitorGaps.length - 1].at).getTime() < 60000 ? 'monitor_gap' : 'napcat_closed');
+      rec.client = { state: 'unknown', count: null, checkedAt: null, reason: '' };
       return { downMinutes: 0, recovered: false };
     }
     const downMinutes = (now - this.downSince) / 60000;
-    if (downMinutes < 5) return { downMinutes, recovered: false };
-    if (now - this.lastDownEventAt > 15 * 60000) {
+    if (downMinutes >= 5 && now - this.lastDownEventAt > 15 * 60000) {
       this.lastDownEventAt = now;
       addEvent('qq_down', `QQ 通道断了 ${Math.round(downMinutes)} 分钟，她收不到你的消息`, { downMinutes: Math.round(downMinutes) });
       applyNeuroEvent('channel_down');
     }
-    if (!settings.qq.autoRecover || !this.onNeedRecover) return { downMinutes, recovered: false };
-    this.recoverTimestamps = this.recoverTimestamps.filter((t) => now - t < 3600000);
-    if (this.recoverTimestamps.length >= 3 || now - this.lastRecoverAt < 20 * 60000) return { downMinutes, recovered: false };
-    this.lastRecoverAt = now;
-    this.recoverTimestamps.push(now);
-    Promise.resolve()
-      .then(() => this.onNeedRecover())
-      .then(() => {
-        this.recoverError = null;
-        addEvent('qq_auto_recover', '她自己去把 QQ 登录重新拉起来了，可能要你扫一下码', { downMinutes: Math.round(downMinutes) });
-      })
-      .catch((error) => {
-        this.recoverError = error.message;
-        logger.warn('QQ 自动恢复失败', { error: error.message });
-        addEvent('qq_auto_recover_error', 'QQ 自动恢复没成功', { error: error.message });
+    this.refreshQrSignal();
+    // 运行期不再自动碰进程：NapCat 自己每 3 秒重连一次（napcat/config/onebot11_*.json 的 reconnectInterval=3000），
+    // 而"还在的 QQ 进程是不是机器人小号那一个"在这台机器上判不准（主人自己的主号也在跑 QQ.exe）。
+    // 到点只升级提示，不重启 —— 旧版每 20 分钟杀一次 NapCat，22 次全空转，还把主人正对着的二维码换掉了。
+    if (downMinutes >= 10 && now - (this.needHelpAt || 0) > 30 * 60000) {
+      this.needHelpAt = now;
+      addEvent('qq_need_human', `QQ 断了 ${Math.round(downMinutes)} 分钟，她没去重启 NapCat（那只会把登录踢掉，还得重扫）`, {
+        downMinutes: Math.round(downMinutes),
+        qr: rec.qrSeenAt || '',
+        account: rec.account.state,
       });
-    return { downMinutes, recovered: true };
+      applyNeuroEvent('channel_down');
+    }
+    return { downMinutes, recovered: false };
   }
 
   pruneSeenMessages() {
@@ -286,19 +444,32 @@ export class OneBotChannel {
     return session.id;
   }
 
+  // 我们自己拒掉的握手要留痕：NapCat 一直敲门而被拒，表现和"它没重连"一模一样，
+  // 分不清就会白等（这是评审里提的"监听方故障"）。
+  noteRejected(reason) {
+    const rec = this.recovery.rejected;
+    rec.count += 1;
+    rec.lastReason = reason;
+    rec.lastAt = new Date().toISOString();
+    this.recovery.client = { ...this.recovery.client };
+  }
+
   handleConnection(ws, req) {
     const settings = loadSettings();
     if (!settings.qq.enabled) {
+      this.noteRejected('qq disabled');
       ws.close(1008, 'qq disabled');
       return;
     }
     if (!env.onebotToken) {
       logger.error('ONEBOT_TOKEN 没有配置，已拒绝 OneBot 连接');
+      this.noteRejected('token not configured');
       ws.close(1008, 'token not configured');
       return;
     }
     if (!safeEqual(wsToken(req), env.onebotToken)) {
       logger.warn('OneBot 连接令牌不匹配，已拒绝');
+      this.noteRejected('bad token');
       ws.close(1008, 'bad token');
       return;
     }
@@ -307,6 +478,7 @@ export class OneBotChannel {
       try {
         if (!isLocalHostname(new URL(origin).hostname)) {
           logger.warn('OneBot 连接来源不合法，已拒绝');
+          this.noteRejected('bad origin');
           ws.close(1008, 'bad origin');
           return;
         }
@@ -1611,7 +1783,6 @@ ${history}
         : null,
       lastEventAt: this.lastEventAt,
       downMinutes: this.downSince ? Math.round((Date.now() - this.downSince) / 60000) : 0,
-      autoRecover: Boolean(budget.settings.qq?.autoRecover),
       voiceCall: this.voiceCall.snapshot(),
       voice: {
         enabled: Boolean(budget.settings.tts?.enabled),
@@ -1621,7 +1792,7 @@ ${history}
         listen: budget.settings.tts?.listen !== false,
         heardToday: this.heardToday(),
       },
-      recoverAttemptsLastHour: this.recoverTimestamps.filter((t) => Date.now() - t < 3600000).length,
+      recovery: this.recoverySnapshot(),
       recoverError: this.recoverError ? logger.redact(this.recoverError) : null,
       lastError: this.lastError ? logger.redact(this.lastError) : null,
       wsUrl: `ws://127.0.0.1:${env.port}/onebot`,

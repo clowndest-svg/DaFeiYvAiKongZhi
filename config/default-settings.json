@@ -90,7 +90,6 @@
     "selfFollowUpMaxPerDay": 6,
     "autoBindWhitelist": true,
     "botAccount": "",
-    "autoRecover": true,
     "sleepyMode": true
   },
   "ui": {

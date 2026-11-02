@@ -990,6 +990,15 @@ async function loadMemory() {
 // 文件类标签：日记、周记、交接信是三件不同的东西，以前全塞在「信」里按时间倒出来，
 // 结果 5 篇日记/周记顶着「信」的名字，谁也不知道自己在看什么。
 const FILE_KIND = { diary: '日记', weekly: '周记', letters: '交接信' };
+// 断连原因只写我们真看得见的东西；monitor_gap 不写成"电脑睡了"，那是猜测不是读数。
+const QQ_CAUSE_LABEL = {
+  napcat_closed: 'NapCat 断开了连接',
+  client_gone: 'QQ 进程不在了',
+  our_restart: '小知自己重启了',
+  monitor_gap: '她自己的定时器停了（睡眠或挂起，未确认）',
+  disabled: '通道被停用',
+  unknown: '原因未知',
+};
 
 function fileRows(kind) {
   return (state.memory?.letters || []).filter((item) => item.kind === kind);
@@ -1822,7 +1831,6 @@ function fillSettings() {
   renderVoiceLine();
   $('#setQqAutoBind').checked = settings.qq?.autoBindWhitelist !== false;
   $('#setQqBotAccount').value = settings.qq?.botAccount || '';
-  $('#setQqAutoRecover').checked = settings.qq?.autoRecover !== false;
   $('#setGroupAtOnly').checked = settings.qq?.groupAtOnly !== false;
   $('#setWhitelist').value = (settings.qq?.whitelist || []).join(', ');
   $('#setGroupWhitelist').value = (settings.qq?.groupWhitelist || []).join(', ');
@@ -1958,7 +1966,6 @@ function collectSettings() {
       allowAllPrivate: $('#setAllowAllPrivate').checked,
       autoBindWhitelist: $('#setQqAutoBind').checked,
       botAccount: String($('#setQqBotAccount').value || '').trim(),
-      autoRecover: $('#setQqAutoRecover').checked,
       groupAtOnly: $('#setGroupAtOnly').checked,
       whitelist: splitList($('#setWhitelist').value),
       groupWhitelist: splitList($('#setGroupWhitelist').value),
@@ -2159,7 +2166,30 @@ async function loadQqSetup() {
   if (qq.lastError) lines.push(`最近错误：${String(qq.lastError).replace(/\s+/g, ' ').slice(0, 100)}`);
   lines.push(data.installed ? `NapCat 目录：${data.dir}` : 'NapCat 还没下载到 napcat/ 目录');
   lines.push(`已学会 ${data.learnedImages || 0} 张图片表情 / ${data.learnedMfaces || 0} 个QQ表情包`);
-  if (qq.downMinutes >= 5) lines.push(`QQ 已断开 ${qq.downMinutes} 分钟${qq.autoRecover ? '（她正在试着自己恢复）' : ''}`);
+  const rec = qq.recovery || null;
+  if (rec) {
+    const rejected = rec.rejected && rec.rejected.count ? `｜她这边拒过 ${rec.rejected.count} 次握手（${rec.rejected.lastReason}）` : '';
+    if (!qq.connected && qq.downMinutes >= 1) {
+      lines.push(rec.scanLocked
+        ? `在等你扫码：还有 ${Math.max(0, Math.round((rec.scanLockUntil - Date.now()) / 60000))} 分钟她不会动 NapCat${rejected}`
+        : `断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连（它每 3 秒试一次），她不重启登录${rejected}`);
+    }
+    if (qq.connected && rec.account && rec.account.state !== 'online') {
+      lines.push(rec.account.state === 'unknown'
+        ? `通道连着，但账号状态未确认（${rec.account.reason || '没拿到 get_status 回执'}）`
+        : '通道连着，但 NapCat 报账号离线——这种"假活"重启也没用，要重新登录');
+    }
+    const stats = rec.stats7d || {};
+    lines.push(stats.count
+      ? `最近 7 天断了 ${stats.count} 次、累计 ${stats.totalMinutes} 分钟、平均 ${stats.avgMinutes} 分钟恢复${stats.lastCause ? `（最近一次：${QQ_CAUSE_LABEL[stats.lastCause] || stats.lastCause}）` : ''}`
+      : '最近 7 天没有断连记录');
+    if (rec.monitorGaps && rec.monitorGaps.length) {
+      const gap = rec.monitorGaps[rec.monitorGaps.length - 1];
+      lines.push(`有 ${gap.minutes} 分钟她自己的定时器没跑（${String(gap.at).slice(11, 16)} 起）——电脑睡眠或进程被挂起，未确认`);
+    }
+  } else if (qq.downMinutes >= 5) {
+    lines.push(`QQ 已断开 ${qq.downMinutes} 分钟`);
+  }
   if (qq.followUp) {
     lines.push(
       qq.followUp.enabled

@@ -4,7 +4,7 @@ import { execFileSync, spawn } from 'node:child_process';
 import { env, paths } from './config.js';
 
 function windowsQuery(script) {
-  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024 });
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, stdio:['ignore','pipe','ignore'] });
 }
 function normalize(file) { return path.resolve(file || '').replace(/\\/g,'/').toLowerCase(); }
 export function isOwnedProcess(process, kind) {
@@ -21,6 +21,26 @@ export function listOwned(kind) {
   const values=raw.trim()?JSON.parse(raw):[];
   return (Array.isArray(values)?values:[values]).filter(item=>isOwnedProcess(item,kind));
 }
+// QQ 进程数三态探测：present / absent / unknown。
+// 查询失败绝不能当成 absent —— 那会被读成"客户端没了"，然后去启动第二个 QQ。
+// 所以同一次查询里带上进程总数做哨兵：总数为 0 或命令报错都算 unknown。
+export function countQqProcesses() {
+  const at = new Date().toISOString();
+  if (env.testMode || process.platform !== 'win32') return { state: 'unknown', count: null, at, reason: '非 Windows 或隔离测试，不查进程' };
+  try {
+    const raw = windowsQuery("$ErrorActionPreference='Stop'; $all=@(Get-Process); $qq=@($all | Where-Object { $_.ProcessName -eq 'QQ' }); Write-Output ($qq.Count.ToString() + '/' + $all.Count.ToString())");
+    const [qqRaw, allRaw] = String(raw).trim().split('/');
+    const count = Number(qqRaw);
+    const total = Number(allRaw);
+    if (!Number.isFinite(count) || !Number.isFinite(total) || total <= 0) {
+      return { state: 'unknown', count: null, at, reason: `进程查询结果不可信（${String(raw).trim().slice(0, 20)}）` };
+    }
+    return { state: count > 0 ? 'present' : 'absent', count, at, reason: '' };
+  } catch (error) {
+    return { state: 'unknown', count: null, at, reason: String(error && error.message || error).slice(0, 80) };
+  }
+}
+
 export async function stopOwned(kind) {
   const targets=listOwned(kind);
   for(const item of targets) await new Promise((resolve,reject)=>{

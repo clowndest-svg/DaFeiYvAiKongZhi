@@ -143,7 +143,15 @@ function healthAlerts() {
   }
   // 刚起来的几十秒里 NapCat 正在回连，这时报"QQ 断了 0 分钟"是假警报（顶栏还写着在线，自相矛盾）。
   if (qq && loadSettings().qq.enabled && !qq.connected && Number(qq.downMinutes) >= 1) {
-    out.push({ key: 'qq', level: 'danger', text: qq.autoRecover ? `QQ 断了 ${qq.downMinutes} 分钟，她在自己试着恢复；不行就要重新扫码` : 'QQ 通道断了，而且自愈是关的' });
+    const rec = qq.recovery || {};
+    const rejected = rec.rejected && rec.rejected.count ? `，而且她这边拒过 ${rec.rejected.count} 次握手（${rec.rejected.lastReason}）` : '';
+    out.push({
+      key: 'qq',
+      level: 'danger',
+      text: rec.scanLocked
+        ? `QQ 断了 ${qq.downMinutes} 分钟，她在等你扫码${rejected}——扫码这段时间她不会动 NapCat`
+        : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码`,
+    });
   }
   try {
     const settings = loadSettings();
@@ -1986,6 +1994,8 @@ export async function restartQqLogin(note = '重新启动了 QQ 登录') {
   writeBotAccountFile(loadSettings().qq?.botAccount);
   await startNapCat();
   addEvent('qq_login_restart', note);
+  // 人（或我们）刚重启过登录 → 接下来 15 分钟是"等扫码"时间，界面按这个承诺显示。
+  onebot?.noteScanLock?.(15, note);
   return {
     ok: true,
     enabled: true,
@@ -2101,12 +2111,67 @@ function openBrowser(url) {
   }
 }
 
+// 开机自愈：机器重启后 NapCat 不一定跟着起来，而这时候"没人会去扫码"是常态。
+// 只在进程刚起来的 3 分钟里判一次，条件全满足才启动（判据写在 shouldBootStartNapCat 里，可单测）。
+let bootSelfHealDone = false;
+async function bootSelfHeal() {
+  if (env.testMode || bootSelfHealDone || !onebot) return;
+  bootSelfHealDone = true;
+  await new Promise((resolve) => { setTimeout(resolve, 45000); });   // 先给 NapCat 自己重连的机会（它每 3 秒试一次）
+  const { countQqProcesses, listOwned } = await import('./processes.js');
+  const { shouldBootStartNapCat } = await import('./channels/onebot.js');
+  const qq = countQqProcesses();
+  const decision = shouldBootStartNapCat({
+    enabled: loadSettings().qq?.enabled !== false,
+    connected: Boolean(onebot.clients.size),
+    everConnected: Boolean(onebot.recovery.everConnected),
+    withinWindow: Date.now() - onebot.recovery.bootAt < 3 * 60000,
+    qqProcessState: qq.state,
+    launcherCount: listOwned('napcat').length,
+  });
+  onebot.recovery.bootStart = { at: new Date().toISOString(), started: false, reason: decision.reason, qqState: qq.state, qqCount: qq.count };
+  if (!decision.start) {
+    logger.info('开机自愈：没动 NapCat', { reason: decision.reason, qqState: qq.state });
+    return;
+  }
+  try {
+    const result = await startNapCat();
+    onebot.recovery.bootStart = { at: new Date().toISOString(), started: true, reason: decision.reason, result };
+    addEvent('qq_boot_start', '她开机后发现 NapCat 没起来，自己把它拉起来了；要登录就扫控制台里的码', { result });
+  } catch (error) {
+    onebot.recovery.bootStart = { at: new Date().toISOString(), started: false, reason: `启动失败：${error.message}` };
+    addEvent('qq_boot_start_failed', '开机自愈想启动 NapCat 没成功', { error: error.message });
+  }
+}
+
+// 上一个进程留下的没闭合断连记录，是"我们重启了"造成的，标清楚再统计，别永远挂着"进行中"。
+function closeStaleOutages() {
+  try {
+    const log = kvGetJson('qq_outage_log', []);
+    if (!Array.isArray(log)) return 0;
+    let fixed = 0;
+    const next = log.map((outage) => {
+      if (!outage || outage.endedAt) return outage;
+      fixed += 1;
+      return {
+        ...outage,
+        endedAt: new Date().toISOString(),
+        minutes: Math.max(1, Math.round((Date.now() - new Date(outage.startedAt).getTime()) / 60000)),
+        cause: 'our_restart',
+      };
+    });
+    if (fixed) kvSetJson('qq_outage_log', next.slice(-200));
+    return fixed;
+  } catch {
+    return 0;
+  }
+}
+
 async function main() {
   server = http.createServer({ requestTimeout: 30000, headersTimeout: 15000 }, handleRequest);
   onebot = new OneBotChannel({
     server,
     companion,
-    onNeedRecover: () => restartQqLogin('QQ 断了挺久，她自己把登录重新拉起来了'),
     onCommand: async (name, arg) => {
       const { loadSettings: ls, saveSettings: ss } = await import('./config.js');
       if (name === 'auto') {
@@ -2173,6 +2238,7 @@ async function main() {
   }
 
   writeBotAccountFile(loadSettings().qq?.botAccount);
+  closeStaleOutages();
   server.listen(env.port, '127.0.0.1', () => {
     env.port = server.address().port;
     const url = `http://127.0.0.1:${env.port}`;
@@ -2181,6 +2247,7 @@ async function main() {
     logger.info(`小知已启动：${url}`);
     logger.info(`模型：${loadSettings().model.name} | Key：${maskKey() || '未配置'} | 模拟模式：${env.mock ? '开' : '关'}`);
     logger.info(`QQ 通道：ws://127.0.0.1:${env.port}/onebot（NapCat 反向 WS）`);
+    bootSelfHeal().catch((error) => logger.warn('开机自愈没跑成', { error: error.message }));
     if (env.openBrowser) openBrowser(url);
     if (llm.configured && !env.mock) {
       llm
