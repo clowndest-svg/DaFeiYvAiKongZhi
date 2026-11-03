@@ -41,7 +41,7 @@ test('她分段写的消息在 QQ 上要连发，不能一条写信式空行发�
   assert.equal(capped.join('').replace(/\s+/g, ''), source.replace(/\s+/g, ''), '分段时把话吞了');
 });
 
-test('她自己的历史喂进去时不再留空行分段（内容一字不少）', () => {
+test('她自己的历史原样喂回去（分段=连发几条，不再压成一行）', () => {
   const settings = { companion: { name: '小知', userName: '', nickname: '笨蛋', intro: '' }, memory: {} };
   const mood = { label: '平静', valence: 0.1, energy: 0.5, affection: 20, reason: '' };
   const block = { core: [], long: [], mid: [], dailyRecent: [], diaryMatches: [], quotes: [], innerThoughts: [] };
@@ -58,8 +58,7 @@ test('她自己的历史喂进去时不再留空行分段（内容一字不少�
     maxContextTokens: 100000,
   });
   const hers = payload.messages.find((m) => m.role === 'assistant');
-  assert.ok(!/\n\s*\n/.test(hers.content), `历史里还留着空行分段：${JSON.stringify(hers.content)}`);
-  assert.equal(hers.content.replace(/\s+/g, ''), '在等你呀。头发吹了没？', '压形状时把字弄丢了');
+  assert.equal(hers.content, '在等你呀。\n\n头发吹了没？', '历史形状被动过：分段会被 QQ 当成两条消息发，这正是要的');
 });
 
 test('JSON 粘连代码块也能解析', () => {
@@ -122,9 +121,10 @@ test('拼出的 system prompt 包含人设、核心记忆与边界', () => {
   assert.equal(last.content[1].type, 'image_url');
 });
 
-test('说话方式的三条硬约束还钉在提示词里（实测她是靠这三条改掉机器腔的）', () => {
+test('说话方式的硬约束还钉在提示词里（形状靠这几条维持，删了就回到机器腔）', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'src', 'prompt.js'), 'utf8');
-  assert.match(source, /中间不要空行分段/, '写信式分段没被禁掉');
+  assert.match(source, /分成几段写/, '连发（分段）的口径没了');
+  assert.match(source, /每一段当成一条独立消息/, '没告诉她分段会被拆成几条消息');
   assert.match(source, /十句里最多一两句/, '括号小动作没限量');
   assert.match(source, /他发几个字，你也别写成一整段/, '长度没跟他挂钩');
 });
