@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { env, paths } from './config.js';
+import { env, paths, loadSettings } from './config.js';
 import { logger } from './logger.js';
 import { ensureDir } from './util.js';
 import { LocalTtsRunner } from './local-tts.js';
@@ -164,6 +164,33 @@ export function piperReady() {
   return Boolean(piperPaths());
 }
 
+
+// 克隆音色：走本地 GPT-SoVITS 的 api_v2（/tts）。引擎装没装、地址对不对，都在设置里（tts.cloneUrl）。
+// 参考音频必须是"你有权使用的那个人"的声音——这是他自己答应的，代码只负责调用。
+async function cloneSynthesize(text, { cloneUrl, cloneRefAudio, clonePromptText }, file) {
+  if (!cloneUrl) throw new Error('没配克隆引擎地址');
+  if (!cloneRefAudio) throw new Error('没配参考音频');
+  const base = String(cloneUrl).replace(/\/+$/, '');
+  const res = await fetch(base + '/tts', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      text,
+      text_lang: 'zh',
+      ref_audio_path: cloneRefAudio,
+      prompt_text: clonePromptText || '',
+      prompt_lang: 'zh',
+      text_split_method: 'cut5',
+    }),
+    signal: AbortSignal.timeout(180000),
+  });
+  if (!res.ok) throw new Error(`克隆引擎 HTTP ${res.status}`);
+  const buf = Buffer.from(await res.arrayBuffer());
+  if (buf.length < 1000) throw new Error(`克隆引擎只回了 ${buf.length} 字节，不像音频`);
+  fs.writeFileSync(file, buf);
+  return { bytes: buf.length, mime: buf[0] === 0x52 ? 'audio/wav' : 'audio/mpeg' };
+}
+
 export async function synthesizeSpeech(
   text,
   { voice = DEFAULT_VOICE, rate = '+2%', pitch = '-12Hz', volume = '', maxChars = 160 } = {},
@@ -173,6 +200,21 @@ export async function synthesizeSpeech(
   ensureDir(paths.media);
   const chosen = normalizeVoice(voice);
   const stamp = `${Date.now()}-${randomUUID()}`;
+
+  // 克隆音色优先：配了地址就先试，失败按"退回在线音色"处理，绝不因为克隆挂掉就不说话。
+  const cloneOpts = loadSettings().tts || {};
+  if (cloneOpts.cloneUrl) {
+    const wav = path.join(paths.media, `voice-${stamp}.wav`);
+    try {
+      const got = await cloneSynthesize(clean, cloneOpts, wav);
+      const bytes = fs.statSync(wav).size;
+      logger.info('语音已合成（克隆音色）', { bytes, chars: clean.length });
+      return { file: wav, bytes, mime: got.mime, engine: 'clone', voice: 'clone', text: clean };
+    } catch (error) {
+      logger.warn('克隆音色不通，退回在线音色', { error: error.message });
+      removeQuietly(wav);
+    }
+  }
 
   if (chosen === 'local-matcha') {
     const wav = path.join(paths.media, `voice-${stamp}.wav`);

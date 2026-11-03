@@ -196,6 +196,13 @@ export class Scheduler {
         addEvent('xhs_badge_failed', '这次没读到通知角标', { error: String(error.message).slice(0, 100) });
       }
       try {
+        // 「评论和@」页签：有人 @ 她/评论她，先让她看见；回不回仍走她自己笔记评论那条闸门。
+        const { readXhsMentions } = await import('./channels/xhs.js');
+        await readXhsMentions({});
+      } catch (error) {
+        logger.warn('读小红书提及失败', { error: error.message });
+      }
+      try {
         const { readXhsDirectMessages } = await import('./channels/xhs.js');
         const dm = await readXhsDirectMessages();
         for (const item of dm.fresh || []) {

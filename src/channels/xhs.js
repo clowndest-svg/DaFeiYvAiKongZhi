@@ -700,6 +700,69 @@ async function readXhsNotificationBadgeLocked() {
   return badge;
 }
 
+// 通知页的「提及/@」列表：别人在笔记或评论里 @ 她会出现在这里。
+// 先用 dump 模式拿到真实 DOM 形状，再决定怎么抽条目——别照想象写选择器。
+// 「小丸纸（关必回） 你的粉丝 评论了你的笔记8分钟前 交友[打招呼]求回 回复」→ 字段。
+// 解析不出来就整条原样保留（author 为空），宁可多记一条不可丢一条。
+export function parseMentionItem(text) {
+  const raw = String(text || '').replace(/\s+/g, ' ').trim();
+  const m = raw.match(/^(.{1,40}?)\s+(你的粉丝|你的关注|互相关注|作者)?\s*(评论了你的笔记|回复了你的评论)\s*([0-9]+分钟前|[0-9]+小时前|[0-9]+天前|昨天|今天|[0-9\-\/]{1,8})?\s*(.*)$/);
+  if (!m) return { author: '', relation: '', time: '', text: raw, ok: false };
+  return { author: m[1], relation: m[2] || '', action: m[3], time: m[4] || '', text: String(m[5] || '').replace(/回复$/, '').trim(), ok: true };
+}
+
+async function readXhsMentionsLocked({ dryRun = false } = {}) {
+  assertXhsAction('read');
+  await browser.ensure({ visible: false });
+  await browser.navigate(`${BASE}/notification`);
+  await sleep(7000);
+  // 通知页有三个页签：赞和收藏 / 新增关注 / 评论和@。@ 她的都在第三个里，要先点过去。
+  const MENTION_JS = String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    return [...document.querySelectorAll('.tabs-content-container .container')].slice(0, 20).map((el) => {
+      const text = clean(el.innerText);
+      const linkEl = [...el.querySelectorAll('a')].find((a) => /\/explore\/|\/discovery\/item\//.test(a.getAttribute('href') || ''));
+      return { text: text, href: linkEl ? linkEl.getAttribute('href') : '' };
+    }).filter((it) => it.text);
+  })()`;
+  const items = await browser.evaluate(MENTION_JS);
+  const parsed = items.map((it) => ({ ...parseMentionItem(it.text), href: it.href || '' }));
+  if (dryRun) {
+    if (parsed.length) return { items: parsed, raw: false };
+    // 没抓到就如实回结构：页面此刻长什么样，供下一轮改选择器。
+    const diag = await browser.evaluate(String.raw`(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const cands = [...document.querySelectorAll('div,section')]
+        .filter((el) => el.offsetParent && el.querySelector('img') && clean(el.innerText).length > 15 && clean(el.innerText).length < 500)
+        .slice(0, 12)
+        .map((el) => ({ cls: String(el.className).slice(0, 70), text: clean(el.innerText).slice(0, 90) }));
+      return { cands: cands, tail: clean(document.body.innerText).slice(-700) };
+    })()`);
+    return { items: [], diag };
+  }
+  const fresh = [];
+  for (const item of parsed) {
+    if (!item.author && !item.text) continue;
+    const key = 'xhs_mention_seen:' + String(item.author + '|' + item.text).slice(0, 90);
+    if (kvGet(key)) continue;
+    kvSet(key, nowIso());
+    fresh.push(item);
+    // 有人 @ 她/评论她：先让她"看见"。真正回不回、怎么回，仍然走她自己笔记评论那条闸门
+    // （风险冷却、隐私闸门、每日上限都在那边），这里绝不绕过闸门直接回。
+    const { recordXhsActivity } = await import('./xhs-actions.js');
+    addEvent('xhs_mention', `${item.author || '有人'} 在小红书提到她：${String(item.text || '').slice(0, 40)}`, {
+      author: item.author, href: item.href || '', ok: item.ok,
+    });
+    recordXhsActivity({
+      type: 'mention',
+      text: String(item.text || '').slice(0, 80),
+      target: item.author || '',
+      note: item.href ? '有笔记链接' : '没拿到笔记链接',
+    });
+  }
+  return { items: parsed, fresh };
+}
+
 async function readXhsDirectMessagesLocked() {
   assertXhsAction('read');
   await browser.ensure({ visible: false });
@@ -1176,7 +1239,8 @@ export async function leaveXhsPublishEditor(...args) { return withXhsBrowser(() 
 export async function fetchXhsCreatorStats(...args) { return withXhsBrowser(() => fetchXhsCreatorStatsLocked(...args)); }
 export async function reactXhsNote(...args) { return withXhsBrowser(() => reactXhsNoteLocked(...args)); }
 export async function readXhsNotificationBadge(...args) { return withXhsBrowser(() => readXhsNotificationBadgeLocked(...args)); }
-export async function readXhsDirectMessages(...args) { return withXhsBrowser(() => readXhsDirectMessagesLocked(...args)); }
+export async function readXhsDirectMessages(...args) { return withXhsBrowser(() => readXhsDirectMessagesLocked(...args)); }export async function readXhsMentions(...args) { return withXhsBrowser(() => readXhsMentionsLocked(...args)); }
+
 export async function sendXhsDirectMessage(...args) { return withXhsBrowser(() => sendXhsDirectMessageLocked(...args)); }
 export async function readXhsFollowGraph(...args) { return withXhsBrowser(() => readXhsFollowGraphLocked(...args)); }
 export async function readXhsOwnerProfile(...args) { return withXhsBrowser(() => readXhsOwnerProfileLocked(...args)); }
