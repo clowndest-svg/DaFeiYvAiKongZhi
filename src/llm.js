@@ -21,12 +21,14 @@ export function pricingFor(model, input = process.env.BIZHI_PRICING_JSON || '') 
 }
 
 export class LlmError extends Error {
-  constructor(message, { status = 0, code = '', cause = null } = {}) {
+  constructor(message, { status = 0, code = '', cause = null, retryable = false } = {}) {
     super(message);
     this.name = 'LlmError';
     this.status = status;
     this.code = code;
     this.cause = cause;
+    // 上游抽风类的错误要允许重试：以前只有 HTTP 状态码能触发重试，空正文一律当场报死。
+    this.retryable = retryable;
   }
 }
 
@@ -165,13 +167,22 @@ export class DeepSeek {
         const reasoning = message.reasoning_content || '';
         const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model) };
         this.recordCost(result, opts);
-        if (!result.content) throw new LlmError('模型没有产出有效回复', { code: 'EMPTY_REPLY' });
+        if (!result.content) {
+          // 上游过载时实测两种形状：503，或者 200 但正文空、只有推理。第二种以前被报成"没有产出有效回复"，
+          // 既没说清是上游的问题，也不会重试——她就这样一声不吭。
+          const finish = String(data.choices?.[0]?.finish_reason || 'unknown');
+          const reasoningTokens = Number(data.usage?.completion_tokens_details?.reasoning_tokens || 0);
+          const why = finish === 'length'
+            ? '被 max_tokens 截断（finish_reason=length）'
+            : '上游返回了 200 但正文是空的（finish_reason=' + finish + (reasoningTokens ? '，推理占了 ' + reasoningTokens + ' tokens' : '') + '）';
+          throw new LlmError('模型没给出正文：' + why, { code: 'EMPTY_REPLY', retryable: true });
+        }
         this.lastCallAt = new Date().toISOString(); this.lastError = null;
         return result;
       } catch (error) {
         this.lastError = logger.redact(error.message);
         if (signal.aborted) throw signal.reason;
-        const retry = !(error instanceof LlmError) || isRetryableStatus(error.status);
+        const retry = !(error instanceof LlmError) || error.retryable === true || isRetryableStatus(error.status);
         if (!retry || attempt === 1) throw error;
         await wait(900, undefined, { signal });
       }

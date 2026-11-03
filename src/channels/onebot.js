@@ -182,6 +182,13 @@ export function shouldBootStartNapCat({
   return { start: true, reason: '开机后一直没连上、QQ 进程确认不在、启动器也不在' };
 }
 
+// 回复失败到底该怪谁：模型那一步没给出话，还是通道/投递出问题。
+// 界面靠这个分类说人话，所以它必须能单测（别把判断散在 catch 里）。
+export function classifyReplyError(error) {
+  const text = String((error && error.code) || '') + ' ' + String((error && error.message) || error || '');
+  return /EMPTY_REPLY|STREAM_INCOMPLETE|HTTP|NO_KEY|超时|模型/.test(text) ? 'model' : 'channel';
+}
+
 export class OneBotChannel {
   constructor({ server, companion, onCommand = null, synthesize = synthesizeSpeech, qrPath = null, instancesProbe = null } = {}) {
     this.companion = companion;
@@ -1176,6 +1183,7 @@ ${history}
         this.rememberGroupMessage(buffer.target.groupId, settings.companion?.name || '小知', result.text);
       }
       this.lastError = null;
+      this.lastErrorKind = null;
       const hint = allowExtras ? result.stickerHint || null : null;
       const explicitFace = allowExtras && /小黄脸|QQ表情|自带表情/.test(messageText) && !/表情包/.test(messageText);
       const explicitMface = allowExtras && /表情包|贴纸/.test(messageText);
@@ -1263,7 +1271,10 @@ ${history}
       }
     } catch (error) {
       this.lastError = error.message;
-      addEvent('qq_error', 'QQ 回复失败，已把错误记在控制台', { error: error.message });
+      // 分清"模型那一步没给出话"和"通道/投递出问题"：界面照着这个分类说人话。
+      // 不然一次上游 503 会被写成"你电脑上还开着主号 QQ"，把人指去重扫码。
+      this.lastErrorKind = classifyReplyError(error);
+      addEvent('qq_error', 'QQ 回复失败，已把错误记在控制台', { error: error.message, kind: this.lastErrorKind });
       if (error.code !== 'DELIVERY_UNKNOWN') {
         try { await this.sendToTarget(buffer.target, '呜，我这边卡了一下……等下再跟我说一次好不好'); }
         catch { /* 通道已断开 */ }
@@ -1943,6 +1954,7 @@ ${history}
       recovery: this.recoverySnapshot(),
       recoverError: this.recoverError ? logger.redact(this.recoverError) : null,
       lastError: this.lastError ? logger.redact(this.lastError) : null,
+      lastErrorKind: this.lastErrorKind || null,
       wsUrl: `ws://127.0.0.1:${env.port}/onebot`,
     };
   }

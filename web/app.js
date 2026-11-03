@@ -2255,15 +2255,23 @@ async function loadQqSetup() {
     const selfId = String(qq.selfId || '');
     const owner = String(data.ownerId || '');
     const dangerous = Boolean(selfId && owner && selfId === owner);
-    const protocolBad = Boolean(qq.connected && qq.lastError);
+    // 只有"不像模型问题"的失败才往账号/通道上想。服务端已经分好类（lastErrorKind），
+    // 老记录没有这个字段时按文案兜底——否则一次上游 503 会被写成"你电脑上还开着主号 QQ"。
+    const lastErr = String(qq.lastError || '');
+    const modelBad = Boolean(qq.connected && lastErr
+      && (qq.lastErrorKind === 'model' || (!qq.lastErrorKind && /模型|HTTP \d|空正文|超时|EMPTY/i.test(lastErr))));
+    const protocolBad = Boolean(qq.connected && lastErr && !modelBad);
     const mismatch = qq.connected && qq.identityOk === false;
-    warn.hidden = !(dangerous || protocolBad || mismatch);
-    warn.classList.toggle('hidden', !(dangerous || protocolBad || mismatch));
+    warn.hidden = !(dangerous || protocolBad || modelBad || mismatch);
+    warn.classList.toggle('hidden', !(dangerous || protocolBad || modelBad || mismatch));
     if (dangerous) {
       warn.textContent = `危险：现在挂着的就是你本人的 QQ 号 ${selfId}，她说出口的每一句都是以"你"的身份发的。`
         + '先点「立刻停用 QQ 通道」（会退出这个 QQ），再点「用机器人小号重新登录」，换登录小号的设备扫码。';
     } else if (mismatch) {
       warn.textContent = `当前账号不是配置的机器人号，所有发送已拦下：${qq.identityError || ''}`;
+    } else if (modelBad) {
+      warn.textContent = `模型那边没给出话（${lastErr.replace(/\s+/g, ' ').slice(0, 100)}）：QQ 这条线是通的，你的消息收到了，只是她这句没生成出来。`
+        + '去「设置 → 模型」看 key 和余额，或者等它缓过来；一次空回复她这边会自动重试一次。';
     } else if (protocolBad) {
       warn.textContent = `QQ 登录信息还在，但账号发不出消息：${String(qq.lastError).replace(/\s+/g, ' ').slice(0, 100)}。`
         + '多半是电脑上同时开着你的主号 QQ，两个号共用同一份登录数据；先关掉主号 QQ 窗口，再点「立刻停用 QQ 通道」→「用机器人小号重新登录」。';
