@@ -107,7 +107,7 @@ async function main() {
   const argv = process.argv.slice(2);
   if (!argv.length || argv.includes('--check')) { await check(); return; }
 
-  const { listOwned, stopOwned, startNapCat, qqInstallDir } = await import('../src/processes.js');
+  const { listOwned, stopOwned, startNapCat, qqInstallDir, listBotQqRoots } = await import('../src/processes.js');
   const { addEvent } = await import('../src/db.js');
 
   if (argv.includes('--rollback')) {
@@ -177,7 +177,22 @@ async function main() {
   ok(`新版 ${incoming.files} 个文件 ${(incoming.bytes / 1048576).toFixed(0)} MB`);
 
   const stopped = await stopOwned('napcat');
-  console.log(`· 停掉现役 NapCat/QQ（确认 ${stopped.stopped} 个进程，模拟=${stopped.simulated}）`);
+  console.log(`· 停掉现役 NapCat 启动器（确认 ${stopped.stopped} 个进程）`);
+  // 启动器注入成功就自己退出了，QQ 还活着并且占着 napcat.mjs / NapCatWinBootHook.dll。
+  // 不先退 QQ 就没法覆盖文件；只按机器人小号的显式 PID 退，绝不按进程名批量杀（他机器上还登着别的号）。
+  const bot = (await import('../src/config.js')).loadSettings().qq?.botAccount || '';
+  for (let round = 0; round < 6; round += 1) {
+    const probe = listBotQqRoots(bot);
+    if (probe.state !== 'ok') die(`QQ 实例查不到（${probe.reason}），不确定有没有东西正占着文件，现役目录没动`);
+    if (!probe.roots.length) break;
+    for (const root of probe.roots) {
+      const r = run('taskkill.exe', ['/PID', String(root.pid), '/T', '/F'], { timeout: 20000 });
+      console.log(`· 退出机器人小号的 QQ（PID ${root.pid}，taskkill 退出码 ${r.code}）`);
+      if (r.code !== 0) die(`PID ${root.pid} 没退成（退出码 ${r.code}：${r.stderr.slice(0, 60)}），现役目录没动`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    if (round === 5) die('退了几轮还在有 QQ 实例，不动现役目录');
+  }
   const qqDir = await qqInstallDir();
   if (!qqDir) console.log('· 提醒：QQ 安装位置没读到，重启这一步会失败——按备份原样跑 node tools/upgrade-napcat.mjs --rollback 即可');
 

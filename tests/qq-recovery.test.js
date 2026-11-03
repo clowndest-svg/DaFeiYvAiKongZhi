@@ -201,21 +201,19 @@ test('主动探活：连续两次失败才报"疑似静默失联"，测通后清
   }
 });
 
-test('隐藏启动脚本：wscript 走 0 号窗口、路径带空格也要被引号包住、日志用追加', async () => {
-  const { buildHiddenLaunchVbs } = await import('../src/processes.js');
-  const vbs = buildHiddenLaunchVbs({
-    exe: 'D:/Ruan Jian/BiZhi/napcat/NapCatWinBootMain.exe',
-    args: ['D:/Ruan Jian/qq/QQ.exe', 'D:/Ruan Jian/BiZhi/napcat/hook.dll', '10000000123'],
-    cwd: 'D:/Ruan Jian/BiZhi/napcat',
-    logPath: 'D:/Ruan Jian/BiZhi/data/logs/napcat.out',
-  });
-  assert.match(vbs, /CreateObject\("WScript\.Shell"\)/);
-  assert.match(vbs, /sh\.CurrentDirectory = "D:\/Ruan Jian\/BiZhi\/napcat"/, '工作目录没设置');
-  assert.match(vbs, /sh\.Run "cmd \/c "D:\/Ruan Jian\/BiZhi\/napcat\/NapCatWinBootMain\.exe" "D:\/Ruan Jian\/qq\/QQ\.exe" "D:\/Ruan Jian\/BiZhi\/napcat\/hook\.dll" "10000000123" >> "D:\/Ruan Jian\/BiZhi\/data\/logs\/napcat\.out" 2>&1", 0, False/, '启动行不对（窗口/参数/日志重定向）');
-  assert.match(vbs, /, 0, False/, '不是隐藏窗口或会阻塞等待');
-  // 路径里的双引号要按 VBS 规则翻倍，否则整行被截断
-  const quoted = buildHiddenLaunchVbs({ exe: 'D:/a"b/x.exe', args: [], cwd: 'D:/a', logPath: 'D:/l.out' });
-  assert.match(quoted, /"D:\/a""b\/x\.exe"/);
+test('NapCat 启动形状：继承隐藏控制台、只 spawn 一次、成功信号看 QQ 实例', async () => {
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'processes.js'), 'utf8');
+  const launch = src.slice(src.indexOf('export async function startNapCat'));
+  assert.ok(launch.includes('detached: false'), 'detached:true 会让 QQ 自己新建一个可见控制台（实测类名 ConsoleWindowClass）');
+  assert.ok(launch.includes('windowsHide: true'), '窗口必须隐藏');
+  assert.ok(launch.includes("stdio: ['ignore', log, log]"), 'stdout/stderr 落文件：继承我们的隐藏控制台，又不丢日志');
+  assert.equal(launch.split('spawn(').length - 1, 1, '一个函数里两次 spawn 就是"再试一次"，那正是堆出 8 个同账号实例的路子');
+  assert.ok(!/spawn\(\s*'wscript/.test(src), 'wscript + vbs 那条路实测什么都不启动，别写回来');
+  assert.ok(!src.includes('buildHiddenLaunchVbs'), 'vbs 生成器删干净，别留死码');
+  assert.ok(launch.includes('listBotQqRoots(account)'), '成功与否要按"机器人小号的 QQ 实例出现了"判，不是看启动器');
+  assert.equal((launch.match(/logger\.warn\(/g) || []).length, 2, '两条失败各留一条日志：spawn 抛错、叫起来但实例没出现');
+  // 必须钉"紧跟 return 的那一处"：上方守卫里也有 listOwned('napcat').length，宽松断言会被它顶掉。
+  assert.ok(launch.indexOf("listOwned('napcat').length) return") >= 0, '启动器还在跑时也算起来了');
 });
 
 test('启动守卫只看 QQ 实例，不看启动器（启动器会自己退出，看它就会越起越多）', async () => {

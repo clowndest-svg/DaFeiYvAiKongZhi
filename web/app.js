@@ -326,23 +326,8 @@ function renderStatus() {
   const qqDown = Number(qq.downMinutes) >= 1 && !qq.connected && status.settings?.enabled !== false;
   const baseTitle = document.title.replace(/^⚠ QQ 断开 · /, '');
   document.title = qqDown ? `⚠ QQ 断开 · ${baseTitle}` : baseTitle;
-  const notifyBtn = $('#qqNotifyBtn');
-  if (notifyBtn) notifyBtn.hidden = typeof Notification === 'undefined' || Notification.permission !== 'default';
-  if (qqDown) {
-    const stamp = qq.recovery?.outage?.startedAt || 'down';
-    if (state.qqDownNotified !== stamp) {
-      state.qqDownNotified = stamp;
-      const login = qq.recovery?.napcatLogin;
-      const why = login?.errCode ? `NapCat 登录被拒（ErrType ${login.errType} / ErrCode ${login.errCode}）` : '去「设置 → QQ」看是扫码还是登录被拒';
-      try {
-        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-          new Notification('小知的 QQ 断开了', { body: `已断 ${Math.round(qq.downMinutes)} 分钟：${why}` });
-        }
-      } catch {
-        /* 通知失败不影响页面 */
-      }
-    }
-  }
+  // 断线/要扫码的桌面通知改由服务端弹 Windows 气泡（src/notify.js）：浏览器那条要「控制台开着 + 那个浏览器给过权限」，
+  // 而他需要知道的恰恰是人不在电脑前的时候。页面这边只留标题上的 ⚠。
 
   const counts = status.memoryCounts;
   if (counts) {
@@ -2196,13 +2181,21 @@ async function loadQqSetup() {
     else if (ver.needsUpgrade === true) lines.push(`NapCat 官方已有 ${ver.napcatLatest}，比在用的新；升级跑 ${ver.upgradeCommand}`);
     else lines.push(`NapCat 官方最新 ${ver.napcatLatest}，在用的不落后`);
     lines.push(ver.qqInstalled
-      ? `QQ 版本：${ver.qqInstalled}${(ver.qqPendingUpdate || []).length ? `｜已下载待装 ${ver.qqPendingUpdate.join('、')}，QQ 重启后就换上` : ''}`
+      ? `QQ 版本：${ver.qqInstalled}${(ver.qqPendingUpdate || []).length ? `｜已下载待装 ${ver.qqPendingUpdate.join('、')}，QQ 重启后就换上` : ''}${(ver.qqHeldUpdate || []).length ? `｜已扣住 ${ver.qqHeldUpdate.join('、')}（改名拦着；放行：node tools/hold-qq-update.mjs --release）` : ''}`
       : `QQ 版本：未读到（${ver.qqVersionsError || '没查到安装目录'}）`);
+    lines.push('QQ 换装排期（versions/config.json 的 readyVersion）：' + (typeof ver.qqReadyVersion === 'string' ? (ver.qqReadyVersion || '空（下次启动本来就没排期）') : '未读到'));
     lines.push(`版本对账：${new Date(ver.at).toLocaleString('zh-CN', { hour12: false })}`);
   } else {
     lines.push('QQ/NapCat 版本对账：还没跑过（她每 12 小时自动查一次）');
   }
   lines.push(`已学会 ${data.learnedImages || 0} 张图片表情 / ${data.learnedMfaces || 0} 个QQ表情包`);
+  const notify = data.notify || null;
+  if (notify) {
+    const last = notify.last || null;
+    lines.push(notify.enabled
+      ? '桌面通知：开着' + (last ? (last.ok ? `（上次自检 ${new Date(last.at).toLocaleString('zh-CN', { hour12: false })} 让系统弹了气泡）` : `（上次自检没弹成：${last.error || '退出码 ' + last.exitCode}）`) : '（还没自检过，点「测试桌面通知」验一下）')
+      : '桌面通知：已关掉（断线只写在控制台里，不弹气泡）');
+  }
   const rec = qq.recovery || null;
   if (rec) {
     const rejected = rec.rejected && rec.rejected.count ? `｜她这边拒过 ${rec.rejected.count} 次握手（${rec.rejected.lastReason}）` : '';
@@ -2857,15 +2850,17 @@ function bindSettings() {
       toast(error.message, 'error');
     }
   }));
-  $('#qqNotifyBtn')?.addEventListener('click', async () => {
+  $('#qqNotifyBtn')?.addEventListener('click', () => withBusy($('#qqNotifyBtn'), async () => {
     try {
-      const permission = await Notification.requestPermission();
-      $('#qqNotifyBtn').hidden = permission !== 'default';
-      toast(permission === 'granted' ? '开了：QQ 断开会弹系统通知。' : '没拿到桌面通知权限；标题里仍会显示「⚠ QQ 断开」。', permission === 'granted' ? 'ok' : 'error');
+    const data = await api('/api/qq/notify/test', { method: 'POST' });
+    toast(data.ok
+      ? '已经让系统弹了一条气泡（右下角）。没看到的话告诉我，这条路就得换别的说法。'
+      : '弹不出来：' + (data.error || 'powershell 退出码 ' + data.exitCode), data.ok ? 'ok' : 'error');
+    loadQqSetup().catch(() => {});
     } catch (error) {
-      toast(`要不到通知权限：${error.message}`, 'error');
+      toast('这条通知没发出去：' + error.message, 'error');
     }
-  });
+  }));
   $('#qqHealthBtn')?.addEventListener('click', () => withBusy($('#qqHealthBtn'), async () => {
     try {
       const health = await api('/api/qq/health');

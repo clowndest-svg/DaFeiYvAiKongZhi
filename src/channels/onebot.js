@@ -10,6 +10,7 @@ import { getLearnedImageBase64, lastLearnedImage, learnImage, listLearnedImages,
 import { logger } from '../logger.js';
 import { getMood } from '../mood.js';
 import { applyNeuroEvent } from '../neuro.js';
+import { maybeNotify } from '../notify.js';
 import { synthesizeSpeech } from '../tts.js';
 import { transcribeRecord, transcribeWav } from '../asr.js';
 import { buildSelfFollowUpPrompt } from '../prompt.js';
@@ -332,6 +333,8 @@ export class OneBotChannel {
     // 只证明"这张码是刚写出来的"。NapCat 自己也可能换码，所以界面承诺的是"我们不再换"。
     if (Date.now() - new Date(mtime).getTime() < 5 * 60000) {
       this.noteScanLock(15, `发现 ${new Date(mtime).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 生成的登录二维码`);
+      // 扫码这件事必须让人知道，而他多半不在电脑前：弹一条 Windows 气泡（每张码只弹一次）。
+      maybeNotify('scan', { stamp: mtime, title: '小知在等你扫码', body: '她看到一张刚生成的登录二维码，扫了才收得到消息' }).catch(() => {});
     }
   }
 
@@ -541,6 +544,11 @@ export class OneBotChannel {
       this.lastDownEventAt = now;
       addEvent('qq_down', `QQ 通道断了 ${Math.round(downMinutes)} 分钟，她收不到你的消息`, { downMinutes: Math.round(downMinutes) });
       applyNeuroEvent('channel_down');
+      maybeNotify('down', {
+        stamp: (rec.outage && rec.outage.startedAt) || String(this.downSince),
+        title: '小知的 QQ 断了',
+        body: `断了 ${Math.round(downMinutes)} 分钟，她收不到也发不出消息`,
+      }).catch(() => {});
     }
     this.refreshQrSignal();
     // 运行期不再自动碰进程：NapCat 自己每 3 秒重连一次（napcat/config/onebot11_*.json 的 reconnectInterval=3000），
@@ -554,6 +562,11 @@ export class OneBotChannel {
         account: rec.account.state,
       });
       applyNeuroEvent('channel_down');
+      maybeNotify('need_human', {
+        stamp: new Date(this.needHelpAt).toISOString().slice(0, 13),
+        title: '小知需要你出手了',
+        body: `QQ 断了 ${Math.round(downMinutes)} 分钟，她自己恢复不了；去控制台看是要扫码还是登录被拒`,
+      }).catch(() => {});
     }
     return { downMinutes, recovered: false };
   }

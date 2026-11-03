@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { env, paths } from './config.js';
+import { logger } from './logger.js';
 
 function windowsQuery(script) {
   return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, stdio:['ignore','pipe','ignore'] });
@@ -82,38 +83,6 @@ export async function stopOwned(kind) {
   });
   return { stopped:targets.length, simulated:env.testMode };
 }
-// 生成"隐藏窗口 + 脱离我们进程树"的启动脚本（.vbs + WScript.Shell.Run）。
-// 为什么要脱离：实测父进程被杀（SIGKILL）或正常退出，detached:false 的子进程都会跟着死，
-// 所以每次轮换生产 = 把 NapCat 一起带走 = 要人重扫一次码。detached:true 的子进程能活下来，
-// 但 DETACHED_PROCESS 下 QQ.exe 会自己新建一个可见控制台（之前那个黑框）。
-// 两轮对照实验的结果：
-//   · spawn powershell detached → 脚本根本没跑起来（marker 文件没生成）
-//   · spawn wscript detached + Run(cmd, 0, False) → 跑起来了、wscript 退出后子进程还活着、可见窗口 0
-// 所以走 wscript；输出用 cmd 的 >> 追加，日志不会每次启动被清空。
-export function buildHiddenLaunchVbs({ exe, args, cwd, logPath }) {
-  const q = (value) => `"${String(value).replace(/"/g, '""')}"`;
-  const command = [q(exe), ...args.map(q)].join(' ');
-  return [
-    'Set sh = CreateObject("WScript.Shell")',
-    `sh.CurrentDirectory = ${q(cwd)}`,
-    `sh.Run "cmd /c ${command} >> ${q(logPath)} 2>&1", 0, False`,
-  ].join('\r\n');
-}
-
-// 机器人小号的 QQ 根实例。守卫必须看这个，不能看启动器：
-// NapCatWinBootMain.exe 注入成功后会自己退出，于是旧守卫以为"什么都没跑"，
-// 每次重启都再起一个 → 同一账号多个实例互相挤下线（实测这台机器上堆到 8 个）。
-export function listBotQqRoots(account) {
-  const at = new Date().toISOString();
-  if (!/^\d{5,12}$/.test(String(account || ''))) return { state: 'unknown', roots: [], at, reason: '机器人小号没配置' };
-  if (env.testMode || process.platform !== 'win32') return { state: 'unknown', roots: [], at, reason: '非 Windows 或隔离测试，不查进程' };
-  try {
-    return { state: 'ok', roots: parseQqRoots(windowsQuery(qqRootQuery(account))), at, reason: '' };
-  } catch (error) {
-    return { state: 'unknown', roots: [], at, reason: String(error && error.message || error).slice(0, 80) };
-  }
-}
-
 // 要不要再起一个 NapCat：只有"确认没有 QQ 实例、也没有启动器"才允许。
 // 查不到一律不动手——重复实例比没实例更糟（它们会互相把登录挤掉）。
 export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown', qqRootCount = 0 } = {}) {
@@ -162,26 +131,32 @@ export async function startNapCat() {
   const args=[qq,path.join(napcatDir,'NapCatWinBootHook.dll'),account];
   const envVars={...process.env,NAPCAT_LOAD_PATH:path.join(napcatDir,'loadNapCat.js'),NAPCAT_INJECT_PATH:path.join(napcatDir,'NapCatWinBootHook.dll'),NAPCAT_MAIN_PATH:path.join(napcatDir,'napcat.mjs'),NAPCAT_PATCH_PACKAGE:path.join(napcatDir,'qqnt.json')};
 
-  // 首选：wscript 隐藏启动 + 脱离进程树。脚本写进 data/（运行时生成，不进仓库）。
+  // 必须是"继承我们那个隐藏控制台"的非分离启动：
+  // 实测 detached:true 时 QQ.exe 自己新建一个可见控制台（窗口类名 ConsoleWindowClass、标题就是 QQ.exe 路径），
+  // 桌面上就是那个黑框。而 detach 换来的"活过轮换"其实不需要：启动器注入成功就自己退出了，
+  // QQ 变成孤儿进程，轮换时 taskkill /T 从我们这边已经够不到它（2026-11-03 两次轮换实测：QQ 没被带走、没重扫码）。
+  const log = fs.openSync(logPath, 'a');
+  let child;
   try {
-    const vbsPath=path.join(paths.data,'launch-napcat.vbs');
-    fs.writeFileSync(vbsPath, buildHiddenLaunchVbs({exe,args,cwd:napcatDir,logPath}),'utf8');
-    const wscript=spawn('wscript.exe',[vbsPath],{cwd:napcatDir,detached:true,windowsHide:true,stdio:'ignore',env:envVars});
-    wscript.unref();
-    for(let i=0;i<16;i+=1){
-      await new Promise((resolve)=>{setTimeout(resolve,500);});
-      if(listOwned('napcat').length)return {started:true,mode:'detached-hidden'};
-    }
-  } catch { /* 落到下面的保底 */ }
-
-  // 保底：老办法（继承隐藏控制台）。它会被我们带走，但至少不会出现可见窗口。
-  const log=fs.openSync(logPath,'a');
-  const child=spawn(exe,args,{
-    // 不能用 detached：Windows 上它等于 DETACHED_PROCESS（子进程没有控制台），
-    // 于是还要往 stdout 写的 QQ.exe 会被系统另建一个可见控制台窗口（标题就是它的 exe 路径），
-    // 桌面上那个黑框就是这么冒出来的。改成继承一个隐藏控制台，QQ 复用同一个控制台，不再新建窗口。
-    cwd:napcatDir, detached:false,windowsHide:true,stdio:['ignore',log,log], env:envVars,
-  });
-  await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});fs.closeSync(log);child.unref();
-  return {started:true,mode:'inherited-console'};
+    child = spawn(exe, args, { cwd: napcatDir, detached: false, windowsHide: true, stdio: ['ignore', log, log], env: envVars });
+    child.unref();
+  } catch (error) {
+    const reason = '启动失败：' + String(error && error.message || error).slice(0, 120);
+    logger.warn('NapCat 启动抛错', { reason });
+    return { started: false, reason };
+  } finally {
+    fs.closeSync(log);
+  }
+  // 成功要等"机器人小号的 QQ 实例出现了"，不能等启动器：NapCatWinBootMain.exe 注入完就自己退出。
+  // 只盯启动器会把它正常退出误判成失败，接着又起一个 —— 同账号堆到 8 个实例互相挤下线就是这么来的。
+  // 所以这里只观察、绝不第二次 spawn：20 秒内没等到就如实报，让人去看日志。
+  for (let i = 0; i < 40; i += 1) {
+    await new Promise((resolve) => { setTimeout(resolve, 500); });
+    const roots = listBotQqRoots(account);
+    if (roots.state === 'ok' && roots.roots.length) return { started: true, mode: 'hidden-console-inherited', pids: roots.roots.map((r) => r.pid) };
+    if (listOwned('napcat').length) return { started: true, mode: 'hidden-console-inherited' };
+  }
+  const reason = '叫起来之后 20 秒内没看到机器人小号的 QQ 实例；先看 data/logs/napcat.out，别重复点启动';
+  logger.warn('NapCat 叫起来了但 QQ 实例没出现', { reason });
+  return { started: false, reason };
 }

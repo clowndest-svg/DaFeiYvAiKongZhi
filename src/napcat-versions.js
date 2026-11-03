@@ -10,6 +10,7 @@ import { qqInstallDir } from './processes.js';
 const RELEASE_FILE = path.join('napcat', '.napcat-release');
 const VERSION_REPORT_KEY = 'napcat_versions';
 const QQ_VERSION_DIR = /^(\d+\.\d+\.\d+-\d+)$/;
+const QQ_HELD = /^(\d+\.\d+\.\d+-\d+)\.zip\.held/;
 export const UPGRADE_COMMAND = 'node tools/upgrade-napcat.mjs --apply';
 
 export function compareVersions(a, b) {
@@ -46,17 +47,27 @@ export function installedRelease(root = paths.root) {
 // QQ 安装目录下的 versions/：每个 x.y.z-w 目录是一个已装版本，同名 .zip 是"已下载、等着自动升级"的包。
 // 目录读不到就返回 error，绝不返回空列表——空列表会被读成"QQ 没有待更新的包"。
 export function qqVersions(qqDir = '') {
-  const result = { installed: [], pendingUpdate: [], error: '' };
+  // curVersion/readyVersion 读不到时留 null（界面写「未读到」），不能和读到了、确实空着混成同一个空串。
+  const result = { installed: [], pendingUpdate: [], heldUpdate: [], curVersion: null, readyVersion: null, error: '' };
   if (!qqDir) {
     result.error = '没读到 QQ 安装位置';
     return result;
   }
   const versionsDir = path.join(qqDir, 'versions');
+  // QQ 的启动器按 config.json 的 readyVersion 决定下次开机换装哪个包；readyVersion 空着就没包可解。
+  try {
+    const cfg = JSON.parse(fs.readFileSync(path.join(versionsDir, 'config.json'), 'utf8'));
+    result.curVersion = typeof cfg.curVersion === 'string' ? cfg.curVersion : '';
+    result.readyVersion = typeof cfg.readyVersion === 'string' ? cfg.readyVersion : '';
+  } catch {
+    // 读不到 config.json 就留空，界面必须显示"未读到"，不能当成"没有准备好要装的版本"
+  }
   try {
     for (const entry of fs.readdirSync(versionsDir)) {
       const match = QQ_VERSION_DIR.exec(entry);
       if (match) result.installed.push(match[1]);
       else if (/^(\d+\.\d+\.\d+-\d+)\.zip$/.test(entry)) result.pendingUpdate.push(entry.replace(/\.zip$/, ''));
+      else if (/^(\d+\.\d+\.\d+-\d+)\.zip\.held/.test(entry)) result.heldUpdate.push(entry.match(QQ_HELD)[1]);
     }
     result.installed.sort((a, b) => (compareVersions(b, a) ?? 0));
     result.pendingUpdate.sort((a, b) => (compareVersions(b, a) ?? 0));
@@ -117,6 +128,27 @@ export async function fetchLatestTag({ fetchImpl = globalThis.fetch, timeoutMs =
   }
 }
 
+// 顶栏该不该占：QQ 有包等着换上但 NapCat 已经是官方最新，就没有"你现在能做的事"，只写进面板；
+// 只有确实查到 NapCat 落后于官方时，才值得在顶栏说一句。
+export function versionAlerts(v) {
+  if (!v) return [];
+  const pending = (v.qqPendingUpdate || []).length;
+  if (v.needsUpgrade !== true) return [];
+  const cmd = v.upgradeCommand || UPGRADE_COMMAND;
+  if (pending) {
+    return [{
+      key: 'qq-update',
+      level: 'warn',
+      text: 'QQ 下载了 ' + v.qqPendingUpdate.join('、') + ' 等着换上，而 NapCat 已有配套新版 ' + v.napcatLatest + '（在用 ' + v.napcatInstalled + '）：' + cmd,
+    }];
+  }
+  return [{
+    key: 'napcat-update',
+    level: 'info',
+    text: 'NapCat 官方出了 ' + v.napcatLatest + '（在用 ' + v.napcatInstalled + '）。现在能用就不必急着升，掉线修不好时再升：' + cmd,
+  }];
+}
+
 // 同一个状态只报一次：每天对账一次，同一条提示不许天天刷屏（但状态一变就得立刻报）。
 function changed(previous, key, value) {
   const before = previous ? previous[key] : null;
@@ -154,7 +186,9 @@ export async function checkNapcatVersions({ now = new Date(), fetchLatest = fetc
     upgradeCommand: UPGRADE_COMMAND,
     qqInstalled: currentQq,
     qqInstalledAll: versions.installed,
+    qqReadyVersion: versions.readyVersion,
     qqPendingUpdate: pending,
+    qqHeldUpdate: versions.heldUpdate,
     qqVersionsError: versions.error,
   };
   kvSetJson(VERSION_REPORT_KEY, report);

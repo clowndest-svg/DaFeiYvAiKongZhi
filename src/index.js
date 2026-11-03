@@ -49,7 +49,8 @@ import { logger } from './logger.js';
 import { DeepSeek } from './llm.js';
 import { Companion } from './chat.js';
 import { Scheduler } from './scheduler.js';
-import { checkNapcatVersions, lastVersionReport, versionHintForOutage } from './napcat-versions.js';
+import { checkNapcatVersions, lastVersionReport, versionAlerts, versionHintForOutage } from './napcat-versions.js';
+import { desktopNotifyEnabled, desktopNotifyState, notifyDesktop } from './notify.js';
 import { OneBotChannel } from './channels/onebot.js';
 import {
   clearQzoneCookie,
@@ -170,20 +171,7 @@ function healthAlerts() {
   }
   // 版本这条只在"真查到有东西要跟进"时才占顶栏；单纯没查到不报警（那是未测，进 QQ 面板看）。
   try {
-    const v = lastVersionReport();
-    if (v && (v.qqPendingUpdate || []).length) {
-      out.push({
-        key: 'qq-update',
-        level: 'warn',
-        text: `QQ 自己下载了 ${v.qqPendingUpdate.join('、')} 的更新包，下次 QQ 重启就换上；换上后她若连不上，先怀疑 NapCat 落后（${v.upgradeCommand}）`,
-      });
-    } else if (v && v.needsUpgrade === true) {
-      out.push({
-        key: 'napcat-update',
-        level: 'info',
-        text: `NapCat 官方出了 ${v.napcatLatest}（在用 ${v.napcatInstalled}）。现在能用就不必急着升，掉线修不好时再升：${v.upgradeCommand}`,
-      });
-    }
+    out.push(...versionAlerts(lastVersionReport()));
   } catch {
     // 版本对账读不到不影响状态接口
   }
@@ -541,6 +529,7 @@ const EXPENSIVE_API = new Set([
   '/api/presence/look',
   '/api/presence/speak',
   '/api/qq/versions/check',
+  '/api/qq/notify/test',
 ]);
 
 // 只锁"人点一下才跑"的只读重接口；/api/xhs/status 和 /api/xhs/qr 是前端定时轮询的，
@@ -1733,6 +1722,7 @@ async function handleApi(req, res, pathname, url) {
       installed,
       dir: napcatDir,
       versions: lastVersionReport(),
+      notify: { enabled: desktopNotifyEnabled(), last: desktopNotifyState() },
       status: onebot?.status() || null,
       ownerId: kvGet('qq_owner_id') || '',
       candidate,
@@ -1747,6 +1737,23 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/qq/versions/check' && method === 'POST') {
     const report = env.testMode ? null : await checkNapcatVersions();
     return sendJson(res, 200, { ok: true, report, command: report ? report.upgradeCommand : '' });
+  }
+
+  if (pathname === '/api/qq/notify/test' && method === 'POST') {
+    const result = await notifyDesktop({
+      title: '小知的桌面通知自检',
+      body: '看到这条气泡，说明断线和她要扫码的时候你都能在桌面上收到。',
+    });
+    addEvent('qq_notify_test', result.ok ? '桌面通知自检：已让 powershell 弹了一条气泡' : '桌面通知自检没成：' + (result.error || '退出码 ' + result.exitCode), { exitCode: result.exitCode });
+    return sendJson(res, 200, { ok: result.ok, ...result });
+  }
+
+  if (pathname === '/api/qq/notify/toggle' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const on = Boolean(body.on);
+    saveSettings({ qq: { desktopNotify: on } });
+    addEvent('qq_notify_toggle', on ? '桌面通知已开启' : '桌面通知已关闭（断线时只写在控制台里）', { on });
+    return sendJson(res, 200, { ok: true, enabled: on, last: desktopNotifyState() });
   }
 
   if (pathname === '/api/qq/stop' && method === 'POST') {

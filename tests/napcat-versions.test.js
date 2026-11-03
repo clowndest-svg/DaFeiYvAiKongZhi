@@ -106,6 +106,60 @@ test('两条路都不通才认输，并把两边的原因都留下', async () =>
   assert.match(err.message, /订阅源/);
 });
 
+test('顶栏门槛：QQ 有包等着换但 NapCat 已是官方最新 → 不占顶栏，只在面板说', () => {
+  assert.deepEqual(v.versionAlerts(null), []);
+  assert.deepEqual(v.versionAlerts({ needsUpgrade: 'unknown', qqPendingUpdate: ['9.9.36-53644'] }), [], '查不到不报警');
+  assert.deepEqual(v.versionAlerts({ needsUpgrade: false, qqPendingUpdate: ['9.9.36-53644'], napcatLatest: 'v4.18.42' }), [], '没有可动的动作就别占顶栏');
+  const warn = v.versionAlerts({
+    needsUpgrade: true,
+    qqPendingUpdate: ['9.9.36-53644'],
+    napcatLatest: 'v4.18.50',
+    napcatInstalled: 'v4.18.42',
+    upgradeCommand: 'UPCMD',
+  });
+  assert.equal(warn.length, 1);
+  assert.equal(warn[0].level, 'warn');
+  assert.match(warn[0].text, /9\.9\.36-53644/);
+  assert.match(warn[0].text, /v4\.18\.50/);
+  assert.match(warn[0].text, /UPCMD$/);
+  const info = v.versionAlerts({ needsUpgrade: true, qqPendingUpdate: [], napcatLatest: 'v4.18.50', napcatInstalled: 'v4.18.42', upgradeCommand: 'UPCMD' });
+  assert.equal(info.length, 1);
+  assert.equal(info[0].level, 'info');
+});
+
+test('扣住的包不能被判成"没有待更新"：heldUpdate 单独列，pendingUpdate 里不许留', () => {
+  const only = v.qqVersions(fakeQqDir(['9.9.28-46928', '9.9.36-53644.zip.held-2026-11-03T07-00-00']));
+  assert.deepEqual(only.pendingUpdate, []);
+  assert.deepEqual(only.heldUpdate, ['9.9.36-53644']);
+  const both = v.qqVersions(fakeQqDir(['9.9.28-46928', '9.9.36-53644.zip', '9.9.40-1.zip.held-x']));
+  assert.deepEqual(both.pendingUpdate, ['9.9.36-53644']);
+  assert.deepEqual(both.heldUpdate, ['9.9.40-1']);
+});
+
+test('换装排期照实读 config.json：读不到是未读到，不是"没排期"', () => {
+  const dir = fakeQqDir(['9.9.28-46928']);
+  fs.writeFileSync(path.join(dir, 'versions', 'config.json'), JSON.stringify({ curVersion: '9.9.28-46928', readyVersion: '9.9.36-53644' }), 'utf8');
+  const got = v.qqVersions(dir);
+  assert.equal(got.curVersion, '9.9.28-46928');
+  assert.equal(got.readyVersion, '9.9.36-53644');
+  const empty = v.qqVersions(fakeQqDir(['9.9.28-46928']));
+  assert.equal(empty.readyVersion, null, '这个目录里根本没有 config.json，只能是未读到');
+  assert.equal(empty.curVersion, null, 'curVersion 也一样：读不到不等于"没装版本"');
+  const written = fakeQqDir(['9.9.28-46928']);
+  fs.writeFileSync(path.join(written, 'versions', 'config.json'), JSON.stringify({ curVersion: '9.9.28-46928', readyVersion: '' }), 'utf8');
+  assert.equal(v.qqVersions(written).readyVersion, '', '读到了、确实空着——这个空是有意义的');
+});
+
+test('扣包命令：改名而不是删除、只扣比现役新的、改完必须复核、放行不许覆盖已有同名包', () => {
+  const tool = fs.readFileSync(path.join(ROOT, 'tools', 'hold-qq-update.mjs'), 'utf8');
+  assert.match(tool, /fs\.renameSync/, '删除就没法回退了');
+  assert.match(tool, /--release/, '必须留一条放行的路');
+  assert.match(tool, /compareVersions\(v, current\)/, '比现役旧的包不该扣');
+  assert.match(tool, /if \(after\.pendingUpdate\.length\) die/, '改完不复核＝不知道有没有真扣住');
+  assert.match(tool, /已经在了/, '放行时同名包已存在不能直接盖掉');
+  assert.match(tool, /readyVersion/, 'QQ 已经排期换装时，改名拦不住，必须说出来');
+});
+
 test('对账：官方有更新版 → 记 kv、报事件、给出升级命令', async () => {
   const root = fakeRoot('v4.18.42');
   const qq = fakeQqDir(['9.9.36-0']);
