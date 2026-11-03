@@ -225,6 +225,26 @@ test('进程工具的导出必须齐：少一个函数，整条启动链在运�
   assert.ok(!src.includes('buildHiddenLaunchVbs'), 'wscript + vbs 那条已删干净，别留死码');
 });
 
+test('探活三态：超时=静默、内部异常=账号层坏了、retcode≠0=接口不支持', async () => {
+  const { interpretLiveness } = await import('../src/channels/onebot.js');
+  assert.equal(interpretLiveness({}), 'ok');
+  assert.equal(interpretLiveness({ timedOut: true, error: '请求超时' }), 'silent');
+  assert.equal(interpretLiveness({ error: String.fromCharCode(67) + 'annot read properties of null (reading coreInfo)' }), 'broken');
+  assert.equal(interpretLiveness({ retcode: 1404 }), 'unsupported');
+});
+
+test('账号层坏了要占顶栏并弹气泡，不能只写"探活不可用"', () => {
+  const index = fs.readFileSync(path.join(ROOT, 'src', 'index.js'), 'utf8');
+  assert.match(index, /liveness\.brokenSince/);
+  assert.match(index, /她很可能收不到你的消息/);
+  const onebot = fs.readFileSync(path.join(ROOT, 'src', 'channels', 'onebot.js'), 'utf8');
+  assert.match(onebot, /qq_backend_broken/);
+  assert.match(onebot, /maybeNotify\('backend_broken'/);
+  assert.match(onebot, /lastInboundMessageAt = new Date/, '心跳会刷新 lastEventAt，必须单独记入站消息');
+  const app = fs.readFileSync(path.join(ROOT, 'web', 'app.js'), 'utf8');
+  assert.match(app, /最后收到你的消息/);
+});
+
 test('启动守卫只看 QQ 实例，不看启动器（启动器会自己退出，看它就会越起越多）', async () => {
   const { shouldStartNapCat } = await import('../src/processes.js');
   const ok = { launcherCount: 0, qqProbeState: 'ok', qqRootCount: 0 };

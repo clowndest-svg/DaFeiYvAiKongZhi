@@ -74,8 +74,8 @@ test('设置里关掉后一条都不弹（也不留失败痕迹）', async () =>
 test('接线：断线、要扫码、需要人出手三条路都挂了钩；页面不再自己弹重复的一份', () => {
   const read = (p) => fs.readFileSync(path.join(ROOT, p), 'utf8');
   const onebot = read('src/channels/onebot.js');
-  assert.equal(onebot.split('maybeNotify(').length - 1, 3, '三条路：down / scan / need_human');
-  for (const kind of ['down', 'scan', 'need_human']) {
+  assert.equal(onebot.split('maybeNotify(').length - 1, 4, '四条路：down / scan / need_human / backend_broken');
+  for (const kind of ['down', 'scan', 'need_human', 'backend_broken']) {
     assert.ok(onebot.includes('maybeNotify(' + QUOTE + kind + QUOTE), '少了 ' + kind + ' 这条');
   }
   const app = read('web/app.js');

@@ -176,6 +176,13 @@ function healthAlerts() {
     // 版本对账读不到不影响状态接口
   }
   const liveness = qq && qq.recovery && qq.recovery.liveness;
+  if (qq && qq.connected && liveness && liveness.brokenSince) {
+    out.push({
+      key: 'qq-broken',
+      level: 'danger',
+      text: `QQ 看着连着，但 NapCat 账号层报错（${liveness.error || '内部异常'}）：她很可能收不到你的消息。点「用机器人小号重新登录」，要扫码。`,
+    });
+  }
   if (qq && qq.connected && liveness && liveness.suspectSince) {
     out.push({
       key: 'qq-silent',

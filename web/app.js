@@ -2171,6 +2171,9 @@ async function loadQqSetup() {
   const ownerInput = $('#qqOwnerInput');
   if (ownerInput && document.activeElement !== ownerInput && !ownerInput.dataset.dirty) ownerInput.value = data.ownerId || '';
   if (qq.lastError) lines.push(`最近错误：${String(qq.lastError).replace(/\s+/g, ' ').slice(0, 100)}`);
+  lines.push(qq.lastInboundMessageAt
+    ? `最后收到你的消息：${new Date(qq.lastInboundMessageAt).toLocaleString('zh-CN', { hour12: false })}`
+    : '最后收到你的消息：这次启动后还没收到过');
   lines.push(data.installed ? `NapCat 目录：${data.dir}` : 'NapCat 还没下载到 napcat/ 目录');
   const ver = data.versions || null;
   if (ver) {
@@ -2229,7 +2232,9 @@ async function loadQqSetup() {
         lines.push(`同账号 QQ 实例数：未测（${rec.instances.reason || '查不到进程'}）`);
       }
     }
-    if (rec.liveness && qq.connected) {
+    if (rec.liveness && rec.liveness.brokenSince && qq.connected) {
+      lines.push(`NapCat 账号层报错（${rec.liveness.error || '内部异常'}）：她很可能收不到你的消息；点「用机器人小号重新登录」（要扫码）`);
+    } else if (rec.liveness && qq.connected) {
       const okAt = rec.liveness.lastOkAt ? new Date(rec.liveness.lastOkAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
       if (rec.liveness.supported === false) {
         lines.push(`主动探活不可用（${rec.liveness.error || '接口不支持'}）——这条通道没法提前发现"连接还在、消息进不来"`);

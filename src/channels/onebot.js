@@ -184,6 +184,16 @@ export function shouldBootStartNapCat({
 
 // 回复失败到底该怪谁：模型那一步没给出话，还是通道/投递出问题。
 // 界面靠这个分类说人话，所以它必须能单测（别把判断散在 catch 里）。
+// 探活结果怎么读：超时＝通道静默（消息可能进不来）；retcode≠0＝这个接口本身不支持；
+// 别的异常（典型是 NapCat 自己抛 Cannot read properties of null (reading 'coreInfo')）＝
+// 账号层坏了，消息一样收不到——以前这种被写成"探活不可用"，看着像功能缺失，其实人是聋的。
+export function interpretLiveness({ timedOut = false, retcode = 0, error = '' } = {}) {
+  if (timedOut) return 'silent';
+  if (error) return 'broken';
+  if (retcode !== 0) return 'unsupported';
+  return 'ok';
+}
+
 export function classifyReplyError(error) {
   const text = String((error && error.code) || '') + ' ' + String((error && error.message) || error || '');
   return /EMPTY_REPLY|STREAM_INCOMPLETE|HTTP|NO_KEY|超时|模型/.test(text) ? 'model' : 'channel';
@@ -246,6 +256,7 @@ export class OneBotChannel {
     this.lastStickerAt = 0;
     this.stickerTimes = new Map();
     this.lastEventAt = null;
+    this.lastInboundMessageAt = null;
     this.lastError = null;
     // 会话对象本身不建定时器、不起进程；只有 state=ACTIVE 之后才有这些副作用。
     this.voiceCall = new VoiceCall({
@@ -463,29 +474,51 @@ export class OneBotChannel {
     if (!/^\d{5,12}$/.test(owner)) return;
     this.livenessAt = now;
     this.liveness.checking = true;
+    const base = {
+      checking: false,
+      supported: true,
+      lastOkAt: this.liveness.lastOkAt || null,
+      lastCheckedAt: new Date().toISOString(),
+      suspectSince: this.liveness.suspectSince || null,
+      brokenSince: this.liveness.brokenSince || null,
+      error: '',
+      kind: '',
+    };
     this.sendAction('get_stranger_info', { user_id: Number(owner) }, 5000)
       .then((res) => {
         const retcode = res && typeof res.retcode === 'number' ? res.retcode : 0;
-        if (retcode !== 0) {
+        if (interpretLiveness({ retcode }) === 'unsupported') {
           // 接口不支持/被拒：如实标成"探活不可用"，不要把它当成"消息进不来"去报警。
-          this.liveness = { checking: false, fails: 0, supported: false, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince: null, error: `get_stranger_info retcode ${retcode}` };
+          this.liveness = { ...base, supported: false, kind: 'unsupported', suspectSince: null, brokenSince: null, error: 'get_stranger_info retcode ' + retcode };
           return;
         }
-        this.liveness = { checking: false, fails: 0, supported: true, lastOkAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString(), suspectSince: null, error: '' };
+        this.liveness = { ...base, fails: 0, kind: 'ok', suspectSince: null, brokenSince: null, lastOkAt: new Date().toISOString() };
       })
       .catch((error) => {
-        const message = String((error && error.message) || error);
-        // 只有"超时"才算静默失联的证据。身份未确认、通道刚停这类已知状态不计入，免得误报。
-        if (!/超时/.test(message)) {
-          this.liveness = { checking: false, fails: 0, supported: false, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince: null, error: message.slice(0, 60) };
+        const message = String((error && error.message) || error).slice(0, 80);
+        const timedOut = /超时|timeout/i.test(message);
+        const fails = (this.liveness.fails || 0) + 1;
+        if (interpretLiveness({ timedOut, error: timedOut ? '' : message }) === 'silent') {
+          const suspectSince = this.liveness.suspectSince || (fails >= 2 ? new Date().toISOString() : null);
+          this.liveness = { ...base, fails, kind: 'silent', suspectSince, brokenSince: null, error: message };
+          if (fails === 2) {
+            addEvent('qq_silent_suspect', '连接还在，但主动探活连续超时：她的消息可能进不来了（这次不会去重启 NapCat）', { error: message });
+            applyNeuroEvent('channel_down');
+          }
           return;
         }
-        const fails = (this.liveness.fails || 0) + 1;
-        const suspectSince = this.liveness.suspectSince || (fails >= 2 ? new Date().toISOString() : null);
-        this.liveness = { checking: false, fails, supported: true, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince, error: message.slice(0, 60) };
+        // NapCat 自己抛异常（典型是 Cannot read properties of null (reading coreInfo)）：
+        // 账号层坏了，消息一样收不到。以前这里写成"探活不可用"，读起来像功能缺失，其实人是聋的。
+        const brokenSince = this.liveness.brokenSince || (fails >= 2 ? new Date().toISOString() : null);
+        this.liveness = { ...base, fails, kind: 'broken', suspectSince: null, brokenSince, error: message };
         if (fails === 2) {
-          addEvent('qq_silent_suspect', '连接还在，但主动探活连续超时：她的消息可能进不来了（这次不会去重启 NapCat）', { error: this.liveness.error });
+          addEvent('qq_backend_broken', '连接还在，但 NapCat 账号层报错：她很可能收不到你的消息（要重新登录，需扫码）', { error: message });
           applyNeuroEvent('channel_down');
+          maybeNotify('backend_broken', {
+            stamp: brokenSince || message,
+            title: '小知可能收不到消息了',
+            body: 'NapCat 账号层报错（' + message.slice(0, 40) + '）；去控制台点「用机器人小号重新登录」',
+          }).catch(() => {});
         }
       });
   }
@@ -681,6 +714,8 @@ export class OneBotChannel {
       return;
     }
     this.lastEventAt = new Date().toISOString();
+    // 心跳也会刷新 lastEventAt；真正要盯的是"有没有人给我发消息"，所以单独记这一笔。
+    if (payload.post_type === 'message') this.lastInboundMessageAt = new Date().toISOString();
     if (payload.echo && this.pending.has(payload.echo)) {
       const entry = this.pending.get(payload.echo);
       if (entry.ws !== ws) {
@@ -1941,6 +1976,7 @@ ${history}
         ? { userId: maskQq(candidate.userId), nickname: candidate.nickname || '', at: candidate.at || null }
         : null,
       lastEventAt: this.lastEventAt,
+      lastInboundMessageAt: this.lastInboundMessageAt,
       downMinutes: this.downSince ? Math.round((Date.now() - this.downSince) / 60000) : 0,
       voiceCall: this.voiceCall.snapshot(),
       voice: {
