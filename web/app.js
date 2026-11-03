@@ -2212,6 +2212,16 @@ async function loadQqSetup() {
     if (rec.napcatLogin && rec.napcatLogin.errCode) {
       lines.push(`NapCat 登录被拒：ErrType ${rec.napcatLogin.errType} / ErrCode ${rec.napcatLogin.errCode}（napcat.out 里累计 ${rec.napcatLogin.count} 条）——多半是这个号还在别的设备上登录着，先在那台设备退出再来扫`);
     }
+    if (rec.liveness && qq.connected) {
+      const okAt = rec.liveness.lastOkAt ? new Date(rec.liveness.lastOkAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
+      if (rec.liveness.supported === false) {
+        lines.push(`主动探活不可用（${rec.liveness.error || '接口不支持'}）——这条通道没法提前发现"连接还在、消息进不来"`);
+      } else {
+        lines.push(rec.liveness.suspectSince
+          ? `主动探活连续超时 ${rec.liveness.fails} 次：消息可能进不来${okAt ? `，最后一次测通是 ${okAt}` : ''}`
+          : `主动探活正常${okAt ? `（${okAt} 测通）` : '（还没到第一次探测）'}`);
+      }
+    }
   } else if (qq.downMinutes >= 5) {
     lines.push(`QQ 已断开 ${qq.downMinutes} 分钟`);
   }

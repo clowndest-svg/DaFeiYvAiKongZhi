@@ -204,6 +204,9 @@ export class OneBotChannel {
       outage: null,
     };
     this.accountProbeAt = 0;
+    // 主动探活（真的去 QQ 服务端走一圈）的结果；只用于报警，不触发任何进程操作。
+    this.livenessAt = 0;
+    this.liveness = { checking: false, fails: 0, lastOkAt: null, lastCheckedAt: null, suspectSince: null, error: '' };
     this.wss = new WebSocketServer({ server, path: '/onebot', maxPayload: 8 * 1024 * 1024 });
     this.clients = new Set();
     this.pending = new Map();
@@ -247,6 +250,7 @@ export class OneBotChannel {
     this.heartbeat = setInterval(() => {
       this.pruneSeenMessages();
       this.checkConnectionHealth();
+      this.probeLiveness();
       for (const ws of this.clients) {
         if (ws.isAlive === false) {
           try {
@@ -396,6 +400,7 @@ export class OneBotChannel {
       outage: rec.outage,
       bootStart: rec.bootStart || null,
       napcatLogin: this.clients.size ? null : this.napcatLoginHealth(),
+      liveness: this.liveness,
       stats7d: {
         count: week.length,
         totalMinutes,
@@ -403,6 +408,47 @@ export class OneBotChannel {
         lastCause: week.length ? week[week.length - 1].cause || '' : '',
       },
     };
+  }
+
+  // 20:03 那次"假活"：ws 连着、NapCat 自己还说在线，但消息一条都进不来，直到它 3.5 小时后才发现。
+  // get_status 是 NapCat 自己内存里的状态，叫不醒这种情况；必须挑一个真的会去 QQ 服务端走一圈的接口。
+  // 失败不重启任何东西（重启只会逼人重扫码），连续两次失败就把"疑似静默失联"摆到界面上。
+  probeLiveness() {
+    const now = Date.now();
+    if (now - this.livenessAt < 5 * 60000) return;
+    if (!this.clients.size) {
+      this.livenessAt = now;
+      return;
+    }
+    const owner = String(kvGet('qq_owner_id') || '');
+    if (!/^\d{5,12}$/.test(owner)) return;
+    this.livenessAt = now;
+    this.liveness.checking = true;
+    this.sendAction('get_stranger_info', { user_id: Number(owner) }, 5000)
+      .then((res) => {
+        const retcode = res && typeof res.retcode === 'number' ? res.retcode : 0;
+        if (retcode !== 0) {
+          // 接口不支持/被拒：如实标成"探活不可用"，不要把它当成"消息进不来"去报警。
+          this.liveness = { checking: false, fails: 0, supported: false, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince: null, error: `get_stranger_info retcode ${retcode}` };
+          return;
+        }
+        this.liveness = { checking: false, fails: 0, supported: true, lastOkAt: new Date().toISOString(), lastCheckedAt: new Date().toISOString(), suspectSince: null, error: '' };
+      })
+      .catch((error) => {
+        const message = String((error && error.message) || error);
+        // 只有"超时"才算静默失联的证据。身份未确认、通道刚停这类已知状态不计入，免得误报。
+        if (!/超时/.test(message)) {
+          this.liveness = { checking: false, fails: 0, supported: false, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince: null, error: message.slice(0, 60) };
+          return;
+        }
+        const fails = (this.liveness.fails || 0) + 1;
+        const suspectSince = this.liveness.suspectSince || (fails >= 2 ? new Date().toISOString() : null);
+        this.liveness = { checking: false, fails, supported: true, lastOkAt: this.liveness.lastOkAt || null, lastCheckedAt: new Date().toISOString(), suspectSince, error: message.slice(0, 60) };
+        if (fails === 2) {
+          addEvent('qq_silent_suspect', '连接还在，但主动探活连续超时：她的消息可能进不来了（这次不会去重启 NapCat）', { error: this.liveness.error });
+          applyNeuroEvent('channel_down');
+        }
+      });
   }
 
   checkConnectionHealth() {
@@ -423,8 +469,11 @@ export class OneBotChannel {
       return { downMinutes: 0, recovered: false };
     }
     if (this.clients.size) {
-      rec.everConnected = true;
-      if (this.downSince) this.closeOutage(rec.outage && rec.outage.cause === 'monitor_gap' ? 'monitor_gap' : 'napcat_closed');
+      if (!rec.everConnected) {
+        rec.everConnected = true;
+        this.livenessAt = 0; // 重新连上后尽快做一次主动探活，别等满 5 分钟
+      }
+      if (rec.outage) this.closeOutage(rec.outage.cause === 'monitor_gap' ? 'monitor_gap' : 'napcat_closed');
       this.downSince = null;
       this.identityError = this.identityError || '';
       this.probeAccount();

@@ -14,7 +14,7 @@ fs.writeFileSync(settingsFile, JSON.stringify({ qq: { enabled: true } }), 'utf8'
 process.env.BIZHI_SETTINGS_FILE = settingsFile;
 
 const { OneBotChannel, shouldBootStartNapCat } = await import('../src/channels/onebot.js');
-const { closeDb } = await import('../src/db.js');
+const { closeDb, kvSet, listEvents } = await import('../src/db.js');
 const { countQqProcesses } = await import('../src/processes.js');
 
 const ok = {
@@ -135,6 +135,66 @@ test('通道连着但账号离线，要落一条可追溯的事件（这种"假�
     channel.probeAccount();
     await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(listEvents(30).filter((e) => e.type === 'qq_account_offline').length, 1, '离线事件重复刷屏');
+  } finally {
+    channel.destroy();
+    server.close();
+  }
+});
+
+test('主动探活：连续两次失败才报"疑似静默失联"，测通后清掉，断线时不探', async () => {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const channel = new OneBotChannel({ server, companion: {} });
+  const fake = { readyState: 1, isAlive: true, ping() {}, on() {}, selfId: '' };
+  try {
+    kvSet('qq_owner_id', '10000000123');
+    // 断线时不探（没有连接就没什么可探的）
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    assert.equal(channel.liveness.lastCheckedAt, null, '没连接还去探活');
+
+    channel.clients.add(fake);
+    channel.sendAction = async () => { throw new Error('OneBot 调用超时'); };
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(channel.liveness.fails, 1, '第一次失败就计数');
+    assert.equal(channel.liveness.suspectSince, null, '一次失败就报警，太敏感');
+    assert.equal(listEvents(40).filter((e) => e.type === 'qq_silent_suspect').length, 0);
+
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(channel.liveness.fails, 2);
+    assert.ok(channel.liveness.suspectSince, '连续两次失败还没标记疑似失联');
+    assert.equal(listEvents(40).filter((e) => e.type === 'qq_silent_suspect').length, 1, '失联事件没落或重复');
+
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(listEvents(40).filter((e) => e.type === 'qq_silent_suspect').length, 1, '失联事件重复刷屏');
+
+    // 探通一次就该清掉
+    channel.sendAction = async () => ({ status: 'ok', retcode: 0, data: { user_id: 10000000123 } });
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(channel.liveness.suspectSince, null, '探通后还挂着失联标记');
+    assert.equal(channel.liveness.fails, 0);
+    assert.ok(channel.liveness.lastOkAt);
+    // 5 分钟内不重复探（避免每 30 秒都打一次 QQ 服务端）
+    const before = channel.liveness.lastCheckedAt;
+    channel.probeLiveness();
+    assert.equal(channel.liveness.lastCheckedAt, before, '5 分钟节流没生效');
+
+    // 接口本身不支持时：标成"探活不可用"，绝不冒充"消息进不来"
+    channel.sendAction = async () => ({ status: 'failed', retcode: 1404, data: null });
+    channel.livenessAt = 0;
+    channel.probeLiveness();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(channel.liveness.supported, false, 'retcode 非 0 却当成可用');
+    assert.equal(channel.liveness.suspectSince, null, '接口不支持却报失联');
+    assert.match(channel.liveness.error, /retcode 1404/);
   } finally {
     channel.destroy();
     server.close();

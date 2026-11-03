@@ -153,6 +153,14 @@ function healthAlerts() {
         : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码`,
     });
   }
+  const liveness = qq && qq.recovery && qq.recovery.liveness;
+  if (qq && qq.connected && liveness && liveness.suspectSince) {
+    out.push({
+      key: 'qq-silent',
+      level: 'danger',
+      text: `QQ 看着连着，但主动探活连续失败 ${liveness.fails} 次（${liveness.error || '超时'}）：你的消息可能进不来（20:03 那次就是这样静默失联 3.5 小时）`,
+    });
+  }
   try {
     const settings = loadSettings();
     const legacy = listPosts({ status: 'posted', limit: 50 }).find(
