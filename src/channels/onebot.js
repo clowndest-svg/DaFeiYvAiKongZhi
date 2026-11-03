@@ -114,7 +114,14 @@ export function extractMessage(event) {
       texts.push('[表情]');
       faces.push(seg.data || {});
     } else if (seg.type === 'mface' || seg.type === 'marketface') {
-      texts.push('[表情包]');
+      // QQ 表情商城的动画表情：NapCat 会给一个 gif 直链（url/pic_url），以前只塞了"[表情包]"没取图，
+      // 于是她连着几条都说"我这边空白一片"——不是网络问题，是我们根本没把图取过来。
+      const mfaceUrl = seg.data?.url || seg.data?.pic_url || '';
+      if (/^https?:\/\//i.test(mfaceUrl)) images.push(mfaceUrl);
+      // QQ 的 summary 经常就是字面的"[表情包]"，那种没有信息量，别当成名字喂给她。
+      const rawLabel = String(seg.data?.summary || seg.data?.emoji_name || '').replace(/[\[\]【】]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40);
+      const label = rawLabel && !/^(表情包?|动画表情|sticker)$/i.test(rawLabel) ? rawLabel : '';
+      texts.push(label ? `[表情包：${label}]` : '[表情包]');
       mfaces.push(seg.data || {});
     } else if (seg.type === 'record') {
       texts.push('[语音]');

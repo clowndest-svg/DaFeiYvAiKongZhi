@@ -61,7 +61,9 @@ export class Companion {
     }
     const cleanText = String(text || '').trim().slice(0, 20000);
     const cleanImages = (Array.isArray(images) ? images : [])
-      .filter((url) => typeof url === 'string' && /^data:image\/(png|jpe?g|webp);base64,/i.test(url))
+      // gif 必须在白名单里：QQ 表情商城的动图就是 gif。以前这里漏了它，图明明取到了
+      // 却被丢掉，她只能回"我这边空白一片"（实测 deepseek-flash 认 gif，能读出图里的字）。
+      .filter((url) => typeof url === 'string' && /^data:image\/(png|jpe?g|webp|gif);base64,/i.test(url))
       .filter((url) => url.length < 8 * 1024 * 1024)
       .slice(0, 4);
     if (!cleanText && !cleanImages.length) throw new Error('消息不能为空');
