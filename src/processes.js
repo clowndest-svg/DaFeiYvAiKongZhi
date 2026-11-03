@@ -83,14 +83,20 @@ export async function stopOwned(kind) {
   });
   return { stopped:targets.length, simulated:env.testMode };
 }
-// 要不要再起一个 NapCat：只有"确认没有 QQ 实例、也没有启动器"才允许。
-// 查不到一律不动手——重复实例比没实例更糟（它们会互相把登录挤掉）。
-export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown', qqRootCount = 0 } = {}) {
-  if (qqProbeState !== 'ok') return { start: false, reason: `QQ 实例查不到（${qqProbeState}），不重复启动` };
-  if (qqRootCount > 0) return { start: false, reason: `已经有 ${qqRootCount} 个机器人小号的 QQ 在跑，再起一个会互相挤下线` };
-  if (launcherCount > 0) return { start: false, reason: 'NapCat 启动器还在跑' };
-  return { start: true, reason: '没有 QQ 实例也没有启动器' };
+// 机器人小号的 QQ 根实例。守卫必须看这个，不能看启动器：
+// NapCatWinBootMain.exe 注入成功后会自己退出，于是旧守卫以为"什么都没跑"，
+// 每次重启都再起一个 → 同一账号多个实例互相挤下线（实测这台机器上堆到 8 个）。
+export function listBotQqRoots(account) {
+  const at = new Date().toISOString();
+  if (!/^\d{5,12}$/.test(String(account || ''))) return { state: 'unknown', roots: [], at, reason: '机器人小号没配置' };
+  if (env.testMode || process.platform !== 'win32') return { state: 'unknown', roots: [], at, reason: '非 Windows 或隔离测试，不查进程' };
+  try {
+    return { state: 'ok', roots: parseQqRoots(windowsQuery(qqRootQuery(account))), at, reason: '' };
+  } catch (error) {
+    return { state: 'unknown', roots: [], at, reason: String(error && error.message || error).slice(0, 80) };
+  }
 }
+
 
 // QQ 装在哪：注册表卸载项的 UninstallString 指向卸载程序，它和 QQ.exe 同一个目录。
 // 读不到就返回空串——调用方必须当成"不知道"，不许拿默认路径猜（猜错会去扫别处的 versions/，报个假版本）。
@@ -109,6 +115,18 @@ export function qqInstallDir() {
   });
 }
 
+// 要不要再起一个 NapCat：只有"确认没有 QQ 实例、也没有启动器"才允许。
+// 查不到一律不动手——重复实例比没实例更糟（它们会互相把登录挤掉）。
+export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown', qqRootCount = 0 } = {}) {
+  if (qqProbeState !== 'ok') return { start: false, reason: `QQ 实例查不到（${qqProbeState}），不重复启动` };
+  if (qqRootCount > 0) return { start: false, reason: `已经有 ${qqRootCount} 个机器人小号的 QQ 在跑，再起一个会互相挤下线` };
+  if (launcherCount > 0) return { start: false, reason: 'NapCat 启动器还在跑' };
+  return { start: true, reason: '没有 QQ 实例也没有启动器' };
+}
+
+// QQ 装在哪：注册表卸载项的 UninstallString 指向卸载程序，它和 QQ.exe 同一个目录。
+// 读不到就返回空串——调用方必须当成"不知道"，不许拿默认路径猜（猜错会去扫别处的 versions/，报个假版本）。
+// 用异步版：同步 spawn 会卡住事件循环，正在回的消息都被拖慢。
 export async function startNapCat() {
   if (env.testMode) return {simulated:true};
   if (process.platform!=='win32') throw new Error('当前 NapCat 启动入口仅支持 Windows');

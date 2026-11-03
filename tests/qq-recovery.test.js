@@ -216,6 +216,15 @@ test('NapCat 启动形状：继承隐藏控制台、只 spawn 一次、成功信
   assert.ok(launch.indexOf("listOwned('napcat').length) return") >= 0, '启动器还在跑时也算起来了');
 });
 
+test('进程工具的导出必须齐：少一个函数，整条启动链在运行时才炸', async () => {
+  const mod = await import('../src/processes.js');
+  for (const name of ['listBotQqRoots', 'listBotQqRootsAsync', 'countQqProcesses', 'shouldStartNapCat', 'startNapCat', 'stopOwned', 'listOwned', 'qqInstallDir', 'isOwnedProcess']) {
+    assert.equal(typeof mod[name], 'function', 'processes.js 少了导出：' + name);
+  }
+  const src = fs.readFileSync(path.join(ROOT, 'src', 'processes.js'), 'utf8');
+  assert.ok(!src.includes('buildHiddenLaunchVbs'), 'wscript + vbs 那条已删干净，别留死码');
+});
+
 test('启动守卫只看 QQ 实例，不看启动器（启动器会自己退出，看它就会越起越多）', async () => {
   const { shouldStartNapCat } = await import('../src/processes.js');
   const ok = { launcherCount: 0, qqProbeState: 'ok', qqRootCount: 0 };

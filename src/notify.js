@@ -21,6 +21,7 @@ export function toastScript(title, body) {
     '$n.Visible = $true',
     `$n.BalloonTipTitle = '${psQuote(title)}'`,
     `$n.BalloonTipText = '${psQuote(body)}'`,
+    '$ProgressPreference=SilentlyContinue;',
     '$n.ShowBalloonTip(15000)',
     'Start-Sleep -Seconds 16',
     '$n.Dispose()',
@@ -43,7 +44,9 @@ function runHiddenPowershell(script) {
     });
     child.once('close', (code) => {
       clearTimeout(timer);
-      resolve({ ok: code === 0, exitCode: code, error: stderr.replace(/\s+/g, ' ').trim().slice(0, 120) });
+      // 成功时不回收 CLIXML 的进度记录：那是 powershell 的噪音，留着会把"其实弹出来了"写得像出过事。
+      const clean = stderr.replace(/\s+/g, ' ').trim();
+      resolve({ ok: code === 0, exitCode: code, error: code === 0 ? '' : clean.slice(0, 120) });
     });
   });
 }
