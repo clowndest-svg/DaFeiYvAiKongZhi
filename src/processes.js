@@ -50,17 +50,21 @@ export async function stopOwned(kind) {
   });
   return { stopped:targets.length, simulated:env.testMode };
 }
-// 生成"隐藏窗口 + 脱离我们进程树"的启动脚本。
+// 生成"隐藏窗口 + 脱离我们进程树"的启动脚本（.vbs + WScript.Shell.Run）。
 // 为什么要脱离：实测父进程被杀（SIGKILL）或正常退出，detached:false 的子进程都会跟着死，
 // 所以每次轮换生产 = 把 NapCat 一起带走 = 要人重扫一次码。detached:true 的子进程能活下来，
 // 但 DETACHED_PROCESS 下 QQ.exe 会自己新建一个可见控制台（之前那个黑框）。
-// 用 Start-Process -WindowStyle Hidden 两头都占：窗口隐藏，且它的父（powershell）退出后它照样活。
-export function buildHiddenLaunchScript({ exe, args, cwd, logPath }) {
-  const q = (value) => `'${String(value).replace(/'/g, "''")}'`;
+// 两轮对照实验的结果：
+//   · spawn powershell detached → 脚本根本没跑起来（marker 文件没生成）
+//   · spawn wscript detached + Run(cmd, 0, False) → 跑起来了、wscript 退出后子进程还活着、可见窗口 0
+// 所以走 wscript；输出用 cmd 的 >> 追加，日志不会每次启动被清空。
+export function buildHiddenLaunchVbs({ exe, args, cwd, logPath }) {
+  const q = (value) => `"${String(value).replace(/"/g, '""')}"`;
+  const command = [q(exe), ...args.map(q)].join(' ');
   return [
-    '$ErrorActionPreference = "Stop"',
-    `$p = Start-Process -FilePath ${q(exe)} -ArgumentList ${args.map(q).join(',')} -WorkingDirectory ${q(cwd)} -WindowStyle Hidden -RedirectStandardOutput ${q(logPath)} -RedirectStandardError ${q(`${logPath}.err`)} -PassThru`,
-    'if (-not $p) { throw "start-process-failed" }',
+    'Set sh = CreateObject("WScript.Shell")',
+    `sh.CurrentDirectory = ${q(cwd)}`,
+    `sh.Run "cmd /c ${command} >> ${q(logPath)} 2>&1", 0, False`,
   ].join('\r\n');
 }
 
@@ -80,19 +84,17 @@ export async function startNapCat() {
   const args=[qq,path.join(napcatDir,'NapCatWinBootHook.dll'),account];
   const envVars={...process.env,NAPCAT_LOAD_PATH:path.join(napcatDir,'loadNapCat.js'),NAPCAT_INJECT_PATH:path.join(napcatDir,'NapCatWinBootHook.dll'),NAPCAT_MAIN_PATH:path.join(napcatDir,'napcat.mjs'),NAPCAT_PATCH_PACKAGE:path.join(napcatDir,'qqnt.json')};
 
-  // 首选：隐藏窗口 + 脱离进程树。脚本写进 data/（运行时生成，不进仓库），不用拼命令行引号。
+  // 首选：wscript 隐藏启动 + 脱离进程树。脚本写进 data/（运行时生成，不进仓库）。
   try {
-    const scriptPath=path.join(paths.data,'launch-napcat.ps1');
-    fs.writeFileSync(scriptPath, buildHiddenLaunchScript({exe,args,cwd:napcatDir,logPath}),'utf8');
-    const powershell=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',scriptPath],{
-      cwd:napcatDir, detached:true, windowsHide:true, stdio:'ignore', env:envVars,
-    });
-    powershell.unref();
+    const vbsPath=path.join(paths.data,'launch-napcat.vbs');
+    fs.writeFileSync(vbsPath, buildHiddenLaunchVbs({exe,args,cwd:napcatDir,logPath}),'utf8');
+    const wscript=spawn('wscript.exe',[vbsPath],{cwd:napcatDir,detached:true,windowsHide:true,stdio:'ignore',env:envVars});
+    wscript.unref();
     for(let i=0;i<16;i+=1){
       await new Promise((resolve)=>{setTimeout(resolve,500);});
       if(listOwned('napcat').length)return {started:true,mode:'detached-hidden'};
     }
-  } catch { /* 落到下面的老办法 */ }
+  } catch { /* 落到下面的保底 */ }
 
   // 保底：老办法（继承隐藏控制台）。它会被我们带走，但至少不会出现可见窗口。
   const log=fs.openSync(logPath,'a');
