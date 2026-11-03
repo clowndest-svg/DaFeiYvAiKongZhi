@@ -1,4 +1,4 @@
-import { loadSettings } from './config.js';
+import { env, loadSettings } from './config.js';
 import {
   addEvent,
   addPost,
@@ -33,6 +33,7 @@ import {
 import { generatePost, PLATFORM_LABELS, tryAutoPublish } from './social.js';
 import { isWithinWindow, localHour, nextShanghaiClock, nowIso, parseJsonLoose, pickMomentInWindow, randInt, shanghaiDayKey, sleep } from './util.js';
 import { processXhsExplore, processXhsOwnComments } from './channels/xhs-actions.js';
+import { checkNapcatVersions, lastVersionReport, versionCheckDue } from './napcat-versions.js';
 
 function localDayKey(date = new Date()) {
   return shanghaiDayKey(date);
@@ -802,6 +803,17 @@ export class Scheduler {
     }
   }
 
+  // QQ 会自己升级，NapCat 得跟着版本走。这一步只做"发现"：查官方最新版 + 扫 QQ 的 versions/，
+  // 结果落 kv 给界面读。装不装由人点头（tools/upgrade-napcat.mjs），所以这里绝不下载执行任何东西。
+  async maybeVersionCheck({ run = checkNapcatVersions, now = Date.now() } = {}) {
+    if (env.testMode) return null;
+    const lastAttempt = Number(kvGet('napcat_version_attempt_at', '0') || 0);
+    const decision = versionCheckDue({ now, lastAttemptAt: lastAttempt, report: lastVersionReport() });
+    if (!decision.due) return null;
+    kvSet('napcat_version_attempt_at', String(now));
+    return run();
+  }
+
   maybeMaintenance() {
     const day = localDayKey();
     if (kvGet('last_maintenance_day') === day) return;
@@ -939,6 +951,7 @@ export class Scheduler {
       await this.tickStep('睡前反思', () => this.maybeDream());
       await this.tickStep('小红书发笔记', () => this.maybeXhsPublish(), { risky: true });
       await this.tickStep('数据维护', () => this.maybeMaintenance());
+      await this.tickStep('版本对账', () => this.maybeVersionCheck());
       this.lastTick = nowIso();
     } finally {
       this.busy = false;

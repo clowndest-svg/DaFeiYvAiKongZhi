@@ -49,6 +49,7 @@ import { logger } from './logger.js';
 import { DeepSeek } from './llm.js';
 import { Companion } from './chat.js';
 import { Scheduler } from './scheduler.js';
+import { checkNapcatVersions, lastVersionReport, versionHintForOutage } from './napcat-versions.js';
 import { OneBotChannel } from './channels/onebot.js';
 import {
   clearQzoneCookie,
@@ -141,6 +142,12 @@ function healthAlerts() {
   if (qq && qq.connected && qq.identityOk === false) {
     out.push({ key: 'qq-identity', level: 'danger', text: `QQ 连着，但登录号不对：${qq.identityError}。所有发送已被拦下，先换回机器人小号。` });
   }
+  let versionHint = '';
+  try {
+    versionHint = versionHintForOutage(lastVersionReport());
+  } catch {
+    // 版本没读到不影响断连提示
+  }
   // 刚起来的几十秒里 NapCat 正在回连，这时报"QQ 断了 0 分钟"是假警报（顶栏还写着在线，自相矛盾）。
   if (qq && loadSettings().qq.enabled && !qq.connected && Number(qq.downMinutes) >= 1) {
     const rec = qq.recovery || {};
@@ -149,8 +156,8 @@ function healthAlerts() {
       key: 'qq',
       level: 'danger',
       text: rec.scanLocked
-        ? `QQ 断了 ${qq.downMinutes} 分钟，她在等你扫码${rejected}——扫码这段时间她不会动 NapCat`
-        : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码`,
+        ? `QQ 断了 ${qq.downMinutes} 分钟，她在等你扫码${rejected}——扫码这段时间她不会动 NapCat${versionHint}`
+        : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码${versionHint}`,
     });
   }
   const instances = qq && qq.connected && qq.recovery ? qq.recovery.instances : null;
@@ -160,6 +167,25 @@ function healthAlerts() {
       level: 'danger',
       text: `有 ${instances.count} 个同账号 QQ 实例在跑（PID ${instances.pids.join('、')}），它们会互相把登录挤掉——只留一个才稳`,
     });
+  }
+  // 版本这条只在"真查到有东西要跟进"时才占顶栏；单纯没查到不报警（那是未测，进 QQ 面板看）。
+  try {
+    const v = lastVersionReport();
+    if (v && (v.qqPendingUpdate || []).length) {
+      out.push({
+        key: 'qq-update',
+        level: 'warn',
+        text: `QQ 自己下载了 ${v.qqPendingUpdate.join('、')} 的更新包，下次 QQ 重启就换上；换上后她若连不上，先怀疑 NapCat 落后（${v.upgradeCommand}）`,
+      });
+    } else if (v && v.needsUpgrade === true) {
+      out.push({
+        key: 'napcat-update',
+        level: 'info',
+        text: `NapCat 官方出了 ${v.napcatLatest}（在用 ${v.napcatInstalled}）。现在能用就不必急着升，掉线修不好时再升：${v.upgradeCommand}`,
+      });
+    }
+  } catch {
+    // 版本对账读不到不影响状态接口
   }
   const liveness = qq && qq.recovery && qq.recovery.liveness;
   if (qq && qq.connected && liveness && liveness.suspectSince) {
@@ -514,6 +540,7 @@ const EXPENSIVE_API = new Set([
   '/api/presence/hear',
   '/api/presence/look',
   '/api/presence/speak',
+  '/api/qq/versions/check',
 ]);
 
 // 只锁"人点一下才跑"的只读重接口；/api/xhs/status 和 /api/xhs/qr 是前端定时轮询的，
@@ -621,6 +648,7 @@ async function handleApi(req, res, pathname, url) {
       scheduler: scheduler?.status() || null,
       search: searchStatus(),
       qq: onebot?.status() || null,
+      versions: lastVersionReport(),
       llmLastError: llm.lastError,
       lastUserMessageAt: lastUserMessageAt(),
       health: healthAlerts(),
@@ -1704,6 +1732,7 @@ async function handleApi(req, res, pathname, url) {
       tokenConfigured: Boolean(env.onebotToken),
       installed,
       dir: napcatDir,
+      versions: lastVersionReport(),
       status: onebot?.status() || null,
       ownerId: kvGet('qq_owner_id') || '',
       candidate,
@@ -1713,6 +1742,11 @@ async function handleApi(req, res, pathname, url) {
       learnedImages: onebot?.learnedImageCount?.() || 0,
       settings: loadSettings().qq,
     });
+  }
+
+  if (pathname === '/api/qq/versions/check' && method === 'POST') {
+    const report = env.testMode ? null : await checkNapcatVersions();
+    return sendJson(res, 200, { ok: true, report, command: report ? report.upgradeCommand : '' });
   }
 
   if (pathname === '/api/qq/stop' && method === 'POST') {

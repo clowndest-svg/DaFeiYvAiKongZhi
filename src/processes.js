@@ -123,6 +123,23 @@ export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown',
   return { start: true, reason: '没有 QQ 实例也没有启动器' };
 }
 
+// QQ 装在哪：注册表卸载项的 UninstallString 指向卸载程序，它和 QQ.exe 同一个目录。
+// 读不到就返回空串——调用方必须当成"不知道"，不许拿默认路径猜（猜错会去扫别处的 versions/，报个假版本）。
+// 用异步版：同步 spawn 会卡住事件循环，正在回的消息都被拖慢。
+export function qqInstallDir() {
+  if (env.testMode || process.platform !== 'win32') return Promise.resolve('');
+  return new Promise((resolve) => {
+    execFile('reg.exe', ['query', 'HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ', '/v', 'UninstallString'],
+      { encoding: 'utf8', windowsHide: true, timeout: 5000 },
+      (error, stdout) => {
+        const command = error ? '' : String(stdout).match(/REG_SZ\s+(.+)/)?.[1]?.trim().replace(/^"|"$/g, '');
+        if (!command) { resolve(''); return; }
+        const dir = path.dirname(command);
+        resolve(fs.existsSync(path.join(dir, 'QQ.exe')) ? dir : '');
+      });
+  });
+}
+
 export async function startNapCat() {
   if (env.testMode) return {simulated:true};
   if (process.platform!=='win32') throw new Error('当前 NapCat 启动入口仅支持 Windows');
@@ -137,9 +154,9 @@ export async function startNapCat() {
     qqRootCount: probe.roots.length,
   });
   if (!decision.start) return { already: true, reason: decision.reason, instances: probe.roots.length };
-  const reg=execFileSync('reg.exe',['query','HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','/v','UninstallString'],{encoding:'utf8',windowsHide:true,timeout:5000});
-  const command=reg.match(/REG_SZ\s+(.+)/)?.[1]?.trim().replace(/^"|"$/g,'');
-  const qq=command&&path.join(path.dirname(command),'QQ.exe');if(!qq||!fs.existsSync(qq))throw new Error('找不到 QQ 安装位置');
+  const dir = await qqInstallDir();
+  if (!dir) throw new Error('找不到 QQ 安装位置（注册表里没有可用的 QQ 卸载项）');
+  const qq = path.join(dir, 'QQ.exe');
   const napcatDir=path.join(paths.root,'napcat');
   const logPath=path.join(paths.logs,'napcat.out');
   const args=[qq,path.join(napcatDir,'NapCatWinBootHook.dll'),account];

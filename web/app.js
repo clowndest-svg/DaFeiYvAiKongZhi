@@ -2187,6 +2187,21 @@ async function loadQqSetup() {
   if (ownerInput && document.activeElement !== ownerInput && !ownerInput.dataset.dirty) ownerInput.value = data.ownerId || '';
   if (qq.lastError) lines.push(`最近错误：${String(qq.lastError).replace(/\s+/g, ' ').slice(0, 100)}`);
   lines.push(data.installed ? `NapCat 目录：${data.dir}` : 'NapCat 还没下载到 napcat/ 目录');
+  const ver = data.versions || null;
+  if (ver) {
+    lines.push(ver.napcatInstalled
+      ? `NapCat 版本：${ver.napcatInstalled}${ver.napcatInstalledAt ? `（${String(ver.napcatInstalledAt).slice(0, 10)} 装的）` : ''}`
+      : 'NapCat 版本：未记录（napcat/.napcat-release 不在，升级命令没法比对）');
+    if (!ver.napcatLatest) lines.push(`NapCat 官方最新版：未查到（${ver.lookupError || '这次对账没跑通'}）`);
+    else if (ver.needsUpgrade === true) lines.push(`NapCat 官方已有 ${ver.napcatLatest}，比在用的新；升级跑 ${ver.upgradeCommand}`);
+    else lines.push(`NapCat 官方最新 ${ver.napcatLatest}，在用的不落后`);
+    lines.push(ver.qqInstalled
+      ? `QQ 版本：${ver.qqInstalled}${(ver.qqPendingUpdate || []).length ? `｜已下载待装 ${ver.qqPendingUpdate.join('、')}，QQ 重启后就换上` : ''}`
+      : `QQ 版本：未读到（${ver.qqVersionsError || '没查到安装目录'}）`);
+    lines.push(`版本对账：${new Date(ver.at).toLocaleString('zh-CN', { hour12: false })}`);
+  } else {
+    lines.push('QQ/NapCat 版本对账：还没跑过（她每 12 小时自动查一次）');
+  }
   lines.push(`已学会 ${data.learnedImages || 0} 张图片表情 / ${data.learnedMfaces || 0} 个QQ表情包`);
   const rec = qq.recovery || null;
   if (rec) {
