@@ -1,0 +1,18 @@
+<!-- 2026-11-03 从 https://github.com/NapNeko/NapCatQQ/releases.atom 取的真实样本（正文截掉），判据拿它标定解析结构；正式版版本号是 v4.18.42。 -->
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:media="http://search.yahoo.com/mrss/" xml:lang="en-US">
+  <id>tag:github.com,2008:https://github.com/NapNeko/NapCatQQ/releases</id>
+  <link type="text/html" rel="alternate" href="https://github.com/NapNeko/NapCatQQ/releases"/>
+  <link type="application/atom+xml" rel="self" href="https://github.com/NapNeko/NapCatQQ/releases.atom"/>
+  <title>Release notes from NapCatQQ</title>
+  <updated>2026-10-30T07:01:21Z</updated>
+  <entry>
+    <id>tag:github.com,2008:Repository/777721566/v4.18.42</id>
+    <updated>2026-10-30T07:05:50Z</updated>
+    <link rel="alternate" type="text/html" href="https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.42"/>
+    <title>NapCat v4.18.42</title>
+    <content type="html">…（正文已截掉）</entry>
+<!-- 以下两个 entry 是照着同一结构补的反样本：预发布版、以及只有 feed 级 id -->
+<entry><id>tag:github.com,2008:Repository/777721566/v4.18.99-beta</id><category term="Prerelease" scheme="http://schemas.github.com/2008/atom#tag"/><link rel="alternate" type="text/html" href="https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.99-beta"/><title>NapCat v4.18.99-beta (Prerelease)</title></entry>
+<entry><id>tag:github.com,2008:Repository/777721566/v4.18.41</id><link rel="alternate" type="text/html" href="https://github.com/NapNeko/NapCatQQ/releases/tag/v4.18.41"/><title>NapCat v4.18.41</title></entry>
+</feed>

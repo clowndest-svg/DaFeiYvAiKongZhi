@@ -73,8 +73,18 @@ test('读不到 QQ 目录必须报 error，不能报"没有待更新的包"', ()
   assert.ok(missing.error, '目录不存在也要留下原因');
 });
 
+test('订阅源解析：只认 entry 里的正式版，feed 级 id 和预发布都不当版本号', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'napcat-releases.sample.atom'), 'utf8');
+  assert.equal(v.tagFromAtom(fixture), 'v4.18.42', '第一个正式版必须解析出来');
+  assert.equal(v.tagFromAtom('<feed><id>tag:github.com,2008:https://github.com/NapNeko/NapCatQQ/releases</id></feed>'), '', 'feed 自己的 id 不是版本号');
+  assert.equal(v.tagFromAtom('<feed><entry><id>tag:github.com,2008:Repository/1/v4.18.41</id></entry></feed>'), 'v4.18.41', '没有 link 形态时还得能从 Repository id 里取');
+  assert.equal(v.tagFromAtom('<feed><entry><id>tag:github.com,2008:Repository/1/v9.9.9-beta</id><category term="Prerelease"/></entry></feed>'), '', '预发布版不能当成可升的正式版');
+  assert.equal(v.tagFromAtom(''), '');
+});
+
 test('GitHub API 限流就退到订阅源：版本号还是要如实拿到', async () => {
-  const atom = '<feed><entry><id>/repos/NapNeko/NapCatQQ/releases/tags/v4.18.99</id></entry></feed>';
+  // 拿真实订阅源样本喂进去：上一版判据用的是我凭空写的 /tags/ 形态，代码跟着样本一起错，两边自洽却永远对不上 GitHub。
+  const atom = fs.readFileSync(path.join(ROOT, 'tests', 'fixtures', 'napcat-releases.sample.atom'), 'utf8');
   const calls = [];
   const tag = await v.fetchLatestTag({
     fetchImpl: async (url) => {
@@ -84,7 +94,7 @@ test('GitHub API 限流就退到订阅源：版本号还是要如实拿到', asy
         : { ok: true, text: async () => atom };
     },
   });
-  assert.equal(tag, 'v4.18.99', '限流不该变成"查不到"');
+  assert.equal(tag, 'v4.18.42', '限流不该变成查不到，样本里的正式版就是它');
   assert.equal(calls.length, 2, 'API 失败后必须真去读订阅源');
 });
 

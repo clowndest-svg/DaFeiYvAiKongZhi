@@ -72,6 +72,28 @@ const API_LATEST = 'https://api.github.com/repos/NapNeko/NapCatQQ/releases/lates
 const RELEASES_ATOM = 'https://github.com/NapNeko/NapCatQQ/releases.atom';
 export const RELEASE_DOWNLOAD = (tag) => 'https://github.com/NapNeko/NapCatQQ/releases/download/' + tag + '/NapCat.Shell.zip';
 
+// GitHub 的 releases.atom：每个 entry 里的 link 形如 .../releases/tag/v4.18.42，
+// 而 feed 自己的 id 是 .../NapCatQQ/releases（那不是版本号）。所以必须按 entry 取，别整篇正则。
+// 这里全用字符串切片：正则里的斜杠转义在跨语言传话时最容易掉一层。
+export function tagFromAtom(xml) {
+  const marker = '/releases/tag/';
+  for (const entry of String(xml || '').split('<entry>').slice(1)) {
+    if (entry.toLowerCase().includes('prerelease')) continue;
+    const at = entry.indexOf(marker);
+    if (at >= 0) {
+      const tag = entry.slice(at + marker.length).split('"')[0].split('<')[0].split(' ')[0];
+      if (tag) return tag;
+    }
+    const idAt = entry.indexOf('Repository/');
+    if (idAt >= 0) {
+      const parts = entry.slice(idAt).split('<')[0].split('/');
+      const tag = parts[parts.length - 1];
+      if (tag) return tag;
+    }
+  }
+  return '';
+}
+
 export async function fetchLatestTag({ fetchImpl = globalThis.fetch, timeoutMs = 8000 } = {}) {
   const headers = { 'user-agent': 'bizhi-version-check' };
   let apiError = '';
@@ -87,9 +109,9 @@ export async function fetchLatestTag({ fetchImpl = globalThis.fetch, timeoutMs =
   try {
     const res = await fetchImpl(RELEASES_ATOM, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) throw new Error('订阅源返回 ' + res.status);
-    const match = String(await res.text()).match(/<id>[^<]*\/tags\/([A-Za-z0-9._-]+)<\/id>/);
-    if (!match) throw new Error('订阅源里没找到版本号');
-    return match[1];
+    const tag = tagFromAtom(await res.text());
+    if (!tag) throw new Error('订阅源里没找到正式版版本号');
+    return tag;
   } catch (feedError) {
     throw new Error('API：' + apiError + '；订阅源：' + String(feedError.message || feedError).slice(0, 60));
   }
