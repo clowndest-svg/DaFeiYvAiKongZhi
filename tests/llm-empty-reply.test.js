@@ -77,11 +77,47 @@ test('503 过载：重试一次后按 HTTP 状态报错，不再伪装成"空回
   assert.match(err.value.message, /Service is too busy/, '上游原话要留着，别只留状态码');
 });
 
+test('被 max_tokens 截断：下一轮自动加大预算，不是原样再撞一次', async () => {
+  const bodies = [];
+  const { calls } = await withFetch((n, url, init) => {
+    bodies.push(JSON.parse(init.body));
+    return okJson('', 'length');
+  }, async () => {
+    await llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat', maxTokens: 1000 }).catch(() => {});
+    return null;
+  });
+  assert.equal(calls, 2);
+  assert.ok(bodies[1].max_tokens > bodies[0].max_tokens, '第二次必须给更多预算，否则推理又把正文吃光了');
+  assert.ok(bodies[1].max_tokens <= 4096, '别无限加，封顶 4096');
+});
+
+test('模型超时：说成中文超时、不白等第二轮', async () => {
+  let calls = 0;
+  const original = globalThis.fetch;
+  // 真实的 fetch 会听 signal；桩子也必须听，否则这个判据自己会永远挂着（刚踩过）。
+  globalThis.fetch = (url, init) => new Promise((resolve, reject) => {
+    calls += 1;
+    init.signal.addEventListener('abort', () => reject(init.signal.reason));
+  });
+  try {
+    let error = null;
+    await llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat', timeoutMs: 120 }).catch((e) => { error = e; });
+    assert.ok(error, '超时必须抛错');
+    assert.match(error.message, /模型响应超时/);
+    assert.equal(error.code, 'TIMEOUT');
+    assert.equal(calls, 1, '同一轮已经中止的 signal 不可能重试成功，别浪费一次请求');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test('错误分类：模型那一步的问题不许甩给 QQ 账号', () => {
   assert.equal(classifyReplyError({ code: 'EMPTY_REPLY', message: '模型没给出正文' }), 'model');
   assert.equal(classifyReplyError({ code: 'HTTP', message: 'DeepSeek 返回 HTTP 503：Service is too busy' }), 'model');
   assert.equal(classifyReplyError({ code: 'NO_KEY', message: '还没有配置 DeepSeek API Key' }), 'model');
   assert.equal(classifyReplyError({ message: '请求超时' }), 'model');
+  assert.equal(classifyReplyError({ code: 'TIMEOUT', message: '模型响应超时（60 秒没返回）' }), 'model');
+  assert.equal(classifyReplyError({ message: 'The operation was aborted due to timeout' }), 'model');
   assert.equal(classifyReplyError({ message: 'NapCat 还没连上' }), 'channel');
   assert.equal(classifyReplyError({ code: 'DELIVERY_UNKNOWN', message: '发送结果不确定' }), 'channel');
 });

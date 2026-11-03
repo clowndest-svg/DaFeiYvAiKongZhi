@@ -196,7 +196,7 @@ export function interpretLiveness({ timedOut = false, retcode = 0, error = '' } 
 
 export function classifyReplyError(error) {
   const text = String((error && error.code) || '') + ' ' + String((error && error.message) || error || '');
-  return /EMPTY_REPLY|STREAM_INCOMPLETE|HTTP|NO_KEY|超时|模型/.test(text) ? 'model' : 'channel';
+  return /EMPTY_REPLY|STREAM_INCOMPLETE|HTTP|NO_KEY|TIMEOUT|超时|模型|aborted|timeout/i.test(text) ? 'model' : 'channel';
 }
 
 export class OneBotChannel {
@@ -1311,7 +1311,12 @@ ${history}
       this.lastErrorKind = classifyReplyError(error);
       addEvent('qq_error', 'QQ 回复失败，已把错误记在控制台', { error: error.message, kind: this.lastErrorKind });
       if (error.code !== 'DELIVERY_UNKNOWN') {
-        try { await this.sendToTarget(buffer.target, '呜，我这边卡了一下……等下再跟我说一次好不好'); }
+        const slow = /超时|TIMEOUT|timeout|aborted/i.test(String(error.code || '') + ' ' + String(error.message || ''));
+        try {
+          await this.sendToTarget(buffer.target, slow
+            ? '我这边生成卡住了，超时没写完……不是不想理你。你再发一次，我在。'
+            : '呜，我这边卡了一下……等下再跟我说一次好不好');
+        }
         catch { /* 通道已断开 */ }
       }
       throw error;

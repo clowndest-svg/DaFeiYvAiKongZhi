@@ -307,6 +307,8 @@ export class Companion {
       sessionId: prep.session.id,
       mockKind: 'chat',
       signal: opts.signal,
+      // 聊天最多等 60 秒：等满 120 秒再放弃，对他来说就是"她不理我"。
+      timeoutMs: Math.max(20000, Number(prep.settings.model.chatTimeoutMs || 60000)),
     });
     opts.signal?.throwIfAborted();
     const parsed = parseReply(result.content, prep.settings.companion?.name);

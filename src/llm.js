@@ -180,11 +180,21 @@ export class DeepSeek {
         this.lastCallAt = new Date().toISOString(); this.lastError = null;
         return result;
       } catch (error) {
-        this.lastError = logger.redact(error.message);
-        if (signal.aborted) throw signal.reason;
-        const retry = !(error instanceof LlmError) || error.retryable === true || isRetryableStatus(error.status);
-        if (!retry || attempt === 1) throw error;
-        await wait(900, undefined, { signal });
+        // 超时被中止时，原始的 reason 是一句英文的 DOMException，不管日志还是界面都看不出是"模型慢"。
+        const normalized = signal.aborted
+          ? new LlmError('模型响应超时（' + Math.round((opts.timeoutMs || 120000) / 1000) + ' 秒没返回）', { code: 'TIMEOUT', retryable: true })
+          : error;
+        this.lastError = logger.redact(normalized.message);
+        // 这条 signal 带着一次性的截止时间，已经中止就不可能重试成功——直接报，别白等第二轮。
+        if (signal.aborted) throw normalized;
+        const retry = !(normalized instanceof LlmError) || normalized.retryable === true || isRetryableStatus(normalized.status);
+        if (!retry || attempt === 1) throw normalized;
+        // 被 max_tokens 截断时原样重试没用：推理那部分把预算吃光了，下一轮得给更多。
+        if (normalized.code === 'EMPTY_REPLY' && /max_tokens|length/.test(normalized.message)) {
+          body.max_tokens = Math.min(4096, Math.round(Number(body.max_tokens || 1400) * 2));
+          logger.warn('模型正文被截断，这一轮加大预算重试', { maxTokens: body.max_tokens });
+        }
+        await wait(900, undefined, { signal: AbortSignal.timeout(30000) });
       }
     }
   }
