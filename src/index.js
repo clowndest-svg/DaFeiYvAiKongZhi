@@ -153,6 +153,14 @@ function healthAlerts() {
         : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码`,
     });
   }
+  const instances = qq && qq.connected && qq.recovery ? qq.recovery.instances : null;
+  if (instances && instances.state === 'ok' && instances.count > 1) {
+    out.push({
+      key: 'qq-duplicate',
+      level: 'danger',
+      text: `有 ${instances.count} 个同账号 QQ 实例在跑（PID ${instances.pids.join('、')}），它们会互相把登录挤掉——只留一个才稳`,
+    });
+  }
   const liveness = qq && qq.recovery && qq.recovery.liveness;
   if (qq && qq.connected && liveness && liveness.suspectSince) {
     out.push({

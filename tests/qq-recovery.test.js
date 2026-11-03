@@ -218,6 +218,67 @@ test('隐藏启动脚本：wscript 走 0 号窗口、路径带空格也要被引
   assert.match(quoted, /"D:\/a""b\/x\.exe"/);
 });
 
+test('启动守卫只看 QQ 实例，不看启动器（启动器会自己退出，看它就会越起越多）', async () => {
+  const { shouldStartNapCat } = await import('../src/processes.js');
+  const ok = { launcherCount: 0, qqProbeState: 'ok', qqRootCount: 0 };
+  assert.equal(shouldStartNapCat(ok).start, true);
+  assert.equal(shouldStartNapCat({ ...ok, qqRootCount: 1 }).start, false, '已经有一个实例还要再起');
+  assert.equal(shouldStartNapCat({ ...ok, qqRootCount: 8 }).start, false, '八个实例还不起第九个？');
+  assert.equal(shouldStartNapCat({ ...ok, qqProbeState: 'unknown' }).start, false, '查不到实例状态就动手');
+  assert.equal(shouldStartNapCat({ ...ok, launcherCount: 1 }).start, false, '启动器还在跑还起新的');
+  // 关键回归：启动器为 0 但 QQ 实例在跑——旧代码就是在这里误判，堆出 8 个实例
+  assert.equal(shouldStartNapCat({ launcherCount: 0, qqProbeState: 'ok', qqRootCount: 3 }).start, false);
+});
+
+test('重复实例要被发现并报警一次，单实例不打扰', async () => {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const fake = { readyState: 1, isAlive: true, ping() {}, on() {}, selfId: '' };
+  const calls = [];
+  const channel = new OneBotChannel({
+    server,
+    companion: {},
+    instancesProbe: async (account) => { calls.push(account); return { state: 'ok', roots: [{ pid: 111, parent: 1 }, { pid: 222, parent: 2 }], at: new Date().toISOString(), reason: '' }; },
+  });
+  try {
+    kvSet('qq_self_id', '10000000123');
+    channel.clients.add(fake);
+    await channel.checkInstances();
+    await channel.checkInstances();
+    await channel.checkInstances();
+    const snapshot = channel.recoverySnapshot();
+    assert.equal(snapshot.instances.count, 2, '重复实例没被数出来');
+    assert.equal(calls.length, 1, '5 分钟节流没生效，被连查三次');
+    const events = listEvents(60).filter((e) => e.type === 'qq_duplicate_instances');
+    assert.equal(events.length, 1, `重复实例告警应当一条，实际 ${events.length} 条`);
+
+    const single = new OneBotChannel({
+      server,
+      companion: {},
+      instancesProbe: async () => ({ state: 'ok', roots: [{ pid: 333, parent: 1 }], at: new Date().toISOString(), reason: '' }),
+    });
+    single.clients.add(fake);
+    await single.checkInstances();
+    assert.equal(single.recoverySnapshot().instances.count, 1);
+    assert.ok(!listEvents(20).slice(0, 3).some((e) => e.type === 'qq_duplicate_instances' && e.message.includes('1 个')));
+    single.destroy();
+
+    const blind = new OneBotChannel({
+      server,
+      companion: {},
+      instancesProbe: async () => ({ state: 'unknown', roots: [], at: new Date().toISOString(), reason: '查询失败' }),
+    });
+    blind.clients.add(fake);
+    await blind.checkInstances();
+    assert.equal(blind.recoverySnapshot().instances.state, 'unknown', '查不到却报了数');
+    assert.equal(blind.recoverySnapshot().instances.count, 0);
+    blind.destroy();
+  } finally {
+    channel.destroy();
+    server.close();
+  }
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(dataDir, { recursive: true, force: true });

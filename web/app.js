@@ -2212,6 +2212,15 @@ async function loadQqSetup() {
     if (rec.napcatLogin && rec.napcatLogin.errCode) {
       lines.push(`NapCat 登录被拒：ErrType ${rec.napcatLogin.errType} / ErrCode ${rec.napcatLogin.errCode}（napcat.out 里累计 ${rec.napcatLogin.count} 条）——多半是这个号还在别的设备上登录着，先在那台设备退出再来扫`);
     }
+    if (rec.instances) {
+      if (rec.instances.state === 'ok') {
+        lines.push(rec.instances.count > 1
+          ? `同账号 QQ 实例 ${rec.instances.count} 个（PID ${rec.instances.pids.join('、')}）——它们会互相挤下线，这就是反复掉线的来源`
+          : `同账号 QQ 实例 ${rec.instances.count} 个`);
+      } else {
+        lines.push(`同账号 QQ 实例数：未测（${rec.instances.reason || '查不到进程'}）`);
+      }
+    }
     if (rec.liveness && qq.connected) {
       const okAt = rec.liveness.lastOkAt ? new Date(rec.liveness.lastOkAt).toLocaleTimeString('zh-CN', { hour12: false }) : '';
       if (rec.liveness.supported === false) {

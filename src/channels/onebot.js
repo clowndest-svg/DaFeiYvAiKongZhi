@@ -182,9 +182,11 @@ export function shouldBootStartNapCat({
 }
 
 export class OneBotChannel {
-  constructor({ server, companion, onCommand = null, synthesize = synthesizeSpeech, qrPath = null } = {}) {
+  constructor({ server, companion, onCommand = null, synthesize = synthesizeSpeech, qrPath = null, instancesProbe = null } = {}) {
     this.companion = companion;
     this.synthesizeSpeech = synthesize;
+    // 测试注入用：不注入就走真实的进程查询（异步版）
+    this.instancesProbe = instancesProbe;
     // NapCat 只在"要扫码"时写这张图；测试用注入路径，不去碰真 NapCat 的缓存目录。
     this.qrPath = qrPath || path.join(paths.root, 'napcat', 'cache', 'qrcode.png');
     this.outboundScope = new AsyncLocalStorage();
@@ -211,6 +213,9 @@ export class OneBotChannel {
       outage: null,
     };
     this.accountProbeAt = 0;
+    this.instanceCheckAt = 0;
+    this.duplicateAlertAt = 0;
+    this.instances = { state: 'unknown', count: 0, pids: [], at: null, reason: '' };
     // 主动探活（真的去 QQ 服务端走一圈）的结果；只用于报警，不触发任何进程操作。
     this.livenessAt = 0;
     this.liveness = { checking: false, fails: 0, lastOkAt: null, lastCheckedAt: null, suspectSince: null, error: '' };
@@ -258,6 +263,7 @@ export class OneBotChannel {
       this.pruneSeenMessages();
       this.checkConnectionHealth();
       this.probeLiveness();
+      this.checkInstances().catch(() => {});
       for (const ws of this.clients) {
         if (ws.isAlive === false) {
           try {
@@ -423,6 +429,7 @@ export class OneBotChannel {
       bootStart: rec.bootStart || null,
       napcatLogin: this.clients.size ? null : this.napcatLoginHealth(),
       liveness: this.liveness,
+      instances: this.instances,
       stats7d: {
         count: week.length,
         totalMinutes,
@@ -471,6 +478,28 @@ export class OneBotChannel {
           applyNeuroEvent('channel_down');
         }
       });
+  }
+
+  // 同账号多个 QQ 实例会互相把登录挤掉（这台机器曾经堆到 8 个）。
+  // 探测走异步：同步查进程会卡住事件循环，正在回的消息会被拖慢半秒。
+  async checkInstances() {
+    const now = Date.now();
+    if (now - this.instanceCheckAt < 5 * 60000) return this.instances;
+    this.instanceCheckAt = now;
+    if (!this.clients.size) return this.instances;
+    const account = String(kvGet('qq_self_id') || loadSettings().qq?.botAccount || '');
+    const probe = this.instancesProbe || (await import('../processes.js')).listBotQqRootsAsync;
+    try {
+      const result = await probe(account);
+      this.instances = { state: result.state, count: result.roots.length, pids: result.roots.map((r) => r.pid), at: result.at, reason: result.reason || '' };
+      if (result.state === 'ok' && result.roots.length > 1 && now - (this.duplicateAlertAt || 0) > 30 * 60000) {
+        this.duplicateAlertAt = now;
+        addEvent('qq_duplicate_instances', `有 ${result.roots.length} 个同账号 QQ 实例在跑，它们会互相挤下线`, { pids: this.instances.pids });
+      }
+    } catch (error) {
+      this.instances = { state: 'unknown', count: 0, pids: [], at: new Date().toISOString(), reason: String(error.message).slice(0, 60) };
+    }
+    return this.instances;
   }
 
   checkConnectionHealth() {
