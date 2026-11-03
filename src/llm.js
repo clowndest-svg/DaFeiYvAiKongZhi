@@ -151,7 +151,8 @@ export class DeepSeek {
     const body = this.buildBody(messages, { ...opts, stream: false });
     const deadline = AbortSignal.timeout(opts.timeoutMs || 120000);
     const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
-    for (let attempt = 0; attempt < 2; attempt += 1) {
+    // 上游 503/空正文经常一缓就好：给两次重试，间隔递增，别让一次抖动直接哑掉。
+    for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         const res = await fetch(this.baseUrl + '/chat/completions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
@@ -188,13 +189,13 @@ export class DeepSeek {
         // 这条 signal 带着一次性的截止时间，已经中止就不可能重试成功——直接报，别白等第二轮。
         if (signal.aborted) throw normalized;
         const retry = !(normalized instanceof LlmError) || normalized.retryable === true || isRetryableStatus(normalized.status);
-        if (!retry || attempt === 1) throw normalized;
+        if (!retry || attempt === 2) throw normalized;
         // 被 max_tokens 截断时原样重试没用：推理那部分把预算吃光了，下一轮得给更多。
         if (normalized.code === 'EMPTY_REPLY' && /max_tokens|length/.test(normalized.message)) {
           body.max_tokens = Math.min(4096, Math.round(Number(body.max_tokens || 1400) * 2));
           logger.warn('模型正文被截断，这一轮加大预算重试', { maxTokens: body.max_tokens });
         }
-        await wait(900, undefined, { signal: AbortSignal.timeout(30000) });
+        await wait(attempt === 0 ? 900 : 2500, undefined, { signal: AbortSignal.timeout(30000) });
       }
     }
   }

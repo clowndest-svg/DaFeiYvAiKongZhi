@@ -123,8 +123,8 @@
   "tts": {
     "enabled": true,
     "voice": "zh-CN-XiaoxiaoNeural",
-    "rate": "+8%",
-    "pitch": "+2Hz",
+    "rate": "+2%",
+    "pitch": "-12Hz",
     "volume": "",
     "listen": true,
     "maxPerDay": 8,

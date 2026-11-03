@@ -49,7 +49,7 @@ test('上游 200 但正文空：说清是上游的问题，并自动重试一次
   assert.ok(value, '空正文必须抛错，不能把空串当回复');
   assert.match(value.message, /模型没给出正文/);
   assert.match(value.message, /max_tokens|正文是空的/, '必须带上是哪种空法，别只写"没有产出有效回复"');
-  assert.equal(calls, 2, '空正文是上游抽风的典型形状，要重试一次再报错');
+  assert.equal(calls, 3, '空正文最多试 3 次（原请求 + 两次重试）再报错');
 });
 
 test('重试真的能自愈：第一次空、第二次有正文就正常用', async () => {
@@ -57,7 +57,7 @@ test('重试真的能自愈：第一次空、第二次有正文就正常用', as
     (n) => (n === 1 ? okJson('') : okJson('嗯，我在。')),
     () => llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat' }),
   );
-  assert.equal(calls, 2);
+  assert.equal(calls, 2, '第二次就自愈了，不该再试第三次');
   assert.equal(value.content, '嗯，我在。');
 });
 
@@ -67,7 +67,7 @@ test('503 过载：重试一次后按 HTTP 状态报错，不再伪装成"空回
     await llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat' }).catch((e) => { error = e; });
     return error;
   });
-  assert.equal(calls, 2, '503 属于可重试状态');
+  assert.equal(calls, 3, '503 属于可重试状态，最多试 3 次');
   const err = await withFetch(() => errText(503), async () => {
     let e2 = null;
     await llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat' }).catch((e) => { e2 = e; });
@@ -86,9 +86,10 @@ test('被 max_tokens 截断：下一轮自动加大预算，不是原样再撞�
     await llm().chat([{ role: 'user', content: '在吗' }], { kind: 'chat', maxTokens: 1000 }).catch(() => {});
     return null;
   });
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.ok(bodies[1].max_tokens > bodies[0].max_tokens, '第二次必须给更多预算，否则推理又把正文吃光了');
   assert.ok(bodies[1].max_tokens <= 4096, '别无限加，封顶 4096');
+  assert.ok(bodies[2].max_tokens >= bodies[1].max_tokens, '截断只升不降');
 });
 
 test('模型超时：说成中文超时、不白等第二轮', async () => {

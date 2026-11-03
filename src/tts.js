@@ -10,7 +10,7 @@ import { LocalTtsRunner } from './local-tts.js';
 export const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
 
 export const VOICE_CATALOG = [
-  { id: 'zh-CN-XiaoxiaoNeural', label: '小晓 · 温柔大姐姐', note: '最自然，默认' },
+  { id: 'zh-CN-XiaoxiaoNeural', label: '小晓 · 御姐档（慢速低音）', note: '默认：+2% 速度、-12Hz 音高' },
   { id: 'zh-CN-XiaoyiNeural', label: '晓伊 · 软糯活泼', note: '偏少女' },
   { id: 'zh-TW-HsiaoChenNeural', label: '晓臻 · 台式轻软', note: '声音很轻' },
   { id: 'zh-TW-HsiaoYuNeural', label: '晓雨 · 气声甜', note: '气声多' },
@@ -166,7 +166,7 @@ export function piperReady() {
 
 export async function synthesizeSpeech(
   text,
-  { voice = DEFAULT_VOICE, rate = '+8%', pitch = '+2Hz', volume = '', maxChars = 160 } = {},
+  { voice = DEFAULT_VOICE, rate = '+2%', pitch = '-12Hz', volume = '', maxChars = 160 } = {},
 ) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim().slice(0, maxChars);
   if (!clean) throw new Error('没有要说的话');
@@ -190,7 +190,7 @@ export async function synthesizeSpeech(
   if (chosen !== 'local-piper') {
     const mp3 = path.join(paths.media, `voice-${stamp}.mp3`);
     try {
-      await edgeCliSynthesize(clean, { voice: chosen, rate: signed(rate, /^[+-][0-9]{1,3}%$/, '+8%'), pitch: signed(pitch, /^[+-][0-9]{1,3}Hz$/, '+2Hz'), volume: signed(volume, /^[+-][0-9]{1,3}%$/, '') }, mp3);
+      await edgeCliSynthesize(clean, { voice: chosen, rate: signed(rate, /^[+-][0-9]{1,3}%$/, '+2%'), pitch: signed(pitch, /^[+-][0-9]{1,3}Hz$/, '-12Hz'), volume: signed(volume, /^[+-][0-9]{1,3}%$/, '') }, mp3);
       const bytes = fs.statSync(mp3).size;
       logger.info('语音已合成（edge 音色）', { bytes, chars: clean.length, voice: chosen });
       return { file: mp3, bytes, mime: 'audio/mpeg', engine: 'edge', voice: chosen, text: clean };
