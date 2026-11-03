@@ -150,14 +150,21 @@ function healthAlerts() {
     // 版本没读到不影响断连提示
   }
   // 刚起来的几十秒里 NapCat 正在回连，这时报"QQ 断了 0 分钟"是假警报（顶栏还写着在线，自相矛盾）。
+  // 腾讯风控（QQ 安全中心"设备存在外挂/第三方软件，已对风险设备下线"）在这台机器上出现过：
+  // 它的形状就是 ErrCode 3 反复刷 + 二维码一张接一张。这时候说"等你扫码"是骗人——扫了也可能马上被再踢。
   if (qq && loadSettings().qq.enabled && !qq.connected && Number(qq.downMinutes) >= 1) {
     const rec = qq.recovery || {};
     const rejected = rec.rejected && rec.rejected.count ? `，而且她这边拒过 ${rec.rejected.count} 次握手（${rec.rejected.lastReason}）` : '';
+    // 腾讯风控（QQ 安全中心「设备存在外挂/第三方软件，已对风险设备下线」）在这台机器上出现过：
+    // 形状就是 ErrCode 3 反复刷 + 二维码一张接一张。这时候说"等你扫码"是骗人——扫了也可能马上被再踢。
+    const riskKicked = rec.napcatLogin && rec.napcatLogin.errCode === 3 && rec.napcatLogin.count >= 5;
     out.push({
       key: 'qq',
       level: 'danger',
       text: rec.scanLocked
-        ? `QQ 断了 ${qq.downMinutes} 分钟，她在等你扫码${rejected}——扫码这段时间她不会动 NapCat${versionHint}`
+        ? (riskKicked
+          ? `QQ 断了 ${qq.downMinutes} 分钟：腾讯风控判定这台设备有"外挂/第三方软件"，已把它强制下线（QQ 安全中心有记录）。扫码可能进不去、进了也可能再被踢；要么先停用 QQ 通道，要么接受反复重扫。`
+          : `QQ 断了 ${qq.downMinutes} 分钟，她在等你扫码${rejected}——扫码这段时间她不会动 NapCat${versionHint}`)
         : `QQ 断了 ${qq.downMinutes} 分钟，只等 NapCat 自己回连${rejected}；要重新登录就去设置里生成二维码${versionHint}`,
     });
   }

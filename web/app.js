@@ -2221,7 +2221,7 @@ async function loadQqSetup() {
       lines.push(`有 ${gap.minutes} 分钟她自己的定时器没跑（${String(gap.at).slice(11, 16)} 起）——电脑睡眠或进程被挂起，未确认`);
     }
     if (rec.napcatLogin && rec.napcatLogin.errCode) {
-      lines.push(`NapCat 登录被拒：ErrType ${rec.napcatLogin.errType} / ErrCode ${rec.napcatLogin.errCode}（napcat.out 里累计 ${rec.napcatLogin.count} 条）——多半是这个号还在别的设备上登录着，先在那台设备退出再来扫`);
+      lines.push(`NapCat 登录被拒：ErrType ${rec.napcatLogin.errType} / ErrCode ${rec.napcatLogin.errCode}（napcat.out 里累计 ${rec.napcatLogin.count} 条）——QQ 安全中心把这台设备判成了「存在外挂或第三方软件」并强制下线（风险类型：设备存在外挂或其他软件影响 QQ 正常使用）。这不是普通掉线：扫码可能进不去，进了也可能再被踢`);
     }
     if (rec.instances) {
       if (rec.instances.state === 'ok') {
