@@ -88,6 +88,59 @@ test('发现新鲜二维码 → 挂扫码锁；码是旧的 → 不挂锁；文�
   }
 });
 
+test('NapCat 登录被拒要能读出来（ErrType/ErrCode 埋在 napcat.out 里，界面不该靠猜）', async () => {
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const channel = new OneBotChannel({ server, companion: {} });
+  try {
+    const { paths } = await import('../src/config.js');
+    fs.mkdirSync(paths.logs, { recursive: true });
+    const file = path.join(paths.logs, 'napcat.out');
+    fs.writeFileSync(file, [
+      '11-03 01:10:58 warn 二维码已保存',
+      '11-03 01:12:59 error [Core] [Login] Login Error,ErrType:  1  ErrCode: 3',
+      '11-03 01:14:59 error [Core] [Login] Login Error,ErrType:  1  ErrCode: 3',
+    ].join('\n'), 'utf8');
+    channel.loginLogAt = 0;
+    const health = channel.napcatLoginHealth();
+    assert.equal(health.count, 2, `登录错误条数不对：${health.count}`);
+    assert.equal(health.errType, 1);
+    assert.equal(health.errCode, 3);
+    // 30 秒缓存：改文件后不该立刻重读（避免状态轮询狂读 1.7MB 日志）
+    fs.appendFileSync(file, '\n11-03 01:16:59 error Login Error,ErrType: 1 ErrCode: 9\n');
+    assert.equal(channel.napcatLoginHealth().count, 2, '缓存没生效，状态轮询会反复读日志');
+    channel.loginLogAt = 0;
+    assert.equal(channel.napcatLoginHealth().errCode, 9, '缓存过期后应读到最新一条');
+  } finally {
+    channel.destroy();
+    server.close();
+  }
+});
+
+test('通道连着但账号离线，要落一条可追溯的事件（这种"假活"之前只存在内存里）', async () => {
+  const { listEvents } = await import('../src/db.js');
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const channel = new OneBotChannel({ server, companion: {} });
+  try {
+    // 伪装一次成功的 get_status：账号离线
+    channel.sendAction = async () => ({ status: 'ok', data: { online: false, good: true } });
+    channel.accountProbeAt = 0;
+    channel.probeAccount();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const events = listEvents(30).filter((e) => e.type === 'qq_account_offline');
+    assert.equal(events.length, 1, `账号离线没落事件（${events.length} 条）`);
+    // 连续两次离线只记一条，别刷屏
+    channel.accountProbeAt = 0;
+    channel.probeAccount();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(listEvents(30).filter((e) => e.type === 'qq_account_offline').length, 1, '离线事件重复刷屏');
+  } finally {
+    channel.destroy();
+    server.close();
+  }
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(dataDir, { recursive: true, force: true });

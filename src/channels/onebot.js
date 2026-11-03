@@ -332,11 +332,45 @@ export class OneBotChannel {
           return;
         }
         this.recovery.account = { state: data.online ? 'online' : 'offline', checkedAt: new Date().toISOString(), reason: data.good === false ? 'good=false' : '' };
+        if (!data.online && this.lastAccountState !== 'offline') {
+          // 通道还连着、但 NapCat 报账号离线：多半是同一账号在别的设备登录把这边踢了。
+          addEvent('qq_account_offline', 'QQ 账号掉线了（通道还连着）：可能这个号在别的设备上登录了', { good: data.good === true });
+          applyNeuroEvent('channel_down');
+        }
+        this.lastAccountState = data.online ? 'online' : 'offline';
         if (data.online && this.recovery.outage) this.recovery.outage.scanned = true;
       })
       .catch((error) => {
         this.recovery.account = { state: 'unknown', checkedAt: new Date().toISOString(), reason: String(error.message).slice(0, 60) };
       });
+  }
+
+  // NapCat 的登录失败只写在它的 stdout 里（data/logs/napcat.out），以前没人看。
+  // 断线时把它最后一条 Login Error 捞出来，界面才能说"这次不是断网，是登录被拒"。
+  napcatLoginHealth() {
+    const now = Date.now();
+    if (this.loginLogAt && now - this.loginLogAt < 30000) return this.loginLogState;
+    this.loginLogAt = now;
+    try {
+      const file = path.join(paths.logs, 'napcat.out');
+      const size = fs.statSync(file).size;
+      const span = Math.min(size, 200000);
+      const fd = fs.openSync(file, 'r');
+      const buf = Buffer.alloc(span);
+      fs.readSync(fd, buf, 0, span, size - span);
+      fs.closeSync(fd);
+      const lines = buf.toString('utf8').split(/\r?\n/).filter((line) => /Login Error/i.test(line));
+      const match = lines.length ? /ErrType:\s*(\d+)\s*ErrCode:\s*(\d+)/.exec(lines[lines.length - 1]) : null;
+      this.loginLogState = {
+        count: lines.length,
+        errType: match ? Number(match[1]) : null,
+        errCode: match ? Number(match[2]) : null,
+        at: new Date(now).toISOString(),
+      };
+    } catch {
+      this.loginLogState = { count: 0, errType: null, errCode: null, at: new Date(now).toISOString(), error: '读不到 napcat.out' };
+    }
+    return this.loginLogState;
   }
 
   // 给状态接口/界面用的恢复快照。字段名一旦定了界面就照着显示，别处不许另算一套口径。
@@ -361,6 +395,7 @@ export class OneBotChannel {
       monitorGaps: rec.monitorGaps.slice(-5),
       outage: rec.outage,
       bootStart: rec.bootStart || null,
+      napcatLogin: this.clients.size ? null : this.napcatLoginHealth(),
       stats7d: {
         count: week.length,
         totalMinutes,

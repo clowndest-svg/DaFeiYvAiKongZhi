@@ -253,7 +253,7 @@ async function loadStatus() {
   renderStatus();
   if (previous && previous.qq?.connected !== status.qq?.connected) {
     if (status.qq?.connected) toast('QQ 已连接，她可以在 QQ 里说话了。');
-    else toast('QQ 断开了，正在等她自愈；不行就要重新扫码。', 'error');
+    else toast('QQ 断开了：她不会去重启 NapCat（那会踢掉登录），详情看「设置 → QQ」。', 'error');
     loadQqSetup().catch(() => {});
   }
   if (previous?.qq?.identityOk !== status.qq?.identityOk && status.qq?.connected && status.qq?.identityOk === false) {
@@ -321,6 +321,28 @@ function renderStatus() {
   $('#qqState').textContent = qq.connected
     ? `已连接${maskedSelf ? ` · ${maskedSelf}` : ''}${identityTag ? `（${identityTag}）` : ''}${sendIssue}`
     : '未连接';
+
+  // 他不在设置页也得知道 QQ 断了：改标题，并按"每次断连只一次"弹桌面通知。
+  const qqDown = Number(qq.downMinutes) >= 1 && !qq.connected && status.settings?.enabled !== false;
+  const baseTitle = document.title.replace(/^⚠ QQ 断开 · /, '');
+  document.title = qqDown ? `⚠ QQ 断开 · ${baseTitle}` : baseTitle;
+  const notifyBtn = $('#qqNotifyBtn');
+  if (notifyBtn) notifyBtn.hidden = typeof Notification === 'undefined' || Notification.permission !== 'default';
+  if (qqDown) {
+    const stamp = qq.recovery?.outage?.startedAt || 'down';
+    if (state.qqDownNotified !== stamp) {
+      state.qqDownNotified = stamp;
+      const login = qq.recovery?.napcatLogin;
+      const why = login?.errCode ? `NapCat 登录被拒（ErrType ${login.errType} / ErrCode ${login.errCode}）` : '去「设置 → QQ」看是扫码还是登录被拒';
+      try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          new Notification('小知的 QQ 断开了', { body: `已断 ${Math.round(qq.downMinutes)} 分钟：${why}` });
+        }
+      } catch {
+        /* 通知失败不影响页面 */
+      }
+    }
+  }
 
   const counts = status.memoryCounts;
   if (counts) {
@@ -2187,6 +2209,9 @@ async function loadQqSetup() {
       const gap = rec.monitorGaps[rec.monitorGaps.length - 1];
       lines.push(`有 ${gap.minutes} 分钟她自己的定时器没跑（${String(gap.at).slice(11, 16)} 起）——电脑睡眠或进程被挂起，未确认`);
     }
+    if (rec.napcatLogin && rec.napcatLogin.errCode) {
+      lines.push(`NapCat 登录被拒：ErrType ${rec.napcatLogin.errType} / ErrCode ${rec.napcatLogin.errCode}（napcat.out 里累计 ${rec.napcatLogin.count} 条）——多半是这个号还在别的设备上登录着，先在那台设备退出再来扫`);
+    }
   } else if (qq.downMinutes >= 5) {
     lines.push(`QQ 已断开 ${qq.downMinutes} 分钟`);
   }
@@ -2798,6 +2823,15 @@ function bindSettings() {
       toast(error.message, 'error');
     }
   }));
+  $('#qqNotifyBtn')?.addEventListener('click', async () => {
+    try {
+      const permission = await Notification.requestPermission();
+      $('#qqNotifyBtn').hidden = permission !== 'default';
+      toast(permission === 'granted' ? '开了：QQ 断开会弹系统通知。' : '没拿到桌面通知权限；标题里仍会显示「⚠ QQ 断开」。', permission === 'granted' ? 'ok' : 'error');
+    } catch (error) {
+      toast(`要不到通知权限：${error.message}`, 'error');
+    }
+  });
   $('#qqHealthBtn')?.addEventListener('click', () => withBusy($('#qqHealthBtn'), async () => {
     try {
       const health = await api('/api/qq/health');
