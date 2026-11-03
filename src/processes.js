@@ -50,6 +50,20 @@ export async function stopOwned(kind) {
   });
   return { stopped:targets.length, simulated:env.testMode };
 }
+// 生成"隐藏窗口 + 脱离我们进程树"的启动脚本。
+// 为什么要脱离：实测父进程被杀（SIGKILL）或正常退出，detached:false 的子进程都会跟着死，
+// 所以每次轮换生产 = 把 NapCat 一起带走 = 要人重扫一次码。detached:true 的子进程能活下来，
+// 但 DETACHED_PROCESS 下 QQ.exe 会自己新建一个可见控制台（之前那个黑框）。
+// 用 Start-Process -WindowStyle Hidden 两头都占：窗口隐藏，且它的父（powershell）退出后它照样活。
+export function buildHiddenLaunchScript({ exe, args, cwd, logPath }) {
+  const q = (value) => `'${String(value).replace(/'/g, "''")}'`;
+  return [
+    '$ErrorActionPreference = "Stop"',
+    `$p = Start-Process -FilePath ${q(exe)} -ArgumentList ${args.map(q).join(',')} -WorkingDirectory ${q(cwd)} -WindowStyle Hidden -RedirectStandardOutput ${q(logPath)} -RedirectStandardError ${q(`${logPath}.err`)} -PassThru`,
+    'if (-not $p) { throw "start-process-failed" }',
+  ].join('\r\n');
+}
+
 export async function startNapCat() {
   if (env.testMode) return {simulated:true};
   if (process.platform!=='win32') throw new Error('当前 NapCat 启动入口仅支持 Windows');
@@ -61,13 +75,33 @@ export async function startNapCat() {
   const reg=execFileSync('reg.exe',['query','HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\QQ','/v','UninstallString'],{encoding:'utf8',windowsHide:true,timeout:5000});
   const command=reg.match(/REG_SZ\s+(.+)/)?.[1]?.trim().replace(/^"|"$/g,'');
   const qq=command&&path.join(path.dirname(command),'QQ.exe');if(!qq||!fs.existsSync(qq))throw new Error('找不到 QQ 安装位置');
-  const log=fs.openSync(path.join(paths.logs,'napcat.out'),'a');
-  const child=spawn(exe,[qq,path.join(paths.root,'napcat','NapCatWinBootHook.dll'),account],{
+  const napcatDir=path.join(paths.root,'napcat');
+  const logPath=path.join(paths.logs,'napcat.out');
+  const args=[qq,path.join(napcatDir,'NapCatWinBootHook.dll'),account];
+  const envVars={...process.env,NAPCAT_LOAD_PATH:path.join(napcatDir,'loadNapCat.js'),NAPCAT_INJECT_PATH:path.join(napcatDir,'NapCatWinBootHook.dll'),NAPCAT_MAIN_PATH:path.join(napcatDir,'napcat.mjs'),NAPCAT_PATCH_PACKAGE:path.join(napcatDir,'qqnt.json')};
+
+  // 首选：隐藏窗口 + 脱离进程树。脚本写进 data/（运行时生成，不进仓库），不用拼命令行引号。
+  try {
+    const scriptPath=path.join(paths.data,'launch-napcat.ps1');
+    fs.writeFileSync(scriptPath, buildHiddenLaunchScript({exe,args,cwd:napcatDir,logPath}),'utf8');
+    const powershell=spawn('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-WindowStyle','Hidden','-File',scriptPath],{
+      cwd:napcatDir, detached:true, windowsHide:true, stdio:'ignore', env:envVars,
+    });
+    powershell.unref();
+    for(let i=0;i<16;i+=1){
+      await new Promise((resolve)=>{setTimeout(resolve,500);});
+      if(listOwned('napcat').length)return {started:true,mode:'detached-hidden'};
+    }
+  } catch { /* 落到下面的老办法 */ }
+
+  // 保底：老办法（继承隐藏控制台）。它会被我们带走，但至少不会出现可见窗口。
+  const log=fs.openSync(logPath,'a');
+  const child=spawn(exe,args,{
     // 不能用 detached：Windows 上它等于 DETACHED_PROCESS（子进程没有控制台），
     // 于是还要往 stdout 写的 QQ.exe 会被系统另建一个可见控制台窗口（标题就是它的 exe 路径），
     // 桌面上那个黑框就是这么冒出来的。改成继承一个隐藏控制台，QQ 复用同一个控制台，不再新建窗口。
-    cwd:path.join(paths.root,'napcat'), detached:false,windowsHide:true,stdio:['ignore',log,log],
-    env:{...process.env,NAPCAT_LOAD_PATH:path.join(paths.root,'napcat','loadNapCat.js'),NAPCAT_INJECT_PATH:path.join(paths.root,'napcat','NapCatWinBootHook.dll'),NAPCAT_MAIN_PATH:path.join(paths.root,'napcat','napcat.mjs'),NAPCAT_PATCH_PACKAGE:path.join(paths.root,'napcat','qqnt.json')},
+    cwd:napcatDir, detached:false,windowsHide:true,stdio:['ignore',log,log], env:envVars,
   });
-  await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});fs.closeSync(log);child.unref();return {started:true};
+  await new Promise((resolve,reject)=>{child.once('spawn',resolve);child.once('error',reject);});fs.closeSync(log);child.unref();
+  return {started:true,mode:'inherited-console'};
 }

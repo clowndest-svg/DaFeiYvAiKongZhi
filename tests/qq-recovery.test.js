@@ -201,6 +201,25 @@ test('主动探活：连续两次失败才报"疑似静默失联"，测通后清
   }
 });
 
+test('隐藏启动脚本：路径带空格也要被引号包住，窗口隐藏、输出落文件、参数顺序不变', async () => {
+  const { buildHiddenLaunchScript } = await import('../src/processes.js');
+  const script = buildHiddenLaunchScript({
+    exe: 'D:/Ruan Jian/BiZhi/napcat/NapCatWinBootMain.exe',
+    args: ['D:/Ruan Jian/qq/QQ.exe', 'D:/Ruan Jian/BiZhi/napcat/hook.dll', '10000000123'],
+    cwd: 'D:/Ruan Jian/BiZhi/napcat',
+    logPath: 'D:/Ruan Jian/BiZhi/data/logs/napcat.out',
+  });
+  assert.match(script, /-WindowStyle Hidden/, '没设置隐藏窗口');
+  assert.match(script, /-RedirectStandardOutput 'D:\/Ruan Jian\/BiZhi\/data\/logs\/napcat\.out'/, '输出没落文件');
+  assert.match(script, /-RedirectStandardError 'D:\/Ruan Jian\/BiZhi\/data\/logs\/napcat\.out\.err'/, '错误流没落文件');
+  assert.match(script, /-ArgumentList 'D:\/Ruan Jian\/qq\/QQ\.exe','D:\/Ruan Jian\/BiZhi\/napcat\/hook\.dll','10000000123'/, '参数被引号咬坏或顺序变了');
+  assert.match(script, /-WorkingDirectory 'D:\/Ruan Jian\/BiZhi\/napcat'/);
+  assert.ok(!/detached/i.test(script), '脚本里不该出现 detached（窗口隐藏靠 Start-Process）');
+  // 路径里有单引号要按 PowerShell 规则翻倍，否则脚本会被截断
+  const quoted = buildHiddenLaunchScript({ exe: "D:/a'b/x.exe", args: [], cwd: 'D:/a', logPath: 'D:/l.out' });
+  assert.match(quoted, /-FilePath 'D:\/a''b\/x\.exe'/);
+});
+
 test.after(() => {
   closeDb();
   fs.rmSync(dataDir, { recursive: true, force: true });

@@ -355,25 +355,40 @@ export class OneBotChannel {
     const now = Date.now();
     if (this.loginLogAt && now - this.loginLogAt < 30000) return this.loginLogState;
     this.loginLogAt = now;
-    try {
-      const file = path.join(paths.logs, 'napcat.out');
-      const size = fs.statSync(file).size;
-      const span = Math.min(size, 200000);
-      const fd = fs.openSync(file, 'r');
-      const buf = Buffer.alloc(span);
-      fs.readSync(fd, buf, 0, span, size - span);
-      fs.closeSync(fd);
-      const lines = buf.toString('utf8').split(/\r?\n/).filter((line) => /Login Error/i.test(line));
-      const match = lines.length ? /ErrType:\s*(\d+)\s*ErrCode:\s*(\d+)/.exec(lines[lines.length - 1]) : null;
-      this.loginLogState = {
-        count: lines.length,
-        errType: match ? Number(match[1]) : null,
-        errCode: match ? Number(match[2]) : null,
-        at: new Date(now).toISOString(),
-      };
-    } catch {
-      this.loginLogState = { count: 0, errType: null, errCode: null, at: new Date(now).toISOString(), error: '读不到 napcat.out' };
+    // 启动方式分 stdout / stderr 两个文件（Start-Process 不允许两者指向同一个文件），两个都要看。
+    const files = [path.join(paths.logs, 'napcat.out'), path.join(paths.logs, 'napcat.out.err')];
+    let count = 0;
+    let lastLine = '';
+    let lastAt = 0;
+    let read = 0;
+    for (const file of files) {
+      try {
+        const stat = fs.statSync(file);
+        const span = Math.min(stat.size, 200000);
+        if (!span) continue;
+        const fd = fs.openSync(file, 'r');
+        const buf = Buffer.alloc(span);
+        fs.readSync(fd, buf, 0, span, stat.size - span);
+        fs.closeSync(fd);
+        read += 1;
+        const lines = buf.toString('utf8').split(/\r?\n/).filter((line) => /Login Error/i.test(line));
+        count += lines.length;
+        if (lines.length && stat.mtimeMs >= lastAt) {
+          lastAt = stat.mtimeMs;
+          lastLine = lines[lines.length - 1];
+        }
+      } catch {
+        /* 这个文件还没有 */
+      }
     }
+    const match = lastLine ? /ErrType:\s*(\d+)\s*ErrCode:\s*(\d+)/.exec(lastLine) : null;
+    this.loginLogState = {
+      count,
+      errType: match ? Number(match[1]) : null,
+      errCode: match ? Number(match[2]) : null,
+      at: new Date(now).toISOString(),
+      ...(read ? {} : { error: '读不到 napcat.out' }),
+    };
     return this.loginLogState;
   }
 
