@@ -1027,6 +1027,13 @@ function fileTitle(item) {
 
 function memoryItems() {
   if (!state.memory) return [];
+  if (state.memoryTab === 'weekly') {
+    // 小红书周报（XHSWEEK）和她自己写的周记（WEEKLY）是两种东西，以前混在一个列表里。
+    const rows = fileRows('weekly');
+    if (state.weeklyFilter === 'mine') return rows.filter((item) => !/^XHSWEEK/i.test(String(item.name || '')));
+    if (state.weeklyFilter === 'xhs') return rows.filter((item) => /^XHSWEEK/i.test(String(item.name || '')));
+    return rows;
+  }
   if (FILE_KIND[state.memoryTab]) return fileRows(FILE_KIND[state.memoryTab]);
   return state.memory[state.memoryTab] || [];
 }
@@ -1035,6 +1042,17 @@ function renderMemory() {
   const box = $('#memoryContent');
   if (box.querySelector('textarea')) return;
   box.innerHTML = '';
+  if (state.memoryTab === 'weekly') {
+    const chips = el('div', 'tabs');
+    for (const [value, label] of [['all', '全部'], ['mine', '她写的周记'], ['xhs', '小红书周报']]) {
+      const chip = el('button', '', label);
+      chip.type = 'button';
+      if ((state.weeklyFilter || 'all') === value) chip.classList.add('active');
+      chip.addEventListener('click', () => { state.weeklyFilter = value; renderMemory(); });
+      chips.appendChild(chip);
+    }
+    box.appendChild(chips);
+  }
   const items = memoryItems();
   const empties = {
     core: '还没有核心档案。写点你希望她永远记得的事。',
@@ -1332,7 +1350,22 @@ function renderPosts() {
     box.appendChild(el('div', 'empty', '还没有草稿。让她写一条，看看她今天想说什么。'));
     return;
   }
-  for (const post of state.posts) {
+  // 小红书和 QQ 空间混在一格里翻着难受：先按平台筛。
+  const chips = el('div', 'tabs');
+  for (const [value, label] of [['all', '全部'], ['xhs', '小红书'], ['qzone', 'QQ 空间']]) {
+    const chip = el('button', '', label);
+    chip.type = 'button';
+    if ((state.postFilter || 'all') === value) chip.classList.add('active');
+    chip.addEventListener('click', () => { state.postFilter = value; renderPosts(); });
+    chips.appendChild(chip);
+  }
+  box.appendChild(chips);
+  const list = state.posts.filter((post) => (state.postFilter || 'all') === 'all' || post.kind === state.postFilter);
+  if (!list.length) {
+    box.appendChild(el('div', 'empty', '这一类还没有内容。'));
+    return;
+  }
+  for (const post of list) {
     const card = el('div', 'card post-card');
     const head = el('div', 'post-head');
     head.appendChild(el('span', `platform-chip ${post.kind}`, state.labels[post.kind] || post.kind));
@@ -1674,16 +1707,23 @@ function fillVoiceSelect(selected) {
 
 function renderSearchLine() {
   const line = $('#searchStatusLine');
+  const spend = $('#searchSpendLine');
   if (!line) return;
   const s = state.status?.search;
   if (!s) {
     line.textContent = '正在读取搜索状态…';
+    if (spend) spend.textContent = '';
     return;
   }
-  // 只报真实计数，不预告"能不能搜通"——那要真搜一次才知道。
+  // 只报真实计数与台账读数，不预告"能不能搜通"——那要真搜一次才知道。
   line.textContent = s.enabled
-    ? `联网搜索：开着 · 今天已用 ${s.today}/${s.dailyMax} 次 · 引擎 ${s.engines.join(' → ')}`
-    : '联网搜索：已关闭。她不会再上网查，被问「最新」的事只会说不知道。';
+    ? `联网：开着 · 链路 ${s.chain.join(' → ')}${s.provider === 'scrape' ? '（没配 DeepSeek Key，只在扒网页）' : ''} · 今天查 ${s.today}/${s.dailyMax} 次 · 读页 ${s.fetchToday}/${s.fetchDailyMax} 次`
+    : '联网：已关闭。她不会再上网查，被问「最新」的事只会说不知道。';
+  if (spend) {
+    spend.textContent = s.enabled
+      ? `已记账：搜索 ${s.paidSearchToday} 次 + 抓取 ${s.paidFetchToday} 次 ≈ ${s.paidCnyToday.toFixed(4)} 元（每次成功请求 ${s.pricePerRequestCny} 元，失败与空结果不记）· 可信度门槛 ${s.minScore}`
+      : '';
+  }
 }
 
 function renderVoiceLine() {
@@ -1802,8 +1842,11 @@ function fillSettings() {
   $('#setShortTurns').value = settings.memory?.shortTurns ?? 24;
   $('#setRetrieveCount').value = settings.memory?.retrieveCount ?? 10;
   $('#setSearchEnabled').checked = settings.search?.enabled !== false;
+  $('#setSearchReadPages').checked = settings.search?.readPages !== false;
   $('#setSearchDailyMax').value = settings.search?.dailyMax ?? 20;
+  $('#setSearchFetchDailyMax').value = settings.search?.fetchDailyMax ?? 10;
   $('#setSearchResults').value = settings.search?.maxResults ?? 5;
+  $('#setSearchMinScore').value = settings.search?.minScore ?? 1.5;
   $('#setSearchTimeout').value = settings.search?.timeoutSeconds ?? 8;
   renderSearchLine();
   $('#setReflectMaxTokens').value = settings.model?.reflectMaxTokens ?? 450;
@@ -1951,8 +1994,11 @@ function collectSettings() {
     search: {
       ...(prev.search || {}),
       enabled: $('#setSearchEnabled').checked,
+      readPages: $('#setSearchReadPages').checked,
       dailyMax: Number($('#setSearchDailyMax').value) || 0,
+      fetchDailyMax: Math.max(0, Number($('#setSearchFetchDailyMax').value) || 0),
       maxResults: Number($('#setSearchResults').value) || 5,
+      minScore: Math.max(0, Number($('#setSearchMinScore').value) || 0),
       timeoutSeconds: Number($('#setSearchTimeout').value) || 8,
     },
     proactive: {
@@ -2785,8 +2831,21 @@ function bindSettings() {
     try {
       const data = await api('/api/search/test', { method: 'POST', body: { query } });
       if (!data.ok) {
-        box.textContent = `没搜到：${data.reason || '未知原因'}`;
-        toast('这次没搜到，原因写在下面了。', 'error');
+        box.textContent = `没走通：${data.reason || '未知原因'}`;
+        toast('这次没成，原因写在下面了。', 'error');
+      } else if (data.page) {
+        box.textContent = '';
+        const row = el('div', 'search-row');
+        row.appendChild(el('strong', '', data.page.title || '（页面没给标题）'));
+        row.appendChild(el('p', 'muted small', `读到 ${data.page.chars} 字${data.page.truncated ? '（页面更长，只截了前面）' : ''}`));
+        row.appendChild(el('p', 'small', data.page.content.slice(0, 800)));
+        const link = el('a', 'search-url', data.page.url);
+        link.href = data.page.url;
+        link.target = '_blank';
+        link.rel = 'noreferrer noopener';
+        row.appendChild(link);
+        box.appendChild(row);
+        toast(`读到 ${data.page.chars} 字（${data.engine}，${data.ms}ms）。`);
       } else {
         box.textContent = '';
         for (const item of data.items) {
@@ -2798,6 +2857,7 @@ function bindSettings() {
           link.target = '_blank';
           link.rel = 'noreferrer noopener';
           row.appendChild(link);
+          if (item.score != null) row.appendChild(el('p', 'muted small', `${item.site ? item.site + ' · ' : ''}可信度 ${item.score}/3${item.date ? ' · 发布 ' + item.date : ''}`));
           box.appendChild(row);
         }
         toast(`搜到 ${data.items.length} 条（${data.engine}，${data.ms}ms）。`);

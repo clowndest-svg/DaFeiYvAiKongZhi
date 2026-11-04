@@ -26,7 +26,14 @@
     "enabled": true,
     "dailyMax": 20,
     "maxResults": 5,
-    "timeoutSeconds": 8
+    "timeoutSeconds": 8,
+    "provider": "deepseek",
+    "minScore": 1.5,
+    "providerTimeoutSeconds": 6,
+    "readPages": true,
+    "fetchDailyMax": 10,
+    "fetchTimeoutSeconds": 8,
+    "pageMaxChars": 3000
   },
   "proactive": {
     "enabled": true,

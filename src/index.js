@@ -266,7 +266,7 @@ import {
   tryAutoPublish,
   PLATFORM_LABELS,
 } from './social.js';
-import { noteSearchEvent, searchStatus, searchWeb } from './search.js';
+import { extractReadableUrl, notePageRead, noteSearchEvent, readWebPage, searchStatus, searchWeb } from './search.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1383,11 +1383,31 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/search/test' && method === 'POST') {
     // 控制台的「试搜一下」：走的是她聊天时同一条路，不是另写一套能通的假演示。
+    // 输入框里贴链接就是"试读网页"，跟她收到链接时的处理完全一致。
     const body = await readJsonBody(req);
-    const query = String(body.query || '').trim().slice(0, 60);
-    if (!query) throw new HttpError(400, '要搜什么总得写一句');
+    const raw = String(body.query || '').trim().slice(0, 200);
+    if (!raw) throw new HttpError(400, '要搜什么总得写一句');
     const cfg = loadSettings().search;
-    const found = await searchWeb(query, { limit: cfg.maxResults, timeoutMs: cfg.timeoutSeconds * 1000 });
+    const url = extractReadableUrl(raw);
+    if (url) {
+      const read = await readWebPage(url, { text: raw, timeoutMs: cfg.timeoutSeconds * 1000 });
+      notePageRead(read, 'web');
+      addEvent(read.ok ? 'web_search_test' : 'web_search_test_failed', read.ok ? `控制台试读了一个页面（${String(read.content || '').length} 字）` : '控制台试读页面没读到', {
+        ms: read.ms || null,
+        reason: read.reason || null,
+        kind: 'page',
+      });
+      return sendJson(res, 200, {
+        ok: read.ok,
+        engine: read.ok ? 'deepseek-fetch' : null,
+        ms: read.ms || null,
+        reason: read.reason || null,
+        page: read.ok ? { url: read.url, title: read.title, chars: String(read.content || '').length, truncated: read.truncated, content: read.content } : null,
+        items: [],
+        status: searchStatus(),
+      });
+    }
+    const found = await searchWeb(raw, { limit: cfg.maxResults, timeoutMs: cfg.timeoutSeconds * 1000 });
     noteSearchEvent(found, 'web');
     addEvent(found.ok ? 'web_search_test' : 'web_search_test_failed', found.ok ? `控制台试搜了一次（${found.engine}，${found.items.length} 条）` : '控制台试搜没搜到', {
       ms: found.ms || null,

@@ -11,7 +11,7 @@ import { applyNeuroEvent, neuroStatus, noteHisMessage } from './neuro.js';
 import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection } from './reflect.js';
-import { formatSearchNote, needsSearch, noteSearchEvent, searchWeb } from './search.js';
+import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
@@ -271,18 +271,25 @@ export class Companion {
     };
   }
 
-  // 她能不能上网查，取决于这一步真的有没有拿到结果；搜索本身永远不许拖垮回复。
+  // 她能不能上网查，取决于这一步真的有没有拿到结果；联网本身永远不许拖垮回复。
   async searchNoteFor(opts = {}) {
     const channel = opts.channel || 'web';
     // 群聊和访客的话不发到外部引擎：那是别人的原话，也不是主人的请求。
     if (['qq-group', 'qq-guest'].includes(channel)) return '';
     try {
+      // 他甩了链接就先读那一页：贴地址的意思通常就是"看看这个"，不是"再去搜一遍"。
+      const url = extractReadableUrl(opts.text || '');
+      if (url) {
+        const read = await readWebPage(url, { text: opts.text });
+        notePageRead(read, channel);
+        return formatPageNote(read);
+      }
       if (!needsSearch(opts.text || '')) return '';
       const found = await searchWeb(opts.text);
       noteSearchEvent(found, channel);
       return formatSearchNote(found);
     } catch (error) {
-      logger.warn('联网搜索这一步没跑成，先照常回复', { error: String(error.message).slice(0, 80) });
+      logger.warn('联网这一步没跑成，先照常回复', { error: String(error.message).slice(0, 80) });
       return '';
     }
   }

@@ -1,15 +1,18 @@
 // 联网查资料：她以前只能靠记忆里那点东西，被问"最新"的事只能说不知道（有时还会说成"我这边没网"）。
-// 这里给她一条真实的搜索路：只走公开搜索引擎的网页结果，不装依赖、不要 key。
+// 现在两条路：DeepSeek 官方 Search/Fetch 接口打头（有可信度分数、有正文，按次收钱），
+// 扒公开搜索引擎的网页结果兜底（不要 key、不花钱，但脆）。
 //
-// 三条硬规矩：
+// 四条硬规矩：
 // 1) 查询词里像有主人隐私（账号、住址、真名、公司）就不发出去，宁可说搜不了；
 // 2) 搜到的是外部信息，不是她的记忆，注入时必须带着"怎么用、怎么报出处"的说明；
-// 3) 搜不到/被墙/超时都如实报原因，界面显示"未测"而不是拿旧数据冒充。
+// 3) 搜不到/被墙/超时都如实报原因，界面显示"未测"而不是拿旧数据冒充；
+// 4) 花钱的那条路要走闸门：每天次数封顶、按次记账，失败与空结果不记账。
 
-import { loadSettings } from './config.js';
-import { addEvent, kvGet, kvSet } from './db.js';
+import { env, loadSettings } from './config.js';
+import { addEvent, kvGet, kvSet, toolCallsToday } from './db.js';
 import { logger } from './logger.js';
 import { privacyProblems } from './privacy.js';
+import { deepseekFetch, deepseekSearch, isPublicHttpUrl, PRICE_PER_REQUEST_CNY } from './search-deepseek.js';
 import { shanghaiDayKey } from './util.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -124,9 +127,17 @@ export function searchCountToday() {
   return Number(kvGet(`search_day:${shanghaiDayKey()}`, '0') || 0);
 }
 
-function bumpSearchCount() {
+function bumpSearchCount(by = 1) {
   const key = `search_day:${shanghaiDayKey()}`;
-  kvSet(key, String(searchCountToday() + 1));
+  kvSet(key, String(searchCountToday() + by));
+}
+
+function fetchCountToday() {
+  return Number(kvGet(`fetch_day:${shanghaiDayKey()}`, '0') || 0);
+}
+
+function bumpFetchCount() {
+  kvSet(`fetch_day:${shanghaiDayKey()}`, String(fetchCountToday() + 1));
 }
 
 async function fetchText(url, timeoutMs) {
@@ -142,6 +153,34 @@ async function fetchText(url, timeoutMs) {
   return text;
 }
 
+// 她收到的话里贴了链接时，把第一个可公开访问的地址挑出来读。
+// 只认 http(s) 且带域名的写法，前后括号、中文引号、句子标点都要收干净。
+export function extractReadableUrl(text) {
+  const matches = String(text || '').match(/https?:\/\/[^\s"'（）()，。；、]+/gi) || [];
+  for (const candidate of matches) {
+    const url = candidate.replace(/[.,;:!?]+$/g, '');
+    if (isPublicHttpUrl(url)) return url;
+  }
+  return '';
+}
+
+// 隐私闸门：搜索词和链接共用一套。链接里也可能藏着账号、手机号或内网地址。
+function gate(query, settings) {
+  if (!query) return { ok: false, reason: '没摘出要查的词', items: [] };
+  if (settings.search?.enabled === false) return { ok: false, reason: '设置里关了联网搜索', items: [], skipped: true };
+  const problems = privacyProblems(query, settings);
+  if (problems.length) {
+    logger.warn('联网请求被隐私闸门挡下', { problems: problems.length });
+    return { ok: false, reason: '这句话里像是有你的私密信息，我不往外部服务上发', items: [], privacyBlocked: true };
+  }
+  // 成串数字几乎一定是账号/手机号/QQ 号：外部服务不该知道这些，privacyProblems 也不管裸数字。
+  if (/\d{5,}/.test(query)) {
+    logger.warn('联网请求被数字串闸门挡下', { digits: (query.match(/\d{5,}/) || [''])[0].length });
+    return { ok: false, reason: '这句话里有一串数字（像账号或电话），我不把它发到外部服务上', items: [], privacyBlocked: true };
+  }
+  return { ok: true };
+}
+
 // 返回 { ok, engine, items, ms, reason }：任何一步失败都不抛，交给上层如实说明。
 // 「最近」「新」这种单字词，Bing 会把词典页和歌页顶到最前面；那不是资料，是噪音。
 // 只按标题形状过滤，正主（新闻、官网、文档）不会中招。
@@ -154,52 +193,96 @@ export function dropDefinitionNoise(items) {
 export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000 } = {}) {
   const settings = loadSettings();
   const query = buildQuery(rawQuery);
-  if (!query) return { ok: false, reason: '没摘出要查的词', items: [] };
-  if (settings.search?.enabled === false) return { ok: false, reason: '设置里关了联网搜索', items: [], skipped: true };
-  const problems = privacyProblems(query, settings);
-  if (problems.length) {
-    logger.warn('搜索被隐私闸门挡下', { problems: problems.length });
-    return { ok: false, reason: '这句话里像是有你的私密信息，我不往搜索引擎上发', items: [], privacyBlocked: true };
-  }
-  // 成串数字几乎一定是账号/手机号/QQ 号：搜索引擎不该知道这些，privacyProblems 也不管裸数字。
-  if (/\d{5,}/.test(query)) {
-    logger.warn('搜索被数字串闸门挡下', { digits: (query.match(/\d{5,}/) || [''])[0].length });
-    return { ok: false, reason: '这句话里有一串数字（像账号或电话），我不把它发到搜索引擎上', items: [], privacyBlocked: true };
-  }
-  const dailyMax = Number(settings.search?.dailyMax ?? 20);
+  const blocked = gate(query, settings);
+  if (!blocked.ok) return blocked;
+  const cfg = settings.search || {};
+  const dailyMax = Number(cfg.dailyMax ?? 20);
   const today = searchCountToday();
   if (today >= dailyMax) return { ok: false, reason: `今天的搜索次数用完了（${today}/${dailyMax}）`, items: [], quotaOut: true };
 
   const started = Date.now();
   const tried = [];
+  let requests = 0;
+  const want = Math.max(1, Math.min(limit, 8));
+
+  // 第一路：DeepSeek 官方搜索。它给分数和长摘要，不用再猜哪条是正主。
+  if (cfg.provider !== 'scrape' && env.apiKey) {
+    requests += 1;
+    const found = await deepseekSearch(query, {
+      count: Math.max(want, 5),
+      limit: want,
+      oriQuestion: String(rawQuery || '').slice(0, 128),
+      minScore: Number(cfg.minScore ?? 1.5),
+      timeoutMs: Math.min(Number(cfg.providerTimeoutSeconds ?? 6) * 1000, timeoutMs),
+    });
+    if (found.ok) {
+      bumpSearchCount(requests);
+      logger.info('联网搜索成功', { engine: found.engine, count: found.items.length, ms: found.ms });
+      return { ok: true, engine: found.engine, items: found.items, query, ms: Date.now() - started, attempts: found.attempts };
+    }
+    if (!found.unavailable) tried.push(`deepseek:${String(found.reason).slice(0, 40)}`);
+  }
+
   for (const engine of ENGINES) {
     try {
+      requests += 1;
       const html = await fetchText(engine.build(query), timeoutMs);
-      const items = dropDefinitionNoise(engine.parse(html)).slice(0, Math.max(1, Math.min(limit, 8)));
-      bumpSearchCount();
+      const items = dropDefinitionNoise(engine.parse(html)).slice(0, want);
       if (items.length) {
+        bumpSearchCount(requests);
         logger.info('联网搜索成功', { engine: engine.name, count: items.length, ms: Date.now() - started });
         return { ok: true, engine: engine.name, items, query, ms: Date.now() - started };
       }
       tried.push(`${engine.name}:没解析出结果`);
     } catch (error) {
-      bumpSearchCount();
       tried.push(`${engine.name}:${String(error.message).slice(0, 40)}`);
     }
   }
+  if (requests) bumpSearchCount(requests);
   logger.warn('联网搜索没成功', { tried: tried.join('|') });
-  return { ok: false, reason: tried.join('；') || '没有可用引擎', items: [], query };
+  return { ok: false, reason: tried.join('；') || '没有可用引擎', items: [], query, tried };
 }
+
+// 读网页：她被他甩一个链接时用的那条路。走 DeepSeek Fetch，本程序不直接访问那个地址。
+export async function readWebPage(rawUrl, { text = '', timeoutMs = 8000 } = {}) {
+  const settings = loadSettings();
+  const cfg = settings.search || {};
+  const url = String(rawUrl || '').trim();
+  if (cfg.enabled === false || cfg.readPages === false) {
+    return { ok: false, url, reason: '设置里关了联网（或读网页）', skipped: cfg.enabled === false };
+  }
+  if (!isPublicHttpUrl(url)) return { ok: false, url, reason: '这个地址不是公网能打开的网页（本机/内网/带账号的都不读）', refused: true };
+  const blocked = gate(url, settings);
+  if (!blocked.ok) return { ok: false, url, reason: blocked.reason, privacyBlocked: blocked.privacyBlocked, skipped: blocked.skipped };
+  const dailyMax = Number(cfg.fetchDailyMax ?? 10);
+  const today = fetchCountToday();
+  if (today >= dailyMax) return { ok: false, url, reason: `今天读网页的次数用完了（${today}/${dailyMax}）`, quotaOut: true };
+  if (!env.apiKey) return { ok: false, url, reason: '读网页要用 DeepSeek 的抓取接口，还没配 Key', unavailable: true };
+
+  bumpFetchCount();
+  const found = await deepseekFetch(url, {
+    timeoutMs: Math.min(Number(cfg.fetchTimeoutSeconds ?? 8) * 1000, timeoutMs),
+    maxChars: Number(cfg.pageMaxChars ?? 3000),
+  });
+  if (found.ok) return { ...found, query: url, text: String(text || '').slice(0, 120) };
+  return { ok: false, url, query: url, reason: found.reason, ms: found.ms };
+}
+
 
 // 注入提示词的那一段。写清"这是外部结果、不是你的记忆"，并要求报出处。
 export function formatSearchNote(found, { now = new Date() } = {}) {
-  if (!found || !found.ok || !found.items?.length) {
-    if (found?.skipped) return '';
-    const why = found?.reason || '没查到原因';
-    return `【联网搜索的结果】你刚试着查「${found?.query || '这件事'}」，没搜到（${why}）。如实告诉他这次没查到，别编，也别提"我这边没网"这种你没说过的话。`;
+  if (!found || found.skipped) return '';
+  if (!found.ok || !found.items?.length) {
+    const why = found.reason || '没查到原因';
+    return `【联网搜索的结果】你刚试着查「${found.query || '这件事'}」，没搜到（${why}）。如实告诉他这次没查到，别编，也别提"我这边没网"这种你没说过的话。`;
   }
   const when = now.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
-  const lines = found.items.map((item, i) => `${i + 1}. ${item.title}\n   ${item.snippet || '（没有摘要）'}\n   来源 ${item.url}`);
+  const lines = found.items.map((item, i) => {
+    const extra = [item.date ? `发布 ${item.date}` : '', item.score != null ? `可信度 ${item.score}/3` : '', item.site ? `站点 ${item.site}` : '']
+      .filter(Boolean)
+      .join('，');
+    return `${i + 1}. ${item.title}\n   ${item.snippet || '（没有摘要）'}\n   来源 ${item.url}${extra ? `\n   （${extra}）` : ''}`;
+  });
   return `【刚刚联网搜到的】（${found.engine}，${when}，查的是「${found.query}」）
 ${lines.join('\n')}
 怎么用：这些是网上刚查到的外部信息，不是你自己记得的事。可以说"我查到…"，并挑一条把来源网址发给他；
@@ -207,13 +290,44 @@ ${lines.join('\n')}
 他没问就别展开成长篇报道，一两句说完就停，让他接着问。搜不到的部分直说没查到。`;
 }
 
+// 他甩来一个链接时注入的那一段：正文是外部页面上的字，不是她读过的东西。
+export function formatPageNote(read, { now = new Date() } = {}) {
+  if (!read || read.skipped) return '';
+  if (!read.ok || !read.content) {
+    return `【他发的链接】${read.url || '那个地址'} 我这次没打开（${read.reason || '没拿到正文'}）。如实说没读到，别装作看过内容。`;
+  }
+  const when = now.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const cut = read.truncated ? `（页面更长，这里只截了前 ${read.content.length} 字）` : '';
+  return `【他发的那个链接，我读到的内容】（${read.url}，抓取于 ${when}${cut}）
+标题：${read.title || '（页面没给标题）'}
+${read.content}
+怎么用：这是别人网页上的字，不是你自己知道的事。他说"看看这个"就照着内容跟他聊；
+要引就引原话里的说法，别把整段复述给他；页面里没写的直说没写；他要是只让你看图片，就说读的是文字。`;
+}
+
 export function searchStatus() {
   const settings = loadSettings();
+  const cfg = settings.search || {};
+  const providerOn = cfg.provider !== 'scrape' && Boolean(env.apiKey);
+  const tool = toolCallsToday();
   return {
-    enabled: settings.search?.enabled !== false,
+    enabled: cfg.enabled !== false,
+    readPages: cfg.readPages !== false,
     today: searchCountToday(),
-    dailyMax: Number(settings.search?.dailyMax ?? 20),
+    dailyMax: Number(cfg.dailyMax ?? 20),
+    fetchToday: fetchCountToday(),
+    fetchDailyMax: Number(cfg.fetchDailyMax ?? 10),
     engines: ENGINES.map((e) => e.name),
+    // 链路上第一个是真的在花钱、也是第一个会被用的那一路。
+    chain: providerOn ? ['deepseek', ...ENGINES.map((e) => e.name)] : ENGINES.map((e) => e.name),
+    provider: providerOn ? 'deepseek' : 'scrape',
+    keyConfigured: Boolean(env.apiKey),
+    minScore: Number(cfg.minScore ?? 1.5),
+    pricePerRequestCny: PRICE_PER_REQUEST_CNY,
+    // 今天真付了钱的请求：按 kinds 记在台账里，界面只报读数，不猜。
+    paidSearchToday: tool.search,
+    paidFetchToday: tool.fetch,
+    paidCnyToday: tool.costCny,
   };
 }
 
@@ -226,4 +340,23 @@ export function noteSearchEvent(found, channel) {
     ms: found.ms || null,
     reason: found.ok ? null : String(found.reason || '').slice(0, 120),
   });
+}
+
+export function notePageRead(read, channel) {
+  if (!read || read.skipped) return;
+  addEvent(read.ok ? 'web_page_read' : 'web_page_read_failed', read.ok ? `她打开了他发的链接（${String(read.content || '').length} 字）` : '她想打开那个链接，没读到', {
+    channel,
+    host: safeHost(read.url),
+    chars: read.ok ? String(read.content || '').length : 0,
+    ms: read.ms || null,
+    reason: read.ok ? null : String(read.reason || '').slice(0, 120),
+  });
+}
+
+function safeHost(url) {
+  try {
+    return new URL(String(url || '')).host.slice(0, 80);
+  } catch {
+    return '';
+  }
 }

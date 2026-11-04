@@ -1,0 +1,76 @@
+{
+  "results": [
+    {
+      "title": "Change Log | DeepSeek API Docs - Search / Fetch API is now available, powered by our in-house search engine and supporting web search and fetch",
+      "site_name": "DeepSeek",
+      "site_icon": "https://cdn.deepseek.com/site-icons/deepseek.com",
+      "authority": 3,
+      "rerank_score": 2.737919372102985,
+      "date": "2026-10-16T16:00:00+00:00",
+      "url": "https://api-docs.deepseek.com/updates/?release=deepseek-coder#1",
+      "summary": "### DeepSeek-V4-Flash Update\n\nThe official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version.\n...\nThe official V4-Flash natively supports the Responses API format and is specifically adapted for Codex.\n...\nNote: This update only upgrades the DeepSeek-V4-Flash API. The DeepSeek-V4-Pro API and the APP/WEB models are unchanged.",
+      "snippet": "DeepSeek-V4-Flash Update The official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version. ... The official V4-Flash natively supports the ... This update only upgrades the DeepSeek-V4-Flash API. The DeepSeek-V4-Pro API and the APP/WEB models are unchanged. ... The DeepSeek API now supports V4-Pro and V4-Flash, available via both the OpenAI ChatCompletions interface and the Anthropic interface. To access the new models ... or deepseek-v4-flash.",
+      "content": ""
+    },
+    {
+      "title": "Change Log | DeepSeek API Docs",
+      "site_name": "DeepSeek",
+      "site_icon": "https://cdn.deepseek.com/site-icons/deepseek.com",
+      "authority": 3,
+      "rerank_score": 2.683343880067989,
+      "date": "2026-10-16T16:00:00+00:00",
+      "url": "https://api-docs.deepseek.com/updates/",
+      "summary": "### DeepSeek-V4-Flash Update\n\nThe official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version.\n...\nThe official V4-Flash natively supports the Responses API format and is specifically adapted for Codex.\n...\nNote: This update only upgrades the DeepSeek-V4-Flash API. The DeepSeek-V4-Pro API and the APP/WEB models are unchanged.",
+      "snippet": "DeepSeek-V4-Flash Update The official release of the DeepSeek-V4-Flash API is now in public beta. The API calling method remains unchanged — simply set the model name todeepseek-v4-flash to use the latest version. ... The official V4-Flash natively supports the Responses API format and is specifically adapted for Codex. ... This update only upgrades the DeepSeek-V4-Flash API. The DeepSeek-V4-Pro API and the APP/WEB models are unchanged. ... The DeepSeek API now supports V4-Pro and V4-Flash, available via both the OpenAI ChatCompletions interface and the Anthropic interface. To access the new models ... todeepseek-v4-pro or deepseek-v4-flash.",
+      "content": ""
+    },
+    {
+      "title": "DeepSeek更新模型了，还对外开放了搜索引擎",
+      "site_name": "Sohu",
+      "site_icon": "https://cdn.deepseek.com/site-icons/sohu.com",
+      "authority": 4,
+      "rerank_score": 2.5560010653196654,
+      "date": "2026-10-17T16:00:00+00:00",
+      "url": "https://m.sohu.com/a/1089062156_114986/?pvid=000115_3w_a&scm=10001.7746_13-119000.0.0-0-0-0-0.0&spm=smpc.channel_354.block3_32_P7Ovbu_1_fd.10.1792234186716QPo9hWw_7746",
+      "summary": "## DeepSeek更新模型了，还对外开放了搜索引擎\n\n距离上一次模型发布仅一个多月，DeepSeek又迭代新模型了，这次还对外开放自研搜索API，针对SEO（搜索引擎优化）作弊、GEO（生成引擎优化）操纵和低质AIGC进行了过滤。\n\n10月17日下午，DeepSeek官方宣布，V4.1 Flash已更新至V4.1-Flash-1017 版本，官方网页端、APP 与 API 模型已同步变更为新模型。V4.1 Flash模型是DeepSeek在9月10日才正式发布的模型。\n\n值得注意的是，DeepSeek宣布开放自研搜索API。具体来看，新版本发布DeepSeek API 新增对Search与 Fetch 接口的支持，相关能力正式向公众开放，两个接口价格均为5元/千次。\n\nDeepSeek还表示，DeepSeek网页端与API端的搜索能力均由自研 DeepSeek搜索引擎提供底层支持，每天会处理来自全球各地的数亿次搜索请求。",
+      "snippet": "距离上一次模型发布仅一个多月，DeepSeek又迭代新模型了，这次还对外开放自研搜索API，针对SEO（搜索引擎优化）作弊、GEO（生成引擎优化）操纵和低质AIGC进行了过滤 ... 具体来看，新版本发布DeepSeek API 新增对Search与 Fetch 接口的支持，相关能力正式向公众开放，两个接口价格均为5元/千次。",
+      "content": ""
+    },
+    {
+      "title": "DeepSeek V4.1 Flash 新版本：许愿式编程一键成真 | DeepSeek API Docs",
+      "site_name": "DeepSeek",
+      "site_icon": "https://cdn.deepseek.com/site-icons/deepseek.com",
+      "authority": 3,
+      "rerank_score": 2.5560010653196654,
+      "date": "2026-10-16T16:00:00+00:00",
+      "url": "https://api-docs.deepseek.com/zh-cn/news/news261017/",
+      "summary": "Search / Fetch API 已上线，使用自研搜索引擎，支持网页搜索与抓取，点此查看使用指南\n\n# DeepSeek V4.1 Flash 新版本：许愿式编程一键成真\n\nDeepSeek V4.1 Flash 现已更新至 V4.1-Flash-1017 版本，官方网页端、APP 与 API 模型已同步变更为新模型。\n...\n## 开放自研搜索 API\n\n长期以来，DeepSeek 网页端与 API 端的搜索能力均由自研 DeepSeek 搜索引擎提供底层支持，稳定处理每天来自全球各地的数亿次搜索请求。\n\nDeepSeek 搜索是 AI 原生的通用搜索引擎，索引了全球千亿级网页，支持多语言搜索，实时返回高相关、高权威、高时效的优质结果。针对 SEO 作弊、GEO 操纵和低质 AIGC，我们通过严格的识别机制对其进行过滤，确保向用户与 LLM 呈现权威可信的信息。\n\n本次新版本发布 DeepSeek API 新增对 Search 与 Fetch 接口的支持，相关能力正式向公众开放。两个接口价格均为 5 元 / 千次，详细使用方法请参考官方 API 文档：API 指南 - 网页搜索与抓取。\n\n请注意，当前用户在 DeepSeek Harness / Claude Code / Codex 中使用 DeepSeek API 时，已经会通过 Server 端工具调用访问到 Search/Fetch 接口，这部分 Search/Fetch 接口调用目前未计费，并将在两周后（北京时间 2026 年 11 月 1 日 00:00）开始按次收取调用费用。",
+      "snippet": "Search / Fetch API 已上线，使用自研搜索引擎，支持网页搜索与抓取，点此查看使用指南 ... 本次新版本发布 DeepSeek API 新增对 Search 与 Fetch 接口的支持，相关能力正式向公众开放。两个接口价格均为 5 元 / 千次，详细使用方法请参考官方 API 文档...",
+      "content": ""
+    },
+    {
+      "title": "DeepSeek 上线网页搜索与抓取 API、API 短暂出现 V4.1 Flash-1017 快照、Harness v0.2.1-rc1 发布",
+      "site_name": "IT之家",
+      "site_icon": "https://cdn.deepseek.com/site-icons/ithome.com",
+      "authority": 3,
+      "rerank_score": 2.483233742606338,
+      "date": "2026-10-16T16:00:00+00:00",
+      "url": "https://m.ithome.com/html/1014291.htm#1",
+      "summary": "# DeepSeek 上线网页搜索与抓取 API、API 短暂出现 V4.1 Flash-1017 快照、Harness v0.2.1-rc1 发布\n\n2026-10-17 14:36 IT之家 - 问舟\n\nIT之家 10 月 17 日消息，今天上午，DeepSeek 在 API 层面连续出现多项变动。\n\n首先，DeepSeek 官方宣布 Search / Fetch API 已正式上线，两项接口均使用 DeepSeek 自研搜索引擎，为 Agent 与 RAG 应用提供实时网页内容。\n\nSearch 接口按 query 搜索网页并返回结构化结果，Fetch 接口则抓取单个网页，以 Markdown 文本返回标题与正文。两者均为原始 JSON API，Base URL 为 api.deepseek.com，使用与 DeepSeek API 相同的 Bearer 鉴权。\n\n根据 DeepSeek 支持文档，Search 与 Fetch 均按成功请求次数计费，价格为每千次 5 元，仅当 Search 返回非空结果列表、Fetch 返回页面正文且 HTTP 状态码为 200 时才产生费用，失败请求、空结果和超时不计费，请求的结果条数不影响价格。\n\n每个账号下 Search 与 Fetch 各自限制为每秒 5 次查询，两者独立计数，Fetch 还设有按域名的额外限制，超出限制返回 HTTP 429。Search 请求的 query 上限为 128 个字符，返回结果数可在 1 至 50 之间选择，默认为 10，结果中附带标题、URL、摘要、面向模型的较长摘要、可选的全文、发布日期、重排序分数及权威度评级。\n\n值得一提的是，Search API 上线后的前两周内（2026 年 11 月 1 日之前），通过 Claude Code 的 Web Search 工具或 Codex 的 web_search 功能触发的搜索不收取 Search 费用。\n\n在模型层面，X 平台上的机器人账号 AI Tracker Bot 在 DeepSeek 官方 API 列表中捕捉到了一个显示为“deepseek-v4.1-flash-1017”的 API 条目，但很快被移除。\n\n该账号指出，1017 后缀与 DeepSeek 此前的日期快照命名方式一致，如 V4-Flash-0731 和 V4-Pro-0813，因此可能指向一个新的 V4.1 Flash 快照。\n\n该账号同时更新称，DeepSeek API 上公开的 deepseek-flash 仍是 V4.1 Flash，而非 1017 快照；其输出与第三方托管相同开放权重的模型之间的吻合程度，与 V4 Pro 在两个托管方之间的一致性相当。截至发稿，DeepSeek 官方尚未对“1017”快照的存在或变更内容作出说明。\n\n作为背景，DeepSeek 于 9 月 10 日正式发布 V4.1 Flash，这是其全新模型结构系列中尺寸最小的模型，原生支持多模态视觉理解，模型名称改为 deepseek-flash 即可调用，上一代 V4 Flash 与 V4 Flash Vision Exp 已下线并暂时路由至 V4.1 Flash。",
+      "snippet": "首先，DeepSeek 官方宣布 Search / Fetch API 已正式上线，两项接口均使用 DeepSeek 自研搜索引擎，为 Agent 与 RAG 应用提供实时网页内容 ... DeepSeek 于 9 月 10 日正式发布 V4.1 Flash ... 上一代 V4 Flash 与 V4 Flash Vision Exp 已下线并暂时路由至 V4.1 Flash。",
+      "content": ""
+    },
+    {
+      "title": "DeepSeek V4.1 Flash新版本发布 许愿式编程一键成真 网友怒赞：太上进 超级斩杀线-快科技-科技改变生活",
+      "site_name": "快科技",
+      "site_icon": "https://cdn.deepseek.com/site-icons/mydrivers.com",
+      "authority": 3,
+      "rerank_score": 2.483233742606338,
+      "date": "2026-10-16T16:00:00+00:00",
+      "url": "https://m.mydrivers.com/%28s1ohzba2jzzqtj452j0asc55%29/newsview/1158265.html",
+      "summary": "DeepSeek V4.1 Flash新版本发布 许愿式编程一键成真 网友怒赞：太上进 超级斩杀线\n...\n- 2026年10月17日 17:47\n- 0\n\n快科技10月17日消息，据DeepSeek官方公众号今日消息，DeepSeek V4.1 Flash现已更新至V4.1-Flash-1017版本，官方网页端、APP与API模型已同步变更为新模型。\n\n据官方介绍，DeepSeek V4.1 Flash 1017通过基于自反馈的强化学习（RL）训练技术，提升了在游戏开发、3D建模等方面从零开始构建完整项目的能力，能够支持实现更多“许愿式”编程任务及项目开发请求。\n\n不仅如此，本次新版本发布 DeepSeek API 新增对 Search 与 Fetch 接口的支持，相关能力正式向公众开放。\n\n据了解，两个接口价格均为5元 / 千次，详细使用方法请参考官方API文档：API 指南 - 网页搜索与抓取。\n\n官方同时提醒：当前用户在DeepSeek Harness / Claude Code / Codex 中使用 DeepSeek API时，已经会通过Server端工具调用访问到 Search/Fetch 接口。\n\n据介绍，这部分 Search/Fetch 接口调用目前未计费，并将在两周后（北京时间2026年11月1日00:00）开始按次收取调用费用。",
+      "snippet": "快科技10月17日消息，据DeepSeek官方公众号今日消息，DeepSeek V4.1 Flash现已更新至V4.1-Flash-1017版本，官方网页端、APP与API模型已同步变更为新模型 ... 不仅如此，本次新版本发布 DeepSeek API 新增对 Search 与 Fetch 接口的支持，相关能力正式向公众开放。",
+      "content": ""
+    }
+  ]
+}

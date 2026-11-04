@@ -670,6 +670,25 @@ export function costSummary(days = 7) {
   };
 }
 
+// 今天真的付了钱的工具请求（搜索/抓页面）：界面和闸门都读这个数，不另存一份对不上的计数。
+export function toolCallsToday() {
+  const row = getDb()
+    .prepare(
+      `SELECT COUNT(*) AS calls,
+              SUM(CASE WHEN kind = 'search' THEN 1 ELSE 0 END) AS search,
+              SUM(CASE WHEN kind = 'fetch' THEN 1 ELSE 0 END) AS fetch,
+              COALESCE(SUM(cost_cny), 0) AS cost_cny
+       FROM costs WHERE created_at >= ? AND kind IN ('search', 'fetch')`,
+    )
+    .get(startOfShanghaiDayIso());
+  return {
+    calls: Number(row?.calls || 0),
+    search: Number(row?.search || 0),
+    fetch: Number(row?.fetch || 0),
+    costCny: Number(row?.cost_cny || 0),
+  };
+}
+
 /* ---------------- events ---------------- */
 
 export function addEvent(type, message = '', data = {}) {
