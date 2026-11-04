@@ -72,7 +72,9 @@ import {
 import { completeIntention, listIntentions } from './intentions.js';
 import { costBlocked, readCostState } from './budget.js';
 import { privacyProblems } from './privacy.js';
-import { synthesizeSpeech, ttsStatus, ttsVoices } from './tts.js';
+import { synthesizeSpeech, synthesizeWithRvc, ttsStatus, ttsVoices } from './tts.js';
+import { findRvcModel, listRvcModels, rvcEngineStatus } from './rvc.js';
+import { rvcRunnerMetrics } from './rvc-runner.js';
 import { asrStatus } from './asr.js';
 import { checkSpeakSlot, consumeCameraSlot, hearWav, noteSpeakUsed, presenceBudget, speakLine } from './presence.js';
 import { brainStats, curveForMemory, noteBrainLink } from './brain.js';
@@ -517,6 +519,8 @@ const EXPENSIVE_API = new Set([
   '/api/stickers/find',
   '/api/stickers/memes',
   '/api/voice/preview',
+  '/api/voice/rvc/preview',
+  '/api/voice/rvc/select',
   '/api/search/test',
   '/api/voice/echo',
   '/api/qq/test-voice',
@@ -542,6 +546,7 @@ const EXPENSIVE_API = new Set([
   '/api/presence/hear',
   '/api/presence/look',
   '/api/presence/speak',
+  '/api/voice/speak',
   '/api/qq/versions/check',
   '/api/qq/notify/test',
 ]);
@@ -1302,6 +1307,7 @@ async function handleApi(req, res, pathname, url) {
       ok: true,
       voices: ttsVoices(),
       engines: ttsStatus(),
+      rvc: rvcSetup(),
       asr: { ...asr, modelMb: Math.round((asr.modelBytes || 0) / 1024 / 1024) },
     });
   }
@@ -1315,6 +1321,7 @@ async function handleApi(req, res, pathname, url) {
         voice: body.voice || cfg.voice,
         rate: body.rate || cfg.rate,
         pitch: body.pitch || cfg.pitch,
+        volume: body.volume ?? cfg.volume,
         maxChars: 80,
       });
       addEvent('voice_preview', `试听了一次（${audio.voice || audio.engine}）`, { bytes: audio.bytes });
@@ -1323,11 +1330,78 @@ async function handleApi(req, res, pathname, url) {
         url: `/api/voice/audio?file=${encodeURIComponent(path.basename(audio.file))}`,
         engine: audio.engine,
         voice: audio.voice,
+        requestedVoice: body.voice || cfg.voice,
+        fallbackReason: audio.fallbackReason || '',
         bytes: audio.bytes,
       });
     } catch (error) {
       return sendJson(res, 500, { error: errorMessage(error) });
     }
+  }
+
+  if (pathname === '/api/voice/rvc/preview' && method === 'POST') {
+    // 控制台试听：先按现在的音色合成，再只对这一次做变声，不动他已经选定的那个模型。
+    const body = await readJsonBody(req);
+    const cfg = loadSettings().tts || {};
+    const engine = rvcEngineStatus();
+    const modelId = String(body.model || '').trim();
+    if (!engine.installed || !engine.baseWeights) {
+      return sendJson(res, 200, { ok: false, reason: engine.installed ? '缺 RVC 基座权重' : '还没装变声引擎', installHint: engine.installHint });
+    }
+    if (!findRvcModel(modelId)) return sendJson(res, 400, { error: '这个音色不在清单里，或文件不在磁盘上' });
+    const text = String(body.text || '').trim().slice(0, 60) || '你好呀，这个音色你听听看。';
+    try {
+      const { base, rvc } = await synthesizeWithRvc(text, modelId, { voice: cfg.voice, rate: cfg.rate, pitch: cfg.pitch, maxChars: 60 });
+      addEvent(rvc.ok ? 'rvc_preview' : 'rvc_preview_failed', rvc.ok ? `试听了一个变声音色（${rvc.title}）` : '变声试听没出声音', {
+        model: modelId,
+        ms: rvc.ms || null,
+        bytes: rvc.bytes || base.bytes,
+        reason: rvc.ok ? null : String(rvc.reason || '').slice(0, 120),
+      });
+      if (!rvc.ok) return sendJson(res, 200, { ok: false, reason: rvc.reason || '变声没成', baseEngine: base.engine, engineMissing: Boolean(rvc.engineMissing) });
+      return sendJson(res, 200, {
+        ok: true,
+        url: `/api/voice/audio?file=${encodeURIComponent(path.basename(rvc.file))}`,
+        model: rvc.model,
+        title: rvc.title,
+        ms: rvc.ms,
+        bytes: rvc.bytes,
+        baseEngine: base.engine,
+      });
+    } catch (error) {
+      return sendJson(res, 500, { error: errorMessage(error) });
+    }
+  }
+
+  if (pathname === '/api/voice/rvc/select' && method === 'POST') {
+    // 选定音色/开关/参数：开开关之前先确认引擎和这个模型真的在，别让他以为换了声音其实没换。
+    const body = await readJsonBody(req);
+    const settings = loadSettings();
+    const rvc = { ...(settings.tts.rvc || {}) };
+    if (body.model !== undefined) rvc.model = String(body.model || '').trim();
+    if (typeof body.enabled === 'boolean') rvc.enabled = body.enabled;
+    if (body.transpose !== undefined) rvc.transpose = Number(body.transpose);
+    if (body.f0 !== undefined) rvc.f0 = String(body.f0);
+    if (body.indexRate !== undefined) rvc.indexRate = Number(body.indexRate);
+    if (body.timeoutSeconds !== undefined) rvc.timeoutSeconds = Number(body.timeoutSeconds);
+    const engine = rvcEngineStatus();
+    const chosen = findRvcModel(rvc.model);
+    if (rvc.enabled && (!engine.installed || !engine.baseWeights || !chosen)) {
+      return sendJson(res, 400, {
+        error: !engine.installed
+          ? '还没装变声引擎，开不了（跑 ' + engine.installHint + '）'
+          : !chosen
+            ? '这个音色不在清单里或文件不在，开不了'
+            : '缺 RVC 基座权重，开不了',
+        rvc: { ...rvc, enabled: false },
+      });
+    }
+    const saved = saveSettings({ tts: { ...settings.tts, rvc } });
+    addEvent('rvc_select', rvc.enabled ? `发语音会用这个音色：${chosen ? chosen.title : rvc.model}` : '变声关掉了，发语音用原来的声音', {
+      model: rvc.model,
+      enabled: rvc.enabled,
+    });
+    return sendJson(res, 200, { ok: true, rvc: saved.tts.rvc, selected: chosen ? { id: chosen.id, title: chosen.title } : null, models: listRvcModels().length });
   }
 
   if (pathname === '/api/voice/compare' && method === 'POST') {
@@ -1361,6 +1435,8 @@ async function handleApi(req, res, pathname, url) {
           const audio = await synthesizeSpeech(text, { voice, rate: cfg.rate, pitch: cfg.pitch, volume: cfg.volume || '', maxChars: 80 });
           results.push({
             voice,
+            actualVoice: audio.voice,
+            fallbackReason: audio.fallbackReason || '',
             label: labelOf(voice),
             ok: true,
             engine: audio.engine,
@@ -2023,10 +2099,13 @@ async function handleApi(req, res, pathname, url) {
     });
   }
 
-  if (pathname === '/api/presence/speak' && method === 'POST') {
+  if (['/api/presence/speak', '/api/voice/speak'].includes(pathname) && method === 'POST') {
     const settings = loadSettings();
-    if (!settings.presence?.speakReplies) {
+    if (pathname === '/api/presence/speak' && !settings.presence?.speakReplies) {
       throw new HttpError(403, '控制台念话是关的：设置页「陪伴与感官」里打开');
+    }
+    if (pathname === '/api/voice/speak' && !settings.tts?.enabled) {
+      throw new HttpError(403, '语音是关的：到设置页打开');
     }
     const body = await readJsonBody(req);
     const text = String(body.text || '').trim();
@@ -2056,7 +2135,29 @@ function shouldLockApi(pathname, method) {
   return /^\/api\/posts\/\d+\/publish$/.test(pathname);
 }
 
-export function botAccountFile() {
+export // 变声引擎的界面摘要：装没装、几个音色可用、他现在选的是哪个。数量一律来自清单实测。
+function rvcSetup() {
+  const engine = rvcEngineStatus();
+  const cfg = loadSettings().tts?.rvc || {};
+  return {
+    installed: engine.installed,
+    baseWeights: engine.baseWeights,
+    modelCount: engine.modelCount,
+    readyCount: engine.readyCount,
+    installHint: engine.installHint,
+    enabled: cfg.enabled === true,
+    model: cfg.model || '',
+    modelTitle: findRvcModel(cfg.model)?.title || '',
+    transpose: cfg.transpose || 0,
+    f0: cfg.f0 || 'harvest',
+    timeoutSeconds: cfg.timeoutSeconds || 180,
+    // 冷启动/上一条的真实耗时由工人报，界面不猜。
+    runner: rvcRunnerMetrics(),
+    models: engine.models.map((item) => ({ id: item.id, title: item.title, family: item.family, bytes: item.bytes, available: item.available, source: item.source, hasSample: Boolean(item.sample) })),
+  };
+}
+
+function botAccountFile() {
   return path.join(paths.data, 'qq-account.txt');
 }
 

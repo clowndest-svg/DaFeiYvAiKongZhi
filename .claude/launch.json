@@ -1,1 +1,1 @@
-{"version":"0.0.1","configurations":[{"name":"isolated-console","runtimeExecutable":"node","runtimeArgs":["tools/demo.mjs"],"port":7790}]}
+{"version":"0.0.1","configurations":[{"name":"isolated-console","runtimeExecutable":"node","runtimeArgs":["tools/demo.mjs"],"port":7790},{"name":"live-companion","runtimeExecutable":"node","runtimeArgs":["--import=./data/node-restart-20261031/account-process-guard.mjs","--disable-warning=ExperimentalWarning","src/index.js"],"port":7788}]}

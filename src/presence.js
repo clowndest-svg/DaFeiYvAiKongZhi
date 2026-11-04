@@ -170,12 +170,14 @@ export async function speakLine(text, settings) {
     voice: settings?.tts?.voice,
     rate: settings?.tts?.rate,
     pitch: settings?.tts?.pitch,
+    volume: settings?.tts?.volume,
     maxChars: MAX_SPEAK_CHARS,
   });
   return {
     url: `/api/voice/audio?file=${encodeURIComponent(path.basename(audio.file))}`,
     engine: audio.engine,
     voice: audio.voice,
+    fallbackReason: audio.fallbackReason || '',
     bytes: audio.bytes,
   };
 }

@@ -6,6 +6,7 @@ import { env, paths, loadSettings } from './config.js';
 import { logger } from './logger.js';
 import { ensureDir } from './util.js';
 import { LocalTtsRunner } from './local-tts.js';
+import { rvcConvert } from './rvc.js';
 
 export const DEFAULT_VOICE = 'zh-CN-XiaoxiaoNeural';
 
@@ -98,7 +99,7 @@ function runSpawn(exe, args, { timeoutMs = 25000, expectFile, stdin = '' }) {
       clearTimeout(timer);
       const bytes = expectFile && fs.existsSync(expectFile) ? fs.statSync(expectFile).size : 0;
       if (code === 0 && bytes > 512) resolve(expectFile);
-      else reject(new Error(`${path.basename(exe)} 失败（${code}）${err.replace(/\s+/g, ' ').slice(0, 140)}`));
+      else reject(new Error(`${path.basename(exe)} 失败（${code}）${err.replace(/\s+/g, ' ').slice(-240)}`));
     });
     if (stdin) {
       child.stdin.on('error', () => {
@@ -110,15 +111,19 @@ function runSpawn(exe, args, { timeoutMs = 25000, expectFile, stdin = '' }) {
   });
 }
 
-async function edgeCliSynthesize(text, { voice, rate, pitch, volume }, file) {
+export function buildEdgeArgs(text, { voice, rate, pitch, volume }, file) {
+  // argparse 会把单独的负值当成选项；带符号的参数必须与选项名合在一起。
+  const args = ['-m', 'edge_tts', '--voice', voice, `--rate=${rate}`, `--pitch=${pitch}`];
+  const vol = signed(volume, /^[+-][0-9]{1,3}%$/, '');
+  if (vol) args.push(`--volume=${vol}`);
+  args.push('--text', text, '--write-media', file);
+  return args;
+}
+
+async function edgeCliSynthesize(text, options, file) {
   const cli = edgeCli();
   if (!cli) throw new Error('没装 edge 音色环境（voice/pyenv）');
-  const args = ['-m', 'edge_tts', '--voice', voice, '--rate', rate, '--pitch', pitch];
-  // 没显式给音量就一个参数都不多加：默认调用形态必须和改动前逐字一致。
-  const vol = signed(volume, /^[+-][0-9]{1,3}%$/, '');
-  if (vol) args.push('--volume', vol);
-  args.push('--text', text, '--write-media', file);
-  await runSpawn(cli.python, args, { timeoutMs: 30000, expectFile: file });
+  await runSpawn(cli.python, buildEdgeArgs(text, options, file), { timeoutMs: 30000, expectFile: file });
   return file;
 }
 
@@ -191,7 +196,52 @@ async function cloneSynthesize(text, { cloneUrl, cloneRefAudio, clonePromptText 
   return { bytes: buf.length, mime: buf[0] === 0x52 ? 'audio/wav' : 'audio/mpeg' };
 }
 
-export async function synthesizeSpeech(
+// 控制台"试听某个音色"用的这条路：先按当前设置合成，再只针对这一次做变声，不改用户选中的模型。
+export async function synthesizeWithRvc(text, modelId, opts = {}) {
+  const base = await synthesizeBase(text, opts);
+  const cfg = loadSettings().tts?.rvc || {};
+  const out = await rvcConvert(base.file, modelId, {
+    transpose: opts.transpose ?? cfg.transpose,
+    indexRate: opts.indexRate ?? cfg.indexRate,
+    protect: opts.protect ?? cfg.protect,
+    f0: opts.f0 || cfg.f0,
+    timeoutMs: Math.max(15, Math.min(600, Number(cfg.timeoutSeconds || 180))) * 1000,
+  });
+  return { base, rvc: out };
+}
+
+// 他选的音色如果是"二次变声"出来的，那这一步必须真的跑过；跑不过就发原声并如实带上原因。
+export async function synthesizeSpeech(text, opts = {}) {
+  const base = await synthesizeBase(text, opts);
+  return applyRvc(base);
+}
+
+export async function applyRvc(base, { convert = rvcConvert } = {}) {
+  const cfg = loadSettings().tts?.rvc || {};
+  if (cfg.enabled !== true || !cfg.model) return base;
+  const out = await convert(base.file, cfg.model, {
+    transpose: cfg.transpose,
+    indexRate: cfg.indexRate,
+    protect: cfg.protect,
+    f0: cfg.f0,
+    timeoutMs: Math.max(15, Math.min(600, Number(cfg.timeoutSeconds || 180))) * 1000,
+  });
+  if (!out.ok) {
+    logger.warn('二次变声没成，这条发原来的声音', { model: cfg.model, reason: out.reason });
+    return { ...base, rvc: { attempted: true, ok: false, reason: out.reason || '变声没成' } };
+  }
+  removeQuietly(base.file);
+  return {
+    ...base,
+    file: out.file,
+    bytes: out.bytes,
+    mime: 'audio/wav',
+    engine: `${base.engine}+rvc`,
+    rvc: { attempted: true, ok: true, model: out.model, title: out.title, ms: out.ms },
+  };
+}
+
+async function synthesizeBase(
   text,
   { voice = DEFAULT_VOICE, rate = '+2%', pitch = '-12Hz', volume = '', maxChars = 160 } = {},
 ) {
@@ -199,6 +249,7 @@ export async function synthesizeSpeech(
   if (!clean) throw new Error('没有要说的话');
   ensureDir(paths.media);
   const chosen = normalizeVoice(voice);
+  let fallbackReason = '';
   const stamp = `${Date.now()}-${randomUUID()}`;
 
   // 克隆音色优先：配了地址就先试，失败按"退回在线音色"处理，绝不因为克隆挂掉就不说话。
@@ -237,6 +288,7 @@ export async function synthesizeSpeech(
       logger.info('语音已合成（edge 音色）', { bytes, chars: clean.length, voice: chosen });
       return { file: mp3, bytes, mime: 'audio/mpeg', engine: 'edge', voice: chosen, text: clean };
     } catch (error) {
+      fallbackReason = '在线音色暂时不可用，已切换到本地语音';
       logger.warn('edge 音色不通，退回本地声', { error: error.message, voice: chosen });
       removeQuietly(mp3);
     }
@@ -248,7 +300,7 @@ export async function synthesizeSpeech(
       await piperSynthesize(clean, wav);
       const bytes = fs.statSync(wav).size;
       logger.info('语音已合成（piper 本地）', { bytes, chars: clean.length });
-      return { file: wav, bytes, mime: 'audio/wav', engine: 'piper', voice: 'local-piper', text: clean };
+      return { file: wav, bytes, mime: 'audio/wav', engine: 'piper', voice: 'local-piper', requestedVoice: chosen, fallbackReason, text: clean };
     } catch (error) {
       logger.warn('piper 合成失败，退回本机语音', { error: error.message });
       removeQuietly(wav);
@@ -260,7 +312,7 @@ export async function synthesizeSpeech(
     await sapiSynthesize(clean, file);
     const bytes = fs.statSync(file).size;
     logger.info('语音已合成（本机 SAPI）', { bytes, chars: clean.length });
-    return { file, bytes, mime: 'audio/wav', engine: 'sapi', voice: 'sapi', text: clean };
+    return { file, bytes, mime: 'audio/wav', engine: 'sapi', voice: 'sapi', requestedVoice: chosen, fallbackReason: fallbackReason || '所选音色不可用，已切换到系统语音', text: clean };
   } catch (error) {
     removeQuietly(file);
     throw error;

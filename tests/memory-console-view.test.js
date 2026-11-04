@@ -61,3 +61,42 @@ test('睡前反思收成一行可展开，不再把整段铺在列表上方', ()
   assert.ok(html.includes('id="dreamSummary"'), '展开前的那一行摘要没了');
   assert.ok(!/睡前想过：\$\{dream\.dream\}/.test(app), '整段反思又被塞进一行文本里了');
 });
+
+test('列表筛选用的 kind 必须就是后端发出来的那几个（角标有数、列表空着就是这么来的）', () => {
+  fs.mkdirSync(paths.weekly, { recursive: true });
+  fs.mkdirSync(paths.letters, { recursive: true });
+  fs.writeFileSync(path.join(paths.weekly, 'WEEKLY-2025-03-09.md'), '她自己写的一周。');
+  fs.writeFileSync(path.join(paths.letters, 'HANDOVER-2025-03-09.md'), '给未来自己的信。');
+  const real = new Set(getMemoryOverview({ query: '' }).letters.map((item) => item.kind));
+  assert.ok(real.has('周记'), '后端这周就没发过「周记」这个 kind，判据要换个方向查');
+  // FILE_KIND 是前端唯一的口径来源：标签页 -> 后端 kind
+  const mapLine = /const FILE_KIND = \{([^}]+)\}/.exec(app);
+  assert.ok(mapLine, '前端没有 FILE_KIND 这张口径表');
+  const map = {};
+  for (const pair of mapLine[1].split(',')) {
+    const m = /(\w+):\s*'([^']+)'/.exec(pair.trim());
+    if (m) map[m[1]] = m[2];
+  }
+  assert.equal(map.weekly, '周记', 'FILE_KIND.weekly 不是后端那个 kind');
+  // 每一处 fileRows(...) 调用都要落到真 kind 上：写英文 'weekly' 会让角标显示 3 条、列表空着。
+  const calls = [...app.matchAll(/(?<!function )fileRows\(([^)]*)\)/g)].map((m) => m[1].trim());
+  assert.ok(calls.length >= 2, `只找到 ${calls.length} 处筛选调用，判据没覆盖到`);
+  for (const arg of calls) {
+    const literal = /^'([^']+)'$/.exec(arg);
+    const keyed = /^FILE_KIND\.(\w+)$/.exec(arg);
+    // FILE_KIND[state.memoryTab] 这种动态取值：整张表的值都必须是后端真发出来的 kind，
+    // 否则任何一页都可能筛出空列表——这正是角标有数、列表空着的那种错。
+    const resolved = literal ? literal[1] : keyed ? map[keyed[1]] : /^FILE_KIND\[[^\]]+\]$/.test(arg) ? 'ALL' : null;
+    assert.ok(resolved, `fileRows(${arg}) 的参数不是可核对的口径`);
+    if (resolved === 'ALL') {
+      for (const [tab, kind] of Object.entries(map)) assert.ok(real.has(kind), `FILE_KIND.${tab} 的「${kind}」后端根本不发`);
+      continue;
+    }
+    assert.ok(real.has(resolved), `fileRows(${arg}) 用的「${resolved}」后端根本不发，列表会永远空着`);
+  }
+  // 角标和列表必须同口径：三个文件类标签都过一遍
+  for (const tab of ['diary', 'weekly', 'letters']) {
+    assert.ok(app.includes(`$('#count${tab[0].toUpperCase()}${tab.slice(1)}')`), `${tab} 的角标没渲染`);
+    assert.ok(real.has(map[tab]), `${tab} 角标用的 kind「${map[tab]}」不是后端口径`);
+  }
+});

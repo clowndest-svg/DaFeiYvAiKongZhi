@@ -1498,8 +1498,8 @@ ${history}
     }
     if (!this.voiceBudgetLeft().ok) return false;
     const spoken = explicit && text.length > maxChars ? text.slice(0, maxChars).replace(/[，,。.!！?？；;：:][^，,。.!！?？；;：:]*$/, '') : text;
-    const baseRate = Number(String(tts.rate || '+8%').replace('%', '')) || 8;
-    const basePitch = Number(String(tts.pitch || '+2Hz').replace(/[^\d+-]/g, '')) || 2;
+    const baseRate = Number(String(tts.rate || '+2%').replace('%', ''));
+    const basePitch = Number(String(tts.pitch || '-12Hz').replace(/[^\d+-]/g, ''));
     const rate = `${Math.round(baseRate + (mood.energy - 0.5) * 8)}%`;
     const pitch = `${Math.round(basePitch + mood.valence * 2)}Hz`;
     try {
@@ -1528,8 +1528,8 @@ ${history}
     }
     const tts = loadSettings().tts || {};
     const mood = getMood();
-    const baseRate = Number(String(tts.rate || '+8%').replace('%', '')) || 8;
-    const basePitch = Number(String(tts.pitch || '+2Hz').replace(/[^\d+-]/g, '')) || 2;
+    const baseRate = Number(String(tts.rate || '+2%').replace('%', ''));
+    const basePitch = Number(String(tts.pitch || '-12Hz').replace(/[^\d+-]/g, ''));
     const sign = (value, unit) => `${value >= 0 ? '+' : ''}${Math.round(value)}${unit}`;
     // 会话里情绪只许小幅挪动：语速变化太大会让同一场电话里像换了个人。
     const rate = sign(baseRate + (mood.energy - 0.5) * 4, '%');

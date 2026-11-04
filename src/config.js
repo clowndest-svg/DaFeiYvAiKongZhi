@@ -220,13 +220,22 @@ export function normalizeSettings(settings) {
     ttsVoice === 'local-piper' || ttsVoice === 'local-matcha' || /^[a-z]{2}-[A-Z]{2}(-[A-Za-z0-9]+)*Neural$/.test(ttsVoice)
       ? ttsVoice
       : 'zh-CN-XiaoxiaoNeural';
-  s.tts.rate = /^[+-][0-9]{1,3}%$/.test(String(s.tts?.rate || '')) ? String(s.tts.rate) : '+8%';
-  s.tts.pitch = /^[+-][0-9]{1,3}Hz$/.test(String(s.tts?.pitch || '')) ? String(s.tts.pitch) : '+2Hz';
+  s.tts.rate = /^[+-][0-9]{1,3}%$/.test(String(s.tts?.rate || '')) ? String(s.tts.rate) : FALLBACK_SETTINGS.tts.rate;
+  s.tts.pitch = /^[+-][0-9]{1,3}Hz$/.test(String(s.tts?.pitch || '')) ? String(s.tts.pitch) : FALLBACK_SETTINGS.tts.pitch;
   s.tts.volume = /^[+-][0-9]{1,3}%$/.test(String(s.tts?.volume || '')) ? String(s.tts.volume) : '';
   s.tts.listen = s.tts.listen !== false;
   s.tts.maxPerDay = Math.min(30, Math.max(0, numberOr(s.tts?.maxPerDay, 8)));
   s.tts.maxChars = Math.min(200, Math.max(20, numberOr(s.tts?.maxChars, 120)));
   s.tts.chance = Math.min(1, Math.max(0, numberOr(s.tts?.chance, 0.18)));
+  // 二次变声（RVC）：开关与选中的模型都由界面写；参数一律夹在引擎能用范围内。
+  const rvc = (s.tts.rvc = s.tts.rvc && typeof s.tts.rvc === 'object' ? s.tts.rvc : {});
+  rvc.enabled = rvc.enabled === true;
+  rvc.model = String(rvc.model || '').trim().slice(0, 60);
+  rvc.transpose = Math.max(-24, Math.min(24, Math.round(numberOr(rvc.transpose, 0))));
+  rvc.indexRate = Math.max(0, Math.min(1, numberOr(rvc.indexRate, 0.5)));
+  rvc.protect = Math.max(0, Math.min(0.5, numberOr(rvc.protect, 0.33)));
+  rvc.f0 = ['harvest', 'pm', 'crepe', 'rmvpe', 'mfcc'].includes(rvc.f0) ? rvc.f0 : 'harvest';
+  rvc.timeoutSeconds = Math.max(15, Math.min(600, Math.round(numberOr(rvc.timeoutSeconds, 180))));
   s.tts.callEnabled = s.tts?.callEnabled === true;
   s.tts.callDailyMax = Math.min(80, Math.max(0, numberOr(s.tts?.callDailyMax, 40)));
   s.tts.callMinIntervalSeconds = Math.min(120, Math.max(0, numberOr(s.tts?.callMinIntervalSeconds, 8)));

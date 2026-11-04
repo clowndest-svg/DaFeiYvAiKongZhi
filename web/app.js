@@ -830,7 +830,7 @@ async function sendMessage() {
             streamingBubble = null;
           }
           appendMessage(event.message);
-          if (state.ttsAuto) speak(event.message.content);
+          if (state.ttsAuto && !(presenceVisible() && presenceSettings().speakReplies)) speak(event.message.content);
           loadStatus().catch(() => {});
           setTimeout(() => loadMemory().catch(() => {}), 3200);
           for (const delay of [4500, 9000]) {
@@ -949,24 +949,61 @@ function clearImages() {
 
 /* ---------------- speech ---------------- */
 
-function speak(text) {
-  if (!('speechSynthesis' in window)) {
-    toast('这个浏览器不支持朗读。', 'error');
-    return;
+function stopSpeech() {
+  state.speechAbort?.abort();
+  state.speechAudio?.pause();
+  state.speechAudio = null;
+}
+
+async function speak(text) {
+  const lines = splitSentences(text);
+  if (!lines.length) return;
+  stopSpeech();
+  const controller = new AbortController();
+  state.speechAbort = controller;
+  const previous = state.speechWork;
+  let release;
+  state.speechWork = new Promise(resolve => { release = resolve; });
+  try {
+    // 合成接口有互斥锁；旧请求完成后再合成新句子，作废的音频不播放。
+    if (previous) await previous;
+    for (const line of lines) {
+      if (controller.signal.aborted) return;
+      const result = await api('/api/voice/speak', {
+        method: 'POST', body: { text: line },
+      });
+      if (controller.signal.aborted) return;
+      if (result.fallbackReason) toast(result.fallbackReason, 'error');
+      const audio = new Audio(withToken(result.url));
+      state.speechAudio = audio;
+      await new Promise((resolve, reject) => {
+        let timer;
+        const done = (error) => {
+          clearTimeout(timer);
+          audio.onended = null;
+          audio.onerror = null;
+          controller.signal.removeEventListener('abort', cancel);
+          audio.pause();
+          error ? reject(error) : resolve();
+        };
+        const cancel = () => done();
+        audio.onended = () => done();
+        audio.onerror = () => done(new Error('合成的语音播放失败'));
+        controller.signal.addEventListener('abort', cancel, { once: true });
+        timer = setTimeout(() => done(new Error('语音播放超时')), 60000);
+        audio.play().catch(done);
+      });
+    }
+  } catch (error) {
+    if (!controller.signal.aborted) toast(`朗读失败：${error.message}`, 'error');
+  } finally {
+    release();
+    if (state.speechAbort === controller) {
+      state.speechAbort = null;
+      state.speechAudio = null;
+      state.speechWork = null;
+    }
   }
-  if (!text) return;
-  const synth = window.speechSynthesis;
-  synth.cancel();
-  const utterance = new SpeechSynthesisUtterance(String(text).slice(0, 500));
-  utterance.lang = 'zh-CN';
-  utterance.rate = 1.03;
-  utterance.pitch = 1.12;
-  const voices = synth.getVoices();
-  const zh = voices.filter((v) => /zh|chinese/i.test(`${v.lang} ${v.name}`));
-  const preferred =
-    zh.find((v) => /xiaoxiao|huihui|yaoyao|tingting|female|女/i.test(v.name)) || zh[0];
-  if (preferred) utterance.voice = preferred;
-  synth.speak(utterance);
 }
 
 function updateVoiceButton() {
@@ -1029,7 +1066,9 @@ function memoryItems() {
   if (!state.memory) return [];
   if (state.memoryTab === 'weekly') {
     // 小红书周报（XHSWEEK）和她自己写的周记（WEEKLY）是两种东西，以前混在一个列表里。
-    const rows = fileRows('weekly');
+    // kind 的取值是后端 listLetters() 给的中文（'周记'），跟角标同一个口径；
+    // 这里写 'weekly' 会让角标显示 3 条、列表却空着。
+    const rows = fileRows(FILE_KIND.weekly);
     if (state.weeklyFilter === 'mine') return rows.filter((item) => !/^XHSWEEK/i.test(String(item.name || '')));
     if (state.weeklyFilter === 'xhs') return rows.filter((item) => /^XHSWEEK/i.test(String(item.name || '')));
     return rows;
@@ -1726,6 +1765,94 @@ function renderSearchLine() {
   }
 }
 
+function renderRvc() {
+  const line = $('#rvcStatusLine');
+  const listBox = $('#rvcModelList');
+  if (!line || !listBox) return;
+  const r = state.voiceSetup?.rvc;
+  if (!r) {
+    line.textContent = '正在读取变声引擎状态…';
+    listBox.textContent = '';
+    return;
+  }
+  $('#rvcEnabled').checked = r.enabled === true;
+  $('#rvcTranspose').value = r.transpose ?? 0;
+  $('#rvcF0').value = r.f0 || 'harvest';
+  $('#rvcTimeout').value = r.timeoutSeconds || 180;
+  if (!r.installed || !r.baseWeights) {
+    line.textContent = `变声引擎${r.installed ? '缺基座权重' : '还没装'}：装好才能试听，命令是 ${r.installHint}`;
+    listBox.textContent = '';
+    return;
+  }
+  const m = r.runner || {};
+  const timing = m.calls ? ` · 已转 ${m.calls} 条，第一条 ${Math.round((m.firstMs || 0) / 1000)} 秒，最近一条 ${Math.round((m.lastMs || 0) / 1000)} 秒${m.alive ? '（进程还留着）' : '（下次要重新载入）'}` : ' · 还没在这台机器上真转过';
+  line.textContent = `引擎已装 · 清单 ${r.modelCount} 个 · 可用 ${r.readyCount} 个 · 现在${r.enabled ? `开着，发语音用「${r.modelTitle || r.model || '没选'}」` : '关着，发语音用原来的声音'}${timing}`;
+  listBox.textContent = '';
+  for (const model of r.models) {
+    const row = el('div', 'compare-row');
+    row.appendChild(el('strong', '', model.title));
+    row.appendChild(el('span', 'muted small', `${model.family} · ${(model.bytes / 1e6).toFixed(0)}MB${model.id === r.model ? ' · 当前选中' : ''}${model.available ? '' : ' · 文件不在'}`));
+    const audition = el('button', 'icon-btn', '试听这个');
+    audition.type = 'button';
+    audition.disabled = !model.available;
+    audition.addEventListener('click', () => rvcAudition(model.id, audition));
+    const pick = el('button', 'icon-btn', model.id === r.model && r.enabled ? '已启用' : '用这个声音');
+    pick.type = 'button';
+    pick.disabled = !model.available;
+    pick.addEventListener('click', () => rvcSelect(model.id, pick));
+    row.appendChild(audition);
+    row.appendChild(pick);
+    listBox.appendChild(row);
+  }
+  if (!r.models.length) listBox.appendChild(el('p', 'muted small', '清单里一个模型都没有：跑 node tools/fetch-rvc-models.mjs 下载音色库。'));
+}
+
+async function rvcAudition(modelId, btn) {
+  await withBusy(btn, async () => {
+    const player = $('#voicePreviewPlayer');
+    try {
+      const data = await api('/api/voice/rvc/preview', { method: 'POST', body: { model: modelId } });
+      if (!data.ok) {
+        toast(`这个音色没变出声音：${data.reason || '未知原因'}`, 'error');
+        return;
+      }
+      if (player) {
+        player.classList.remove('hidden');
+        player.src = data.url;
+        await player.play().catch(() => {});
+      }
+      toast(`变了：${data.title}（${data.ms}ms）`);
+    } catch (error) {
+      toast(`试听失败：${error.message}`, 'error');
+    }
+  });
+}
+
+// 一次调用只写一份口径：模型、开关、参数都走 /api/voice/rvc/select，写完重新读引擎状态。
+async function rvcSelect(modelId, btn) {
+  const run = async () => {
+    const body = {
+      transpose: Number($('#rvcTranspose').value) || 0,
+      f0: $('#rvcF0').value,
+      timeoutSeconds: Number($('#rvcTimeout').value) || 180,
+    };
+    if (modelId) body.model = modelId;
+    else body.enabled = $('#rvcEnabled').checked;
+    try {
+      const data = await api('/api/voice/rvc/select', { method: 'POST', body });
+      toast(modelId ? `以后发语音用「${data.selected?.title || modelId}」` : data.rvc?.enabled ? '变声已打开' : '变声已关掉，发语音用原来的声音');
+    } catch (error) {
+      toast(error.message, 'error');
+    }
+    await loadVoiceSetup();
+  };
+  if (btn) {
+    await withBusy(btn, run);
+    return;
+  }
+  await run();
+}
+
 function renderVoiceLine() {
   const line = $('#voiceStatusLine');
   if (!line) return;
@@ -1761,6 +1888,7 @@ async function loadVoiceSetup() {
   const previous = $('#setVoiceName')?.value || state.settings?.tts?.voice;
   state.voiceSetup = data;
   fillVoiceSelect(previous);
+  renderRvc();
   renderVoiceLine();
 }
 
@@ -1771,6 +1899,7 @@ function compareRow(item) {
   const head = el('div', 'compare-head');
   head.appendChild(el('strong', '', item.label || item.voice));
   head.appendChild(el('span', 'muted small', item.ok ? `${item.engine} · ${item.ms}ms · ${item.bytes} 字节 · 时长${item.seconds == null ? '未测量' : `${item.seconds.toFixed(2)}s`}` : `没出声：${item.error || '未知原因'}`));
+  if (item.fallbackReason) head.appendChild(el('span', 'muted small', `${item.fallbackReason}（实际音色：${item.actualVoice || item.engine}）`));
   row.appendChild(head);
   if (item.ok) {
     const audio = el('audio');
@@ -1780,8 +1909,9 @@ function compareRow(item) {
     const use = el('button', 'icon-btn', '就用这个');
     use.type = 'button';
     use.addEventListener('click', () => {
-      fillVoiceSelect(item.voice);
-      toast(`已选中 ${item.label || item.voice}，记得点保存才生效。`);
+      const actual = item.actualVoice || item.voice;
+      fillVoiceSelect(actual);
+      toast(`已选中 ${actual}，记得点保存才生效。`);
     });
     row.appendChild(use);
   }
@@ -1804,7 +1934,7 @@ async function previewVoice(button) {
       player.src = withToken(data.url);
       player.classList.remove('hidden');
       await player.play();
-      toast(`刚用的是 ${data.voice || data.engine}。`);
+      toast(data.fallbackReason ? `${data.fallbackReason}（${data.voice || data.engine}）` : `刚用的是 ${data.voice || data.engine}。`, data.fallbackReason ? 'error' : '');
     } catch (error) {
       toast(`试听失败：${error.message}`, 'error');
     }
@@ -1870,8 +2000,8 @@ function fillSettings() {
   $('#setVoiceMax').value = settings.tts?.maxPerDay ?? 8;
   $('#setVoiceChance').value = settings.tts?.chance ?? 0.18;
   fillVoiceSelect(settings.tts?.voice || 'zh-CN-XiaoxiaoNeural');
-  $('#setVoiceRate').value = settings.tts?.rate || '+8%';
-  $('#setVoicePitch').value = settings.tts?.pitch || '+2Hz';
+  $('#setVoiceRate').value = settings.tts?.rate || '+2%';
+  $('#setVoicePitch').value = settings.tts?.pitch || '-12Hz';
   $('#setVoiceMaxChars').value = settings.tts?.maxChars ?? 120;
   $('#setVoiceVolume').value = settings.tts?.volume || '';
   $('#setVoiceCall').checked = settings.tts?.callEnabled === true;
@@ -2693,6 +2823,7 @@ function bindChat() {
   });
   $('#voiceBtn').addEventListener('click', () => {
     state.ttsAuto = !state.ttsAuto;
+    if (!state.ttsAuto) stopSpeech();
     updateVoiceButton();
     if (state.settings?.ui) state.settings.ui.autoSpeak = state.ttsAuto;
     const checkbox = $('#setAutoSpeak');
@@ -2820,6 +2951,8 @@ function bindSettings() {
   $('#saveSettingsBtn').addEventListener('click', () => saveSettings());
   $$('[data-save-scope]').forEach(button => button.addEventListener('click', () => saveSettings(button.dataset.saveScope)));
   $('#voicePreviewBtn').addEventListener('click', () => previewVoice($('#voicePreviewBtn')));
+  $('#rvcEnabled').addEventListener('change', () => rvcSelect(''));
+  for (const id of ['#rvcTranspose', '#rvcF0', '#rvcTimeout']) $(id).addEventListener('change', () => rvcSelect(''));
   $('#searchTestBtn').addEventListener('click', () => withBusy($('#searchTestBtn'), async () => {
     const box = $('#searchTestResult');
     const query = String($('#searchTestQuery').value || '').trim();
@@ -3765,9 +3898,8 @@ function playOneLine(audio, line) {
         audio.play().catch(done);
       })
       .catch((error) => {
-        setPresenceHint(`念不出来：${error.message}（先用系统声音顶上）`, 'warn');
-        speak(line);
-        window.setTimeout(resolve, Math.min(9000, 1600 + line.length * 180));
+        setPresenceHint(`念不出来：${error.message}`, 'warn');
+        resolve();
       });
   });
 }

@@ -137,6 +137,15 @@
     "maxPerDay": 8,
     "maxChars": 120,
     "chance": 0.18,
+    "rvc": {
+      "enabled": false,
+      "model": "",
+      "transpose": 0,
+      "indexRate": 0.5,
+      "protect": 0.33,
+      "f0": "harvest",
+      "timeoutSeconds": 180
+    },
     "callEnabled": false,
     "callDailyMax": 40,
     "callMinIntervalSeconds": 8

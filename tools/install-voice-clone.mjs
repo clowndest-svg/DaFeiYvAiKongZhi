@@ -9,10 +9,15 @@ const TARGET = 'E:/RuanJian/GPT-SoVITS';
 const die = (m) => { console.log('✗ ' + m); console.log('RESULT fail'); process.exit(1); };
 const ok = (m) => console.log('✓ ' + m);
 
+// 剩余空间用 Node 自带的 statfs 量。之前调 PowerShell 的 Get-PSDrive "E:" 会报"找不到驱动器"
+// （PSDrive 的名字不带冒号），拿不到数就当 0 GB，于是明明还有 138 GB 却每次都拒绝安装。
 function diskFreeGb(dir) {
-  const r = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    `(Get-PSDrive ${JSON.stringify(dir.slice(0, 2))}).Free/1GB`]);
-  return Math.floor(Number(String(r.stdout).trim()) || 0);
+  try {
+    const s = fs.statfsSync(dir.slice(0, 2) === '..' ? process.cwd() : `${dir.slice(0, 2)}/`);
+    return Math.floor((s.bavail * s.bsize) / 1e9);
+  } catch {
+    return -1;
+  }
 }
 function run(file, args, opts = {}) {
   const r = spawnSafe(file, args, opts);
@@ -29,7 +34,8 @@ const mode = argv.includes('--install') ? 'install' : 'check';
 fs.mkdirSync(TARGET, { recursive: true });
 const free = diskFreeGb(TARGET);
 console.log(`目标目录：${TARGET}（E 盘剩余约 ${free} GB）`);
-if (free < 20) die('E 盘剩余不足 20 GB，先腾地方（整合包解压后约 10–15 GB）');
+if (free < 0) die('量不到目标盘剩余空间，先确认目录能访问');
+if (free < 20) die('目标盘剩余不足 20 GB（实测 ' + free + ' GB），先腾地方（整合包解压后约 10–15 GB）');
 
 if (mode === 'check') {
   console.log('下一步：--install 会从 GitHub 下载官方整合包（约 3–6 GB），只下载、不自动解压不自动运行。');
