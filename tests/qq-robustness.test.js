@@ -94,21 +94,22 @@ test('同一会话不并发回两轮；正在回时来的消息排到下一轮',
   server.close();
 });
 
-test('限流分桶：群刷屏不能吃掉主人私聊的额度', () => {
+test('限流分桶：主人不受条数上限，群/陌生人照旧受限', () => {
   const settings = { qq: { maxRepliesPerHour: 8 } };
   channel.markReply('group');
   channel.markReply('group');
   channel.markReply('group');
   const group = channel.replyBucket('group', settings);
   assert.equal(group.limit, 3, '群/陌生人一路只给约四分之一，且不低于 3');
-  assert.equal(group.ok, false, `群里回满就该停：${JSON.stringify(group)}`);
+  assert.equal(group.ok, false, '群里回满就该停：' + JSON.stringify(group));
   const owner = channel.replyBucket('owner', settings);
-  assert.equal(owner.ok, true, '主人私聊这一路还要能回');
-  assert.equal(owner.limit, 8, '主人一路吃全额');
-  for (let i = 0; i < 8; i += 1) channel.markReply('owner');
-  assert.equal(channel.replyBucket('owner', settings).ok, false, '全局硬顶还是要挡');
-  assert.match(channel.replyBucket('owner', settings).reason, /总共回了/);
+  assert.equal(owner.ok, true, '主人私聊这一路必须能回');
+  assert.equal(owner.unlimited, true, '主人这条要标成无上限，不是给个大数字');
+  for (let i = 0; i < 40; i += 1) channel.markReply('owner');
+  assert.equal(channel.replyBucket('owner', settings).ok, true, '聊得再密也不该被自己掐掉（他 2026-11-04 定的）');
+  assert.equal(channel.replyBucket('guest', settings).ok, false, '陌生人那条总量闸还在');
 });
+
 
 test('长回复拆成多条短气泡，一个字都不丢', () => {
   const long = `${'前面这段够长了，故意写满来试探分条。'.repeat(90)}最后这段是最要紧的结论，不能丢。`;
@@ -150,14 +151,20 @@ test.after(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
-test('回复额度与"被拦下不许静默"：陪聊一小时 120 条，owner 被拦时说一句', async () => {
+test('主人的互动不设条数上限，陌生人照旧受限', async () => {
   const fs = await import('node:fs');
   const path = await import('node:path');
-  const def = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'config', 'default-settings.json'), 'utf8'));
-  assert.equal(def.qq.maxRepliesPerHour, 120, '40 条/小时对一次亲密对话太紧，十几轮就烧光');
   const src = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'onebot.js'), 'utf8');
-  assert.match(src, /throttleNoticeAt/, '被自己掐掉时必须说一句');
-  assert.match(src, /被自己按了下暂停键/, '提醒的话要像她说的，不是错误码');
-  // 而且每小时最多说一句，不能变成刷屏
-  assert.match(src, /this\.throttleNoticeAt \|\| 0\) > 3600000/);
+  assert.match(src, /if \(bucket === 'owner'\) return \{ ok: true/, 'owner 这条必须直接放行');
+  assert.ok(src.includes('unlimited: true'), '放行要标成无上限，别只给个大数字');
+  assert.match(src, /if \(all >= global\) return \{ ok: false/, '陌生人那条总量闸还在');
+  assert.ok(!src.includes('throttleNoticeAt'), 'owner 不会被拦了，就别留那段永远不会跑到的提醒');
+  const xhs = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'xhs-actions.js'), 'utf8');
+  assert.match(xhs, /export function canAct\(kind, \{ ignoreCounts = false \} = \{\}\)/);
+  assert.match(xhs, /if \(ignoreCounts\) return \{ ok: true, keys: null, unlimited: true/);
+  assert.ok(xhs.indexOf('const cooldown = xhsCooldownUntil()') < xhs.indexOf('if (ignoreCounts) return'), '风控冷却必须在条数之前：主人也不许绕过');
+  assert.match(xhs, /if \(!isOwner && actions\.length >= maxReplies\) break/, '他的评论不占陌生人的回复额度');
+  assert.match(xhs, /canSendXhsDm\(target, \{ isOwner = false \} = \{\}\)/);
+  const sched = fs.readFileSync(path.join(process.cwd(), 'src', 'scheduler.js'), 'utf8');
+  assert.match(sched, /canSendXhsDm\(latest\.name, \{ isOwner: true \}\)/, '自动回私信是给主人的，不该被每日 3 条掐掉');
 });

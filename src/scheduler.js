@@ -300,7 +300,7 @@ export class Scheduler {
         return null;
       }
     }
-    const gate = canSendXhsDm(latest.name);
+    const gate = canSendXhsDm(latest.name, { isOwner: true });
     if (!gate.ok) {
       logger.debug && logger.debug('这轮不自动回私信', { reason: gate.reason, target: latest.name });
       return null;

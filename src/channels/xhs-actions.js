@@ -107,7 +107,9 @@ export function isRiskyError(error) {
   return /频繁|安全验证|滑块|滑动验证|申诉|账号.{0,6}限制|300013/.test(String((error && error.message) || error));
 }
 
-export function canAct(kind) {
+// ignoreCounts：主人的互动不设条数上限（他 2026-11-04 定的）。但风控冷却必须照守——
+// 那是账号安全，不是矜持，绕过它等于把号往封的边缘推。
+export function canAct(kind, { ignoreCounts = false } = {}) {
   const settings = loadSettings();
   const social = settings.social || {};
   if (!social.xhsEnabled) return { ok: false, reason: '小红书互动未开启' };
@@ -115,6 +117,7 @@ export function canAct(kind) {
   if (cooldown && new Date(cooldown).getTime() > Date.now()) {
     return { ok: false, reason: `风控冷却中，到 ${cooldown.slice(11, 16)} 再试` };
   }
+  if (ignoreCounts) return { ok: true, keys: null, unlimited: true, reason: '' };
   const keys = budgetKeys(kind);
   const dailyMax =
     kind === 'reply'
@@ -148,11 +151,13 @@ function dmTargetKey(target) {
 }
 
 /** 私信是小红书对新号最危险的动作：开关 + 全账号每天封顶 + 同一个人每天只回一条。 */
-export function canSendXhsDm(target) {
+export function canSendXhsDm(target, { isOwner = false } = {}) {
   const social = loadSettings().social || {};
   if (!social.xhsDmReply) return { ok: false, reason: '「允许回私信」是关的（设置 → 小红书）' };
-  const gate = canAct('dm');
+  const gate = canAct('dm', { ignoreCounts: isOwner });
   if (!gate.ok) return gate;
+  // 主人这条：总闸和"同一个人每天 N 条"都要跳过，只留风控冷却（上面 canAct 里已经查过了）。
+  if (isOwner) return { ok: true, keys: null, perTarget: Infinity, used: 0, unlimited: true };
   const perTarget = Math.max(1, Number(social.xhsDmMaxPerTarget || 1));
   const used = readCount(dmTargetKey(target));
   if (used >= perTarget) {
@@ -473,8 +478,9 @@ export async function processXhsOwnComments({ llm, maxNotes = 3, maxReplies = 2,
       else list.push({ comment, isOwner: false });
     }
     for (const { comment, isOwner } of list) {
-      if (actions.length >= maxReplies) break;
-      const budget = canAct('reply');
+      // 上限只管陌生人：他的评论必须每条都回，不占那个额度。
+      if (!isOwner && actions.length >= maxReplies) break;
+      const budget = canAct('reply', { ignoreCounts: isOwner });
       if (!budget.ok) return { ok: true, reason: budget.reason, actions };
       const receiptKey = `xhs_comment_replied:${item.noteId}:${comment.id}`;
       if (!comment.id || kvGet(receiptKey)) continue;
@@ -527,7 +533,8 @@ export async function processXhsOwnComments({ llm, maxNotes = 3, maxReplies = 2,
         addEvent('xhs_reply_error', '评论回复没发出去', { noteId: item.noteId, error: error.message });
         continue;
       }
-      const keys = budget.keys || budgetKeys('reply');
+      if (!budget.keys) continue; // 主人这条不计条数，也就不该去消耗陌生人的额度
+      const keys = budget.keys;
       bump(keys.day);
       bump(keys.hour);
       actions.push({

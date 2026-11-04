@@ -127,3 +127,27 @@ test.after(() => {
   closeDb();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
+
+test('主人不受条数上限（额度打光之后照样能发），但风控冷却照样拦', () => {
+  const tag = String(process.pid);
+  const stranger = "陌生人" + tag;
+  const ownerName = "主人" + tag;
+  // 先用宽额度把陌生人的计数打一次：日、小时、同人各 +1
+  writeSettings({ xhsDmMaxPerDay: 50, xhsDmMaxPerTarget: 5, xhsHourlyActionMax: 50 });
+  const first = actions.canSendXhsDm(stranger);
+  assert.equal(first.ok, true, "宽额度下第一次该能回：" + JSON.stringify(first));
+  actions.noteXhsDmSent(stranger, first.keys);
+
+  // 然后把三条上限全部收到 1 —— 此时陌生人必须被拦，主人必须放行
+  writeSettings({ xhsDmMaxPerDay: 1, xhsDmMaxPerTarget: 1, xhsHourlyActionMax: 1 });
+  assert.equal(actions.canSendXhsDm(stranger).ok, false, "陌生人照旧受每日/每小时上限");
+
+  const owner = actions.canSendXhsDm(ownerName, { isOwner: true });
+  assert.equal(owner.ok, true, "额度已经打光，主人这条还被放行才叫真的无上限：" + JSON.stringify(owner));
+  assert.equal(owner.unlimited, true, "要标成无上限，别只是刚好没满");
+
+  actions.triggerXhsCooldown(2, "判据：测冷却");
+  const cooled = actions.canSendXhsDm(ownerName, { isOwner: true });
+  assert.equal(cooled.ok, false, "风控冷却是账号安全，主人也不许绕");
+  assert.match(String(cooled.reason), /冷却/);
+});

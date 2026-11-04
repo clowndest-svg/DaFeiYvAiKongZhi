@@ -1011,6 +1011,9 @@ ${history}
     const all = Object.values(this.replyBuckets).reduce((sum, list) => sum + withinHour(list).length, 0);
     const limit = bucket === 'owner' ? global : Math.max(3, Math.ceil(global / 4));
     const used = this.replyBuckets[bucket].length;
+    // 主人这一路不设条数上限（他 2026-11-04 定的）：一次亲密对话十几轮就把 40 条烧光、然后被自己掐哑，是本末倒置。
+    // 真正的刹车是花钱那条：预算熔断（低余额 / 日封顶）照旧会拦。
+    if (bucket === 'owner') return { ok: true, used, limit: Infinity, all, global, unlimited: true };
     if (all >= global) return { ok: false, used, limit, all, global, reason: `一小时总共回了 ${all}/${global} 条，先停一停` };
     if (used >= limit) return { ok: false, used, limit, all, global, reason: `${bucket} 这一路一小时回满 ${used}/${limit} 条` };
     return { ok: true, used, limit, all, global };
@@ -1055,15 +1058,6 @@ ${history}
     if (!budget.ok) {
       logger.warn('QQ 回复频率超限，已跳过', { conversationKey, bucket, reason: budget.reason });
       addEvent('qq_reply_throttled', `她忍住没回（${bucket}）`, { reason: budget.reason, conversationKey });
-      // 静默不回最伤人：他看到的是"她不理我"，实际是我们自己掐的。owner 这一路每小时说一句。
-      if (bucket === 'owner' && now - (this.throttleNoticeAt || 0) > 3600000) {
-        this.throttleNoticeAt = now;
-        try {
-          await this.sendToTarget(buffer.target, '这一小时我说得太密了，被自己按了下暂停键……缓一缓我再来找你。');
-        } catch (error) {
-          logger.warn('频率提醒没发出去', { error: error.message });
-        }
-      }
       return;
     }
     this.markReply(bucket);
