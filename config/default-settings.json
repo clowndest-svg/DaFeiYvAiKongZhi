@@ -79,7 +79,7 @@
     "whitelist": [],
     "groupWhitelist": [],
     "allowAllPrivate": false,
-    "maxRepliesPerHour": 40,
+    "maxRepliesPerHour": 120,
     "sendStickers": true,
     "stickerChance": 0.2,
     "learnImages": true,

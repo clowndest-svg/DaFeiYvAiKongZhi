@@ -1055,6 +1055,15 @@ ${history}
     if (!budget.ok) {
       logger.warn('QQ 回复频率超限，已跳过', { conversationKey, bucket, reason: budget.reason });
       addEvent('qq_reply_throttled', `她忍住没回（${bucket}）`, { reason: budget.reason, conversationKey });
+      // 静默不回最伤人：他看到的是"她不理我"，实际是我们自己掐的。owner 这一路每小时说一句。
+      if (bucket === 'owner' && now - (this.throttleNoticeAt || 0) > 3600000) {
+        this.throttleNoticeAt = now;
+        try {
+          await this.sendToTarget(buffer.target, '这一小时我说得太密了，被自己按了下暂停键……缓一缓我再来找你。');
+        } catch (error) {
+          logger.warn('频率提醒没发出去', { error: error.message });
+        }
+      }
       return;
     }
     this.markReply(bucket);

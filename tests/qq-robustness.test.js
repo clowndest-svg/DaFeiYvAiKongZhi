@@ -149,3 +149,15 @@ test.after(() => {
   }
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
+
+test('回复额度与"被拦下不许静默"：陪聊一小时 120 条，owner 被拦时说一句', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const def = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'config', 'default-settings.json'), 'utf8'));
+  assert.equal(def.qq.maxRepliesPerHour, 120, '40 条/小时对一次亲密对话太紧，十几轮就烧光');
+  const src = fs.readFileSync(path.join(process.cwd(), 'src', 'channels', 'onebot.js'), 'utf8');
+  assert.match(src, /throttleNoticeAt/, '被自己掐掉时必须说一句');
+  assert.match(src, /被自己按了下暂停键/, '提醒的话要像她说的，不是错误码');
+  // 而且每小时最多说一句，不能变成刷屏
+  assert.match(src, /this\.throttleNoticeAt \|\| 0\) > 3600000/);
+});
