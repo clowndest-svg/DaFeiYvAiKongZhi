@@ -122,6 +122,15 @@ export function rvcConvert(inputFile, modelId, opts = {}) {
     });
 }
 
+// 打开开关之前到底缺了哪一步：没装引擎、还没挑音色、挑的那个文件不在了——三件事不能混成一句。
+export function rvcSelectProblem({ engine, modelId, chosen }) {
+  if (!engine?.installed) return `还没装变声引擎，开不了（跑 ${engine?.installHint || 'node tools/install-rvc-env.mjs'}）`;
+  if (!engine?.baseWeights) return '缺 RVC 基座权重 hubert_base.pt，开不了';
+  if (!String(modelId || '').trim()) return '还没挑音色：先在下面点某个音色那一行的「用这个声音」，再打开这个开关';
+  if (!chosen) return `这个音色不在清单里或文件不在磁盘上：${String(modelId).slice(0, 40)}`;
+  return '';
+}
+
 export function rvcVoiceLabel(modelId, root = paths.root) {
   const model = findRvcModel(modelId, root);
   return model ? `RVC · ${model.title}` : '';

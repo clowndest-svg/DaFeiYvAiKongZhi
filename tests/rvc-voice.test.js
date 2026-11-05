@@ -8,7 +8,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { loadSettings, saveSettings } from '../src/config.js';
 import { closeDb } from '../src/db.js';
-import { findRvcModel, listRvcModels, rvcConvert, rvcEngineStatus, rvcPaths, rvcTimeoutMs } from '../src/rvc.js';
+import { findRvcModel, listRvcModels, rvcConvert, rvcEngineStatus, rvcPaths, rvcSelectProblem, rvcTimeoutMs } from '../src/rvc.js';
 import { RvcRunner } from '../src/rvc-runner.js';
 import { applyRvc } from '../src/tts.js';
 
@@ -305,3 +305,25 @@ test('接线：开关关着完全不碰变声；开着就换文件；变声失�
 function withRvc(rvc) {
   saveSettings({ tts: { ...loadSettings().tts, rvc } });
 }
+
+test('开关报的错要指着真正缺的那一步：没挑音色不能推给清单', () => {
+  const engine = { installed: true, baseWeights: true, installHint: 'node tools/install-rvc-env.mjs' };
+  // 他点的是开关，缺的是"还没挑音色"——这句必须说清下一步点哪，不能写成清单坏了。
+  assert.match(rvcSelectProblem({ engine, modelId: '', chosen: null }), /还没挑音色/);
+  assert.match(rvcSelectProblem({ engine, modelId: '  ', chosen: null }), /用这个声音/);
+  assert.ok(!/清单/.test(rvcSelectProblem({ engine, modelId: '', chosen: null })), '没挑音色却怪清单');
+  // 真挑了一个但文件不在了，才说清单/文件
+  assert.match(rvcSelectProblem({ engine, modelId: 'voice-9', chosen: null }), /不在清单里或文件不在/);
+  assert.match(rvcSelectProblem({ engine: { ...engine, installed: false }, modelId: 'voice-1', chosen: {} }), /还没装变声引擎/);
+  assert.match(rvcSelectProblem({ engine: { ...engine, baseWeights: false }, modelId: 'voice-1', chosen: {} }), /基座权重/);
+  assert.equal(rvcSelectProblem({ engine, modelId: 'voice-1', chosen: { id: 'voice-1' } }), '', '该放行时还拦着');
+});
+
+test('界面：没挑音色时点开关不该把 400 抛给用户', () => {
+  const app = fs.readFileSync(path.join(process.cwd(), 'web', 'app.js'), 'utf8').replace(/\r/g, '');
+  assert.match(app, /先在下面挑一个音色/, '开关那条路没给人下一步');
+  const hint = app.indexOf('先在下面挑一个音色');
+  const sent = app.indexOf("api('/api/voice/rvc/select'");
+  assert.ok(hint > 0 && sent > hint, '提示应当出现在发请求之前');
+  assert.ok(app.slice(hint, sent).includes('return;'), '没挑音色时没提前返回，还是会把请求发出去');
+});

@@ -73,7 +73,7 @@ import { completeIntention, listIntentions } from './intentions.js';
 import { costBlocked, readCostState } from './budget.js';
 import { privacyProblems } from './privacy.js';
 import { synthesizeSpeech, synthesizeWithRvc, ttsStatus, ttsVoices } from './tts.js';
-import { findRvcModel, listRvcModels, rvcEngineStatus } from './rvc.js';
+import { findRvcModel, listRvcModels, rvcEngineStatus, rvcSelectProblem } from './rvc.js';
 import { rvcRunnerMetrics } from './rvc-runner.js';
 import { asrStatus } from './asr.js';
 import { checkSpeakSlot, consumeCameraSlot, hearWav, noteSpeakUsed, presenceBudget, speakLine } from './presence.js';
@@ -1386,15 +1386,9 @@ async function handleApi(req, res, pathname, url) {
     if (body.timeoutSeconds !== undefined) rvc.timeoutSeconds = Number(body.timeoutSeconds);
     const engine = rvcEngineStatus();
     const chosen = findRvcModel(rvc.model);
-    if (rvc.enabled && (!engine.installed || !engine.baseWeights || !chosen)) {
-      return sendJson(res, 400, {
-        error: !engine.installed
-          ? '还没装变声引擎，开不了（跑 ' + engine.installHint + '）'
-          : !chosen
-            ? '这个音色不在清单里或文件不在，开不了'
-            : '缺 RVC 基座权重，开不了',
-        rvc: { ...rvc, enabled: false },
-      });
+    if (rvc.enabled) {
+      const problem = rvcSelectProblem({ engine, modelId: rvc.model, chosen });
+      if (problem) return sendJson(res, 400, { error: problem, rvc: { ...rvc, enabled: false } });
     }
     const saved = saveSettings({ tts: { ...settings.tts, rvc } });
     addEvent('rvc_select', rvc.enabled ? `发语音会用这个音色：${chosen ? chosen.title : rvc.model}` : '变声关掉了，发语音用原来的声音', {

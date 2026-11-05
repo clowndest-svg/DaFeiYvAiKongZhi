@@ -1796,7 +1796,7 @@ function renderRvc() {
     audition.type = 'button';
     audition.disabled = !model.available;
     audition.addEventListener('click', () => rvcAudition(model.id, audition));
-    const pick = el('button', 'icon-btn', model.id === r.model && r.enabled ? '已启用' : '用这个声音');
+    const pick = el('button', 'icon-btn', model.id === r.model && r.enabled ? '正在用这个' : '用这个声音');
     pick.type = 'button';
     pick.disabled = !model.available;
     pick.addEventListener('click', () => rvcSelect(model.id, pick));
@@ -1837,7 +1837,18 @@ async function rvcSelect(modelId, btn) {
       timeoutSeconds: Number($('#rvcTimeout').value) || 180,
     };
     if (modelId) body.model = modelId;
-    else body.enabled = $('#rvcEnabled').checked;
+    else {
+      // 开关单独打开时如果还没挑音色，别把 400 抛给用户看——直接说下一步点哪。
+      if (!$('#rvcEnabled').checked) {
+        body.enabled = false;
+      } else if (!(state.voiceSetup?.rvc?.model || '')) {
+        toast('先在下面挑一个音色：点那一行的「用这个声音」，开关会自动打开。', 'error');
+        await loadVoiceSetup();
+        return;
+      } else {
+        body.enabled = true;
+      }
+    }
     try {
       const data = await api('/api/voice/rvc/select', { method: 'POST', body });
       toast(modelId ? `以后发语音用「${data.selected?.title || modelId}」` : data.rvc?.enabled ? '变声已打开' : '变声已关掉，发语音用原来的声音');
