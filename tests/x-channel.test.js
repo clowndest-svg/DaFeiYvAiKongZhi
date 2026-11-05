@@ -20,7 +20,7 @@ import {
   xCooldownUntil,
 } from '../src/channels/x-safety.js';
 import { canActX, manualXAct, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
-import { readXTimeline, xProxyAlive } from '../src/channels/x.js';
+import { readXTimeline, xProxyAlive, normalizeTyped } from '../src/channels/x.js';
 import { otherHolders } from '../src/browser/cdp.js';
 
 test.after(closeDb);
@@ -248,6 +248,15 @@ test('回复的送达证据：在原推文下面逐字读到才算发出去', ()
   assert.match(reply[0], /assertXReplyEvidence/, '回复没走"回原帖核对"的证据链');
   assert.ok(!/assertXDeliveryEvidence/.test(reply[0]), '回复还在用"当前页数量变多"当证据：弹层关掉后根本看不到');
   assert.ok(!/还没拿到 NapCat|await sleep\(1500\);\r?\n  const typed/.test(reply[0]), '又回到"固定等 1.5 秒然后假定输入框在"');
+});
+
+test('比对输入框要忽略零宽字符，重试前必须先清空：实测同一句话在框里出现了两遍', () => {
+  assert.equal(normalizeTyped('早​上‎好'), '早上好');
+  assert.equal(normalizeTyped('  今天想聊聊  '), '今天想聊聊');
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');
+  assert.ok(reply[0].indexOf('COMPOSER_CLEAR') < reply[0].lastIndexOf("browser.focus('div[data-testid=\"tweetTextarea_0\"]')"), '重试没先清空：等于在同一句话后面再接一遍');
 });
 
 test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {

@@ -432,9 +432,24 @@ async function reactXLocked(href, kind = 'like') {
   return { ok: true, already: false, kind };
 }
 
-// 输入框和发送按钮的读法，回复/填稿/发布三处一模一样，别再抄三份。
+// X 的输入框是 Draft.js，里面会夹零宽占位符。拿 innerText 和原文逐字 !== 比，
+// 会把"其实已经打对了"判成没打上，于是再打一遍——实测同一句话出现在输入框里两次，整条作废。
+export function normalizeTyped(text) {
+  return String(text || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// 重试前必须先把输入框清空，不然"再打一遍"等于"打两遍"。
+const COMPOSER_CLEAR = String.raw`(() => {
+  const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
+  if (!box) return false;
+  box.focus();
+  document.execCommand('selectAll', false, null);
+  document.execCommand('delete', false, null);
+  return true;
+})()`;
+
 const COMPOSER_READ = String.raw`(() => {
-  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const clean = (s) => (s || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
   const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
   return { text: clean(box?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
@@ -450,7 +465,7 @@ const COMPOSER_SEND = String.raw`(() => {
 // 值必须在建串时就变成字面量——页面里没有 Node 的变量，写进去就是 ReferenceError。
 function replyProof(content, handle) {
   return String.raw`(() => {
-    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const clean = (s) => (s || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const want = ${JSON.stringify(content)};
     const mine = '[data-testid="User-Name"]';
     const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
@@ -487,14 +502,15 @@ async function replyToTweetLocked(href, text) {
   await browser.send('Input.insertText', { text: content });
   await sleep(900);
   let readback = await browser.evaluate(COMPOSER_READ);
-  if (readback.text !== content) {
-    // X 的输入框是 Draft.js，输入只落在真焦点上；第一次插空了就重新聚焦再打一遍。
+  if (normalizeTyped(readback.text) !== content) {
+    // 第一次没落在真焦点上就重来；重来之前必须清空，否则同一句话会在框里出现两遍（实测过）。
+    await browser.evaluate(COMPOSER_CLEAR);
     await browser.focus('div[data-testid="tweetTextarea_0"]');
     await browser.send('Input.insertText', { text: content });
     await sleep(900);
     readback = await browser.evaluate(COMPOSER_READ);
   }
-  if (readback.text !== content) throw new Error(`回复没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
   if (!(await browser.evaluate(COMPOSER_SEND))) throw new Error('没找到回复的发送按钮，这次没发');
   await sleep(3000);
@@ -539,7 +555,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   await browser.send('Input.insertText', { text: content });
   await sleep(800);
   const readback = await browser.evaluate(COMPOSER_READ);
-  if (readback.text !== content) throw new Error(`内容没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
   kvSetJson('x_last_fill', { id, handle: kvGet('x_self_handle'), text: content, at: nowIso() });
@@ -560,7 +576,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   if (Number(kvGet(dayKey, '0')) >= max) throw new Error(`今天发推次数已到上限（${max} 条）`);
   await requireProxy();
   const actual = await browser.evaluate(COMPOSER_READ);
-  if (actual.text !== fill.text) throw new Error('输入框里的内容和确认要发的不一致，没有发');
+  if (normalizeTyped(actual.text) !== normalizeTyped(fill.text)) throw new Error('输入框里的内容和确认要发的不一致，没有发');
   if (!actual.ready) throw new Error('发送按钮还是灰的，没有发');
   if (actual.risky) throw new Error('X 页面提示限流/出错，这次没有发');
   const effectKey = `effect:x:post:${fill.id}`;
@@ -624,7 +640,7 @@ async function prepareXDmLocked(handle, text) {
     const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
     return { text: clean(box?.innerText), expected: content };
   })({ content: ${JSON.stringify(content)} })`);
-  if (readback.text !== content) throw new Error('私信内容没有真的填进去');
+  if (normalizeTyped(readback.text) !== normalizeTyped(readback.expected)) throw new Error('私信内容没有真的填进去');
   addEvent('x_dm_draft', '她写好一条私信草稿，等你点发送', { handle, chars: content.length });
   return { ok: true, drafted: true, sent: false, handle, chars: content.length, hint: '私信只填不发：在登录窗口里确认后自己点发送' };
 }
