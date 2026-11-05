@@ -407,9 +407,16 @@ export class CdpBrowser {
     try {
       await this.send('Page.navigate', { url }, timeoutMs);
     } catch (error) {
-      const where = await this.getUrl().catch(() => '');
-      if (!sameLocation(where, url)) throw error;
-      logger.debug('导航未及时返回，但地址已经到了目标页', { url, where });
+      // 地址已经变了就是"提交慢"，算成功；没变多半是这个标签页被 Chrome 丢弃了、根本不再答话
+      // （实测同一份代码，前一分钟还能读，后一分钟连 Page.navigate 都不回）。
+      // 这时重连到一个答话的标签页，再跳一次；还不行才把错抛出去。
+      const where = await this.evaluate('location.href', { timeoutMs: 4000 }).catch(() => '');
+      if (sameLocation(where, url)) {
+        logger.debug('导航未及时返回，但地址已经到了目标页', { url, where });
+      } else {
+        await this.attach();
+        await this.send('Page.navigate', { url }, timeoutMs);
+      }
     }
     await sleep(waitMs);
     await this.waitReady(timeoutMs);

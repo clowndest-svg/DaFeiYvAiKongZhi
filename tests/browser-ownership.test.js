@@ -44,6 +44,17 @@ test('导航超时后要看地址，不许拿 CDP 有没有回话当成功', () 
   assert.equal(sameLocation('about:blank', 'https://x.com/home'), false);
 });
 
+test('标签页被丢弃时导航要重连再跳一次，只跳一次', () => {
+  const cdp = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'src', 'browser', 'cdp.js'), 'utf8');
+  const nav = /async navigate\(url[\s\S]*?\r?\n  }/.exec(cdp);
+  assert.ok(nav, '找不到 navigate()');
+  assert.ok(nav[0].includes('sameLocation(where, url)'), '没核对地址就把"提交慢"当成失败（或反过来把没跳过去当成成功）');
+  const retries = (nav[0].match(/await this\.send\('Page\.navigate'/g) || []).length;
+  assert.equal(retries, 2, `导航应当最多跳两次，实际出现 ${retries} 次：一次都不重试会被丢弃的页卡死，多次会放大故障`);
+  assert.ok(nav[0].includes('await this.attach()'), '重连之前没重新挑一个答话的标签页');
+  assert.ok(nav[0].includes("timeoutMs: 4000"), '读地址也要有短超时：卡死的页会让每次导航多等 20 秒');
+});
+
 test('接管时逐个标签页试，谁答话用谁，别一把抓第一个', () => {
   const cdp = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'src', 'browser', 'cdp.js'), 'utf8');
   const attach = /async attach\(\)[\s\S]*?\r?\n  }/.exec(cdp);
