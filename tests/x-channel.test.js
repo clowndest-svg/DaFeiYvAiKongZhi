@@ -4,6 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import vm from 'node:vm';
 import { env, loadSettings, paths, saveSettings } from '../src/config.js';
 import { closeDb, kvSet } from '../src/db.js';
 import { buildXPostPrompt, buildXReplyPrompt } from '../src/prompt.js';
@@ -19,6 +20,7 @@ import {
 } from '../src/channels/x-safety.js';
 import { canActX, manualXAct, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
 import { readXTimeline, xProxyAlive } from '../src/channels/x.js';
+import { otherHolders } from '../src/browser/cdp.js';
 
 test.after(closeDb);
 
@@ -27,19 +29,96 @@ function setSocial(patch) {
   saveSettings({ social: { ...SOCIAL_BASE, ...(loadSettings().social || {}), ...patch } });
 }
 
-test('登录窗口不许带自动化旗子：Google 看到就拒绝授权', () => {
+test('登录窗口不许带自动化旗子；profile 被占时要说"先关掉那个窗口"', () => {
   const cdp = fs.readFileSync(path.join(paths.root, 'src', 'browser', 'cdp.js'), 'utf8');
   const x = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
   const argsBlock = /const args = \[([\s\S]*?)\];/.exec(cdp);
   assert.ok(argsBlock, '找不到浏览器启动参数块');
-  assert.ok(!/--enable-automation/.test(argsBlock[1]), 'CDP 启动又加回了 --enable-automation');
-  const manual = /async launchForManualLogin[\s\S]*?const args = \[([\s\S]*?)\];/.exec(cdp);
-  assert.ok(manual, '没有人工登录窗口');
-  assert.ok(!/--enable-automation/.test(manual[1]), '登录窗口带了自动化旗子');
-  assert.ok(!/--remote-debugging-port/.test(manual[1]), '登录窗口带了调试端口：Google 照样拦');
-  assert.match(manual[1], /--user-data-dir/, '登录窗口必须用同一个 profile，否则登录态留不下来');
-  assert.match(x, /launchForManualLogin/, 'X 的登录没走干净窗口');
-  assert.match(x, /窗口关掉/, '没告诉他登完要关窗口');
+  assert.ok(!/--enable-automation/.test(argsBlock[1]), 'CDP 启动又加回了 --enable-automation：Google 会拒绝授权');
+  assert.match(argsBlock[1], /--remote-debugging-port/, '登录窗口必须带调试端口，否则登完还要关窗口才能验证');
+  assert.match(x, /browser\.relaunch\(\{ visible: true \}\)/, 'X 登录没走带端口的窗口');
+  // profile 被别的窗口占住时，报错要说清是谁占着，不能只说"调试端口没有起来"
+  assert.match(cdp, /chromeHoldingProfile\(this\.profileDir\)/, '没去查谁占着 profile');
+  assert.match(cdp, /还被另一个 Chrome 窗口占着/, '占用冲突的报错没说人话');
+  assert.match(cdp, /把那个窗口关掉/, '没告诉他下一步做什么');
+  // 查占用者只读进程列表；唯一的"退进程"动作只能落在自己 spawn 的那个 pid 上
+  const holderFn = /export function chromeHoldingProfile[\s\S]*?\r?\n}/.exec(cdp);
+  assert.ok(holderFn, '找不到占用者查询函数');
+  assert.ok(!/kill|taskkill|Stop-Process/i.test(holderFn[0]), '查占用者时居然去动进程了');
+  assert.match(holderFn[0], /\$\(\$_\.ParentProcessId\)/, '没读父进程：会把十几个渲染/GPU 子进程一起报出来，pid 8 就是这么来的');
+  assert.ok(
+    /\[pid, parent\][\s\S]*!pids\.has\(parent\)|filter\(\(\[, parent\]\) => !pids\.has\(parent\)/.test(holderFn[0]),
+    '没按"父进程也是浏览器"过滤：报出来的不是窗口主进程',
+  );
+  const stopFn = /async stopOwnChild\(\)[\s\S]*?\n  }/.exec(cdp);
+  assert.ok(stopFn, '调试端口没起来时没收回自己起的那个进程——下次只会多一个占着 profile 的孤儿');
+  assert.match(stopFn[0], /this\.child\?\.pid/, '收进程只能收自己 spawn 的那个 pid');
+  assert.ok(!/Name='chrome\.exe'/.test(stopFn[0]), '按名字找浏览器去杀：会把用户自己开着的窗口一起干掉');
+  assert.match(cdp, /otherHolders\(chromeHoldingProfile\(this\.profileDir\), (?:stopped|again)\)/, '报错前没把自己从占用者名单里摘掉');
+});
+
+// 页面脚本是原样送进浏览器跑的：Node 侧的变量名必须在建串时就变成字面量，
+// 写成 (({href}) => …)({href}) 这种"看着像传参"的形式，页面上根本没有这个名字，
+// 只会抛 ReferenceError——离线判据看不见，只有真点一次才暴露（实测三次自动回复全废在这个上面）。
+// 这里把每段页面脚本塞进一个假 DOM 里跑一遍：自由变量立刻现形。
+function runPageScripts(file, label) {
+  const node = () => ({
+    innerText: '', innerHTML: '', textContent: '', value: '', href: '',
+    getAttribute: () => '', setAttribute() {}, style: {}, dataset: {},
+    classList: { contains: () => false, add() {}, remove() {} },
+    querySelector: () => null, querySelectorAll: () => [], closest: () => null,
+    click() {}, focus() {}, select() {}, dispatchEvent() {}, addEventListener() {},
+  });
+  const failures = [];
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', file), 'utf8');
+  const re = /String\.raw`([\s\S]*?)`/g;
+  let match;
+  let index = 0;
+  while ((match = re.exec(src))) {
+    index += 1;
+    const body = match[1].replace(/\$\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '"__probe__"');
+    const stub = node();
+    const sandbox = {
+      document: { body: stub, title: '', activeElement: stub, documentElement: stub, querySelector: () => null, querySelectorAll: () => [], getElementById: () => null, createElement: node, addEventListener() {} },
+      location: { href: 'https://x.com/home', origin: 'https://x.com' },
+      navigator: { clipboard: { writeText: async () => {} } },
+      setTimeout, clearTimeout, Math, JSON, RegExp, Promise, URL,
+    };
+    sandbox.window = sandbox;
+    sandbox.self = sandbox;
+    try {
+      vm.runInNewContext(body, sandbox, { timeout: 3000 });
+    } catch (error) {
+      if (String(error).startsWith('ReferenceError')) {
+        const line = src.slice(0, match.index).split(/\r?\n/).length;
+        failures.push(`${label} 第 ${index} 段（${file}:${line}）：${error.message}`);
+      }
+    }
+  }
+  if (index === 0) failures.push(`${label}：一个页面脚本都没抓到，判据本身失效了`);
+  return failures;
+}
+
+test('内容没渲染完之前不许判"选择器过期"：先等推文出现再下结论', () => {
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const fn = /async function assertTimelineLoaded[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(fn, '找不到 assertTimelineLoaded');
+  assert.ok(fn[0].includes('while (state.tweets === 0'), '没等内容出现就判空：慢网会把"还没加载完"报成"选择器过期"（实测她的 2 条主页推文就是这么丢的）');
+  assert.ok(fn[0].includes('Date.now() < deadline'), '等待没有上限：卡死的页面会拖死一整轮自动行为');
+  assert.ok(fn[0].indexOf('timelineProbe()') < fn[0].indexOf('isXLoginPage(state.url'), '判空必须发生在读页面之后');
+});
+
+test('页面脚本必须自带全部变量：把每段塞进假 DOM 跑一遍，不许有 ReferenceError', () => {
+  const broken = runPageScripts('x.js', 'X');
+  assert.deepEqual(broken, [], `这些页面脚本送进浏览器就会抛：\n${broken.join('\n')}`);
+  const brokenXhs = runPageScripts('xhs.js', '小红书');
+  assert.deepEqual(brokenXhs, [], `小红书页面脚本送进浏览器就会抛：\n${brokenXhs.join('\n')}`);
+});
+
+test('占用者名单里要摘掉自己刚起的那个，否则锅会甩到用户头上', () => {
+  assert.deepEqual(otherHolders(['26328', '8112'], 8112), ['26328']);
+  assert.deepEqual(otherHolders(['8112'], 8112), [], '自己也算占用者：用户明明什么都没开');
+  assert.deepEqual(otherHolders([], 123), []);
 });
 
 test('代理不通时报的是代理，不是"页面打不开"，也不许碰浏览器', async () => {
@@ -158,6 +237,34 @@ test('该跳过的推文：敏感话题、空正文、转发；正常生活话�
   assert.match(shouldSkipTweet({ text: 'RT @a: 转发一句话' }), /转发/);
   assert.equal(shouldSkipTweet({ text: '今天把周报写完了，手有点酸' }), '');
   assert.equal(shouldSkipTweet({ text: '这个咖啡也太好喝了' }), '');
+});
+
+// 下面这些不是编的：2026-11-05 从他自己账号的真实时间线里读到的原话（/api/x/read mode=timeline）。
+// 只靠原先那份名单，这些全会被当成"可以回一句"，回出去被截图挂的是他的号。
+test('真实时间线里量到的粗口、色情招嫖、政治牢骚必须闭嘴', () => {
+  const real = [
+    ['想吃20厘米的牛子~~有没有', /色情/],
+    ['不懂就问：为什么自己撸射就叫伤身体，跟女人做爱射出来就不伤身', /色情/],
+    ['兄弟们，刚约的，这个质量怎么样？', /色情/],
+    ['有主人要进来吗？', /色情/],
+    ['全中国，最不民主，最不自由的地方，是这里。', /政治/],
+    ['我操尼玛啊！ 社保真tm是旁氏骗局啊！', /难听|政治/],
+    ['举报她的真不是人！', /难听/],
+  ];
+  for (const [text, expect] of real) {
+    const reason = shouldSkipTweet({ text });
+    assert.match(reason || '（没跳过）', expect, `这条本该闭嘴：${text}`);
+  }
+  // 反过来：普通生活话不许被误伤，不然她整天不说话
+  for (const ok of [
+    '早上把窗台擦了一遍，顺手给多肉翻了翻土',
+    '今天通勤路上听到一首老歌，突然想起高中晚自习',
+    '这家面的汤头很浓，下次带朋友来',
+    '刚跑完五公里，膝盖有点酸但还是爽',
+    'DeepSeek 的余额快见底了，主人记得充一下',
+  ]) {
+    assert.equal(shouldSkipTweet({ text: ok }), '', `正常生活话被误伤了：${ok}`);
+  }
 });
 
 test('提示词：语言跟着对方走，公开边界写死，草稿不许自己发', () => {

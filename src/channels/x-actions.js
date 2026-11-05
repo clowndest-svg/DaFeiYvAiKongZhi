@@ -111,11 +111,20 @@ function rememberSeen(id) {
 
 // 敏感话题一律不开口：和小红书那份名单同源，X 上更容易被举报。
 const SENSITIVE = /(新闻|事故|灾难|死亡|去世|伤亡|政治|政府|战争|军事|选举|疫苗|自杀|家暴|未成年|偷拍|隐私|八卦|爆料|求助|捐款|众筹|色情|约炮)/;
+// 下面三类是照着她真实时间线里量到的原话补的（判据里就是那些原句）：
+// 光靠上面那份名单漏得太狠——"最不民主""我操尼玛""有主人要进来吗"都会当成可回的话题，
+// 这种话回出去，被人截图挂的就是他这个号。
+const VULGAR = /(傻逼|沙壁|尼玛|妈的|他妈|特么|卧槽|我操|草泥马|狗东西|畜生|不是人|废物|\bfw\b|\bshit\b|\bfuck\b|\bbitch\b)/i;
+const SEXUAL = /(牛子|鸡巴|鸡鸡|屌|撸射|自己撸|手冲|射精|做爱|啪啪|口爆|床照|裸照|裸聊|要进来|刚约的|楼凤|外围|文爱|炮友|福利姬|自慰|高潮|porn|nude|anal)/i;
+const POLITICAL = /(民主|独裁|政权|共产党|中共|领导人|台湾|香港|西藏|新疆|统一|独立|抗议|游行|制裁|旁氏|崩盘|经济危机|election|president)/;
 
 export function shouldSkipTweet(tweet) {
   const text = String(tweet?.text || '');
   if (!text) return '没有正文';
   if (SENSITIVE.test(text)) return '话题敏感';
+  if (SEXUAL.test(text)) return '带色情内容';
+  if (VULGAR.test(text)) return '说话难听';
+  if (POLITICAL.test(text)) return '政治话题';
   if (/^\s*(RT|转发)/i.test(text)) return '是转发';
   return '';
 }

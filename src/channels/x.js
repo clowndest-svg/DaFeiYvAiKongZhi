@@ -136,8 +136,8 @@ const TWEET_SCAN = String.raw`(() => {
 })()`;
 
 // 页面到底是"没加载出来"还是"真的没有内容"——这两种情况绝不能混成一句"0 条"。
-async function assertTimelineLoaded(where) {
-  const state = await browser.evaluate(String.raw`(() => ({
+async function timelineProbe() {
+  return await browser.evaluate(String.raw`(() => ({
     url: location.href,
     title: document.title,
     body: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 400),
@@ -145,6 +145,18 @@ async function assertTimelineLoaded(where) {
     cells: document.querySelectorAll('div[data-testid="cell-innerContent"], section[data-testid="SessioContainer"], div[data-testid="primaryColumn"]').length,
     spinner: Boolean(document.querySelector('[data-testid="spinner"]')),
   }))()`);
+}
+
+async function assertTimelineLoaded(where, { timeoutMs = 25000 } = {}) {
+  // X 的推文是渲染完才挂到 DOM 上的：刚导航完就读只能拿到导航壳（"主页 探索 通知…"）。
+  // 直接判 0 条会把"还没加载完"误报成"选择器过期"（实测她的 2 条主页推文就是这么丢的），
+  // 所以先等内容出现，等到期限还空着才让下面的判据去区分"真没有"和"没渲染"。
+  const deadline = Date.now() + timeoutMs;
+  let state = await timelineProbe();
+  while (state.tweets === 0 && !isXLoginPage(state.url, state.body) && Date.now() < deadline) {
+    await sleep(1200);
+    state = await timelineProbe();
+  }
   if (isXLoginPage(state.url, state.body)) {
     const error = new Error('X 要登录（被导向登录页），请先在登录窗口里登录一次');
     error.code = 'X_LOGIN_REQUIRED';
@@ -192,17 +204,27 @@ async function xStatusLocked({ verify = false } = {}) {
     await browser.waitFor('[data-testid="primaryColumn"]', 20000);
     const state = await browser.evaluate(String.raw`(() => {
       const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-      const indicator = document.querySelector('[data-testid="AppTabRow_Profile"] a, a[href^="/"][role="link"][tabindex="-1"]');
-      const handle = (indicator && indicator.getAttribute('href')) || '';
-      const badge = document.querySelector('[data-testid="AppTabRow_Notifications"]');
+      // 实测：侧栏个人资料链接的 data-testid 是 AppTabBar_Profile_Link，href=/自己的号。
+      // 早前用 a[href^="/"][role=link][tabindex="-1"] 抓到的是 /i/keyboard_shortcuts——
+      // 把"键盘快捷键"当成了她的账号，后面所有"这条是我发的"判断都会错位。
+      const profile = document.querySelector('a[data-testid="AppTabBar_Profile_Link"]');
+      const handle = (profile && profile.getAttribute('href')) || '';
+      const badge = document.querySelector('a[data-testid="AppTabBar_Notifications_Link"]');
       return {
         url: location.href,
         body: clean(document.body.innerText).slice(0, 300),
         hasHome: Boolean(document.querySelector('[data-testid="primaryColumn"]')),
         tweets: document.querySelectorAll('article[data-testid="tweet"]').length,
         selfHandle: handle.startsWith('/') && handle.length > 1 ? handle.slice(1) : '',
-        selfName: clean(document.querySelector('[data-testid="AppTabBar_Icon"]')?.innerText),
-        notifyBadge: clean(badge && badge.innerText).replace(/\D+/g, '').slice(0, 6),
+        selfName: (() => {
+          // 实测侧栏账号按钮里就是两行：「nodeNetwork」+「@MetaverseTomOne」，主页上就能读到名字，
+          // 不用先跑去个人主页（AccountGridItem_fullName 那个 testid 在这个版本的页面上不存在）。
+          const btn = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
+          const lines = ((btn && btn.innerText) || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+          const at = lines.findIndex((s) => /^@\w{1,15}$/.test(s));
+          return at > 0 ? lines[at - 1] : '';
+        })(),
+        notifyBadge: clean((badge?.getAttribute('aria-label') || badge?.innerText || '')).replace(/\D+/g, '').slice(0, 6),
       };
     })()`);
     assertXPage(state);
@@ -212,9 +234,21 @@ async function xStatusLocked({ verify = false } = {}) {
       kvSet('x_self_handle', state.selfHandle);
       kvSet('x_profile_url', `${BASE}/${state.selfHandle}`);
     }
+    if (loggedIn && state.selfName) kvSet('x_self_name', state.selfName);
     lastCheckAt = nowIso();
     lastError = '';
-    return { ...cached, loggedIn, browserRunning: true, url: state.url, selfHandle: state.selfHandle || cached.selfHandle, notifyBadge: state.notifyBadge, proxyOk: true };
+    return {
+      ...cached,
+      loggedIn,
+      browserRunning: true,
+      url: state.url,
+      selfHandle: state.selfHandle || cached.selfHandle,
+      selfName: state.selfName || cached.selfName,
+      profileUrl: loggedIn && state.selfHandle ? `${BASE}/${state.selfHandle}` : cached.profileUrl,
+      notifyBadge: state.notifyBadge,
+      lastError: '',
+      proxyOk: true,
+    };
   } catch (error) {
     noteError(error.message);
     logger.warn('X 登录状态检查失败', { error: error.message });
@@ -224,18 +258,20 @@ async function xStatusLocked({ verify = false } = {}) {
 
 async function openXLoginLocked() {
   const proxy = await requireProxy();
-  // 登录走"干净窗口"：带调试端口的自动化窗口会被 Google 拒绝授权（实测回
-  // "This browser or app may not be secure"），X 自己的账号密码登录倒是能吃。
-  await browser.close().catch(() => {});
-  const launched = await browser.launchForManualLogin(`${BASE}/i/flow/login`);
+  // 登录就用这个带调试端口的窗口：Google 拦的是 --enable-automation 那面旗子（实测回
+  // "This browser or app may not be secure"），旗子摘掉后端口本身不影响授权。
+  // 这样他登完直接点「验证登录」就行，不用先关窗口——两个窗口抢同一个 profile 只会互相绊住。
+  await browser.relaunch({ visible: true });
+  await browser.navigate(`${BASE}/i/flow/login`);
+  await browser.showWindow();
+  await browser.bringToFront();
+  await sleep(1500);
   lastError = '';
   return {
     ok: true,
     url: `${BASE}/i/flow/login`,
     proxy,
-    pid: launched.pid,
-    manual: true,
-    hint: '登录窗口已打开（普通 Chrome，不带自动化旗子）。在里面登录，能选 Google 也能用密码；登完把那个窗口关掉，再点「验证登录」。登录态只存本机 data/x-profile。',
+    hint: '登录窗口已打开（不带自动化旗子，Google 授权也能走）。登完直接点「验证登录」就行，不用关窗口。登录态只存本机 data/x-profile，不保存密码。',
   };
 }
 
@@ -269,6 +305,17 @@ async function readXTimelineLocked({ tab = 'home', limit = 12, keyword = '' } = 
   return items.slice(0, Math.max(1, Math.min(Number(limit) || 12, 40)));
 }
 
+// 读主页上的昵称：实测 X 已经没有 accountFullName 这个 testid，UserProfileHeader_Items 的
+// 第一行是"New York, USA"（地区），document.title 也还是空的。真名字在往上两层的行列表里，
+// 就排在"@handle"那一行的上面——顺带把 handle 一起读回来核对，免得把别人的名字当成她的。
+const PROFILE_IDENTITY_READ = String.raw`(() => {
+  const items = document.querySelector('[data-testid="UserProfileHeader_Items"]');
+  const box = items && items.parentElement && items.parentElement.parentElement;
+  const lines = ((box && box.innerText) || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+  const at = lines.findIndex((s) => /^@\w{1,15}$/.test(s));
+  return { name: at > 0 ? lines[at - 1] : '', handle: at >= 0 ? lines[at].slice(1) : '' };
+})()`;
+
 async function readSelfTweetsLocked(limit = 8) {
   assertXAction('read');
   await requireProxy();
@@ -278,8 +325,12 @@ async function readSelfTweetsLocked(limit = 8) {
   await browser.navigate(`${BASE}/${handle}`);
   await sleep(2500);
   await assertTimelineLoaded(`X 主页 @${handle}`);
+  // 名字只有站在她自己的主页上才读得到（侧栏那个链接的文案是"个人资料"，不是她的名字）。
+  const identity = await browser.evaluate(PROFILE_IDENTITY_READ);
+  const name = identity.handle && identity.handle.toLowerCase() === handle.toLowerCase() ? identity.name : '';
+  if (name) kvSet('x_self_name', name);
   const items = await browser.evaluate(TWEET_SCAN);
-  return { handle, tweets: items.filter((item) => item.handle?.toLowerCase() === handle.toLowerCase()).slice(0, Math.max(1, Math.min(limit, 20))) };
+  return { handle, name: name || kvGet('x_self_name') || '', tweets: items.filter((item) => item.handle?.toLowerCase() === handle.toLowerCase()).slice(0, Math.max(1, Math.min(limit, 20))) };
 }
 
 async function readTweetThreadLocked(href, limit = 12) {
@@ -336,7 +387,7 @@ async function clickTweetActionLocked(href, testid, labelRegex) {
     if (!button) return { ok: false, reason: '那条推文上没有这个按钮' };
     button.click();
     return { ok: true, label: button.getAttribute('aria-label') || '' };
-  })({ href, testid, labelRegex })`, { timeoutMs: 45000 });
+  })({ href: ${JSON.stringify(href)}, testid: ${JSON.stringify(testid)}, labelRegex: ${JSON.stringify(labelRegex)} })`, { timeoutMs: 45000 });
   return found;
 }
 
@@ -352,7 +403,7 @@ async function reactXLocked(href, kind = 'like') {
     if (!card) return null;
     const btn = card.querySelector('button[aria-label*="' + ${JSON.stringify(kind === 'like' ? 'Like' : 'Repost')} + '"]');
     return { pressed: btn?.getAttribute('aria-pressed') === 'true', count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
-  })({ href })`);
+  })({ href: ${JSON.stringify(href)} })`);
   if (!before) throw new Error('页面上找不到那条推文，这次没点赞/转推');
   if (before.pressed) return { ok: true, already: true };
   const clicked = await clickTweetActionLocked(href, spec.testid, spec.aria);
@@ -375,7 +426,7 @@ async function reactXLocked(href, kind = 'like') {
     const want = kind === 'like' ? /Unlike/ : /Undo Repost/;
     const btn = [...card.querySelectorAll('button')].find((b) => want.test(b.getAttribute('aria-label') || ''));
     return { found: true, pressed: btn?.getAttribute('aria-pressed') === 'true' || Boolean(btn), count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
-  })({ href, kind })`);
+  })({ href: ${JSON.stringify(href)}, kind: ${JSON.stringify(kind)} })`);
   if (!after.found) throw new Error('点完之后页面状态读不到了，这次不算做成');
   assertXReactEvidence({ before: true, after: after.pressed, pressed: after.pressed, countDelta: after.count - before.count });
   return { ok: true, already: false, kind };
@@ -399,7 +450,7 @@ async function replyToTweetLocked(href, text) {
     if (!box) return { ok: false, reason: '找不到回复输入框' };
     box.focus();
     return { ok: true };
-  })({ text: content })`);
+  })({ text: ${JSON.stringify(content)} })`);
   if (!typed.ok) throw new Error(typed.reason || '找不到回复输入框');
   await browser.send('Input.insertText', { text: content });
   await sleep(900);
@@ -429,7 +480,7 @@ async function replyToTweetLocked(href, text) {
       editorEmpty: !clean(document.querySelector('div[data-testid="tweetTextarea_0"]')?.innerText),
       risky: /限流|频繁|Something went wrong|Verify you are human/i.test(clean(document.body.innerText)),
     };
-  })({ content, beforeCount })`);
+  })({ content: ${JSON.stringify(content)}, beforeCount: ${JSON.stringify(beforeCount)} })`);
   assertXDeliveryEvidence({ beforeCount: after.beforeCount, afterCount: after.count, outgoing: after.outgoing, content, text: after.text, state: after });
   return { ok: true, verified: true, chars: content.length };
 }
@@ -517,7 +568,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
       editorEmpty: !clean(document.querySelector('div[data-testid="tweetTextarea_0"]')?.innerText),
       risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)),
     };
-  })({ text: fill.text, beforeCount })`);
+  })({ text: ${JSON.stringify(fill.text)}, beforeCount: ${JSON.stringify(beforeCount)} })`);
   try {
     assertXDeliveryEvidence({ beforeCount: after.beforeCount, afterCount: after.count, outgoing: after.outgoing || after.editorEmpty, content: fill.text, text: after.text, state: after });
   } catch (error) {
@@ -546,13 +597,13 @@ async function prepareXDmLocked(handle, text) {
   await browser.ensure({ visible: false });
   await browser.navigate(`${BASE}/messages/compose?recipient_ids=`);
   await sleep(2000);
-  const filled = await browser.evaluate(String.raw`(({ handle, content }) => {
+  const filled = await browser.evaluate(String.raw`(() => {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
     const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
     if (!box) return { ok: false, reason: '找不到私信输入框' };
     box.focus();
     return { ok: true, before: clean(box.innerText), hasRecipient: Boolean(document.querySelector('[data-testid="dm-composer-recipient"]')) };
-  })({ handle, content })`);
+  })()`);
   if (!filled.ok) throw new Error(filled.reason || '私信页面没打开');
   await browser.send('Input.insertText', { text: content });
   await sleep(600);
@@ -560,7 +611,7 @@ async function prepareXDmLocked(handle, text) {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
     const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
     return { text: clean(box?.innerText), expected: content };
-  })({ content })`);
+  })({ content: ${JSON.stringify(content)} })`);
   if (readback.text !== content) throw new Error('私信内容没有真的填进去');
   addEvent('x_dm_draft', '她写好一条私信草稿，等你点发送', { handle, chars: content.length });
   return { ok: true, drafted: true, sent: false, handle, chars: content.length, hint: '私信只填不发：在登录窗口里确认后自己点发送' };
@@ -577,7 +628,7 @@ async function locateXFollowLocked(handle) {
     const btn = document.querySelector('[data-testid="FollowButton"], [data-testid="Follow"], button[aria-label^="Follow"]');
     return {
       url: location.href,
-      name: clean(document.querySelector('[data-testid="accountFullName"]')?.innerText),
+      name: '',
       bio: clean(document.querySelector('[data-testid="accountBio"]')?.innerText).slice(0, 140),
       followers: clean((document.body.innerText.match(/[\d,.]+[KM]? Following|[\d,.]+[KM]? Followers/gi) || []).join(' | ')),
       followable: Boolean(btn && !btn.disabled && /Follow/i.test(btn.innerText || btn.getAttribute('aria-label') || '')),
@@ -585,6 +636,7 @@ async function locateXFollowLocked(handle) {
     };
   })()`);
   assertXPage(state);
+  state.name = (await browser.evaluate(PROFILE_IDENTITY_READ)).name || '';
   return state;
 }
 

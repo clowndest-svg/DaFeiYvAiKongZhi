@@ -2,8 +2,9 @@
 // 判错方向就是把主人日常浏览器当成自动化窗口来操作，所以正反样本都要钉住。
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
-import { ownsProfileDir, parseUserDataDir } from '../src/browser/cdp.js';
+import { ownsProfileDir, parseUserDataDir, sameLocation, liveScore } from '../src/browser/cdp.js';
 
 const PROFILE = path.resolve('D:/RuanJian/BiZhi/data/xhs-profile');
 
@@ -30,4 +31,39 @@ test('参数顺序与相邻参数不影响判定', () => {
   const line = `chrome.exe --enable-automation --user-data-dir=${PROFILE} --no-first-run --window-size=1280,900`;
   assert.equal(ownsProfileDir(line, PROFILE), true);
   assert.equal(ownsProfileDir(`chrome.exe --user-data-dir=${path.resolve(PROFILE, '..')}`, PROFILE), false);
+});
+
+// 导航"提交"慢不等于失败：X 在这张网上提交常拖过 30 秒，实测把已经跳过去的页报成"操作超时"。
+test('导航超时后要看地址，不许拿 CDP 有没有回话当成功', () => {
+  assert.equal(sameLocation('https://x.com/home', 'https://x.com/home'), true);
+  assert.equal(sameLocation('https://x.com/home/', 'https://x.com/home'), true, '浏览器补的斜杠不该算没到');
+  assert.equal(sameLocation('https://X.com/MetaverseTomOne#top', 'https://x.com/MetaverseTomOne'), true, '大小写和 hash 不该算没到');
+  assert.equal(sameLocation('https://x.com/home?show=following', 'https://x.com/home'), false, '查询串不同就是另一个页');
+  assert.equal(sameLocation('https://x.com/i/flow/login', 'https://x.com/home'), false, '还停在登录页不能算成功');
+  assert.equal(sameLocation('', 'https://x.com/home'), false, '读不到地址等于没到，不许当成跳转成功');
+  assert.equal(sameLocation('about:blank', 'https://x.com/home'), false);
+});
+
+test('接管时逐个标签页试，谁答话用谁，别一把抓第一个', () => {
+  const cdp = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'src', 'browser', 'cdp.js'), 'utf8');
+  const attach = /async attach\(\)[\s\S]*?\r?\n  }/.exec(cdp);
+  assert.ok(attach, '找不到 attach()');
+  assert.match(attach[0], /for \(const page of candidates\)/, '没有逐个候选试连：一次抓错页就全线超时');
+  assert.match(attach[0], /await this\.tryConnect\(page\)/, '候选页没走答话检查');
+  assert.match(attach[0], /\/json\/new/, '所有页都不答话时没给自己开一个新标签页');
+  const connect = /async tryConnect\(page\)[\s\S]*?\r?\n  }/.exec(cdp);
+  assert.ok(connect, '找不到 tryConnect()');
+  assert.match(connect[0], /this\.send\('Page\.enable', \{\}, 6000\)/, '没先用一句话说"你在不在"：被丢弃的后台页会把指令吞掉');
+  assert.match(connect[0], /return false/, '这个页不答话时要能换下一个');
+  // 真机量到的 8 个 target：3 个 about:blank + 一个卡住的旧页，活的只有开着站点的那个
+  const targets = [
+    { url: 'about:blank' },
+    { url: 'https://x.com/MetaverseTomOne' },
+    { url: 'about:blank' },
+    { url: 'chrome://omnibox-popup.top-chrome/' },
+    { url: 'about:blank' },
+  ];
+  const ranked = [...targets].sort((a, b) => liveScore(b) - liveScore(a));
+  assert.equal(ranked[0].url, 'https://x.com/MetaverseTomOne', '没把开着站点的页排在最前');
+  assert.ok(liveScore({ url: 'about:blank' }) < liveScore({ url: 'chrome://omnibox-popup.top-chrome/' }), '空白页该排在别的非站点页后面');
 });

@@ -62,7 +62,68 @@ function windowsCommandLineForPort(port) {
   }
 }
 
+// 候选标签页的优先级：已经开着站点的页最可能是活的那个；about:blank 多半是历史遗留。
+export function liveScore(page) {
+  const url = String(page?.url || '');
+  if (/^https?:\/\//i.test(url)) return 2;
+  if (url && url !== 'about:blank') return 1;
+  return 0;
+}
+
+// 地址是否已经是目标页：浏览器会补斜杠、丢 hash，逐字比较会把成功的跳转判成失败。
+export function sameLocation(actual, target) {
+  const norm = (value) => {
+    try {
+      const u = new URL(String(value || ''));
+      return `${u.origin.toLowerCase()}${u.pathname.replace(/\/$/, '')}${u.search}`;
+    } catch {
+      return '';
+    }
+  };
+  const a = norm(actual);
+  return Boolean(a) && a === norm(target);
+}
+
+// 谁还占着这个 profile：只读进程列表，一个进程都不动。
+// Chrome 的渲染/GPU/网络子进程命令行里同样带 --user-data-dir，照单全报会列出十几个 pid，
+// 甚至出现 pid 8 这种荒唐数字——等于没说。父进程本身也是浏览器的是孩子，剔掉；
+// 只剩窗口主进程（父进程已死的孤儿也算，正是它最会卡住 profile）。
+export function chromeHoldingProfile(profileDir) {
+  const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" | Where-Object { $_.CommandLine -match [regex]::Escape($env:BIZHI_PROFILE_MATCH) } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)" }`;
+  let rows;
+  try {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+      encoding: 'utf8',
+      timeout: 20000,
+      windowsHide: true,
+      env: { ...process.env, BIZHI_PROFILE_MATCH: String(profileDir) },
+    });
+    rows = String(out)
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.includes('|'))
+      .map((line) => line.split('|').map((part) => Number(part.trim())))
+      .filter(([pid]) => Number.isFinite(pid) && pid > 0);
+  } catch (error) {
+    logger.debug('读取 profile 占用者失败', { error: String(error.message).slice(0, 60) });
+    return [];
+  }
+  const pids = new Set(rows.map(([pid]) => pid));
+  return rows.filter(([, parent]) => !pids.has(parent)).map(([pid]) => String(pid)).slice(0, 4);
+}
+
+export function profileHeldMessage(pids, profileDir) {
+  if (!pids || !pids.length) return '';
+  return `这个账号目录还被另一个 Chrome 窗口占着（pid ${pids.join('、')}，profile ${profileDir}）：把那个窗口关掉，我再接管同一个 profile 继续`;
+}
+
+// 从"窗口主进程"名单里把自己起的那个摘掉，剩下的才是真正要请用户关掉的窗口。
+export function otherHolders(pids, ownPid) {
+  return (pids || []).filter((pid) => String(pid) !== String(ownPid || ''));
+}
+
 export class CdpBrowser {
+
   constructor({ port = 9333, profileDir, visible = false, proxyServer = '', lang = 'zh-CN' } = {}) {
     this.port = port;
     this.profileDir = profileDir;
@@ -103,6 +164,21 @@ export class CdpBrowser {
     const executable = findBrowser();
     if (!executable) throw new Error('找不到 Chrome/Edge，可在 .env 设置 CHROME_PATH');
     fs.mkdirSync(this.profileDir, { recursive: true });
+    if (await this.launchOnce(executable)) return;
+    // 自己起的那个进程没把调试端口开出来。最常见的原因：同一个 profile 只许一个实例占着，
+    // 新进程并进旧窗口后自己退了——这时旧窗口的 pid 会留在端口之外，说"端口没有起来"等于让人猜。
+    // 先把自己刚起的那个收掉（不留孤儿占 profile），再看还有谁占着，最后重试一次。
+    const stopped = await this.stopOwnChild();
+    const holders = otherHolders(chromeHoldingProfile(this.profileDir), stopped);
+    if (holders.length) throw new Error(profileHeldMessage(holders, this.profileDir));
+    if (await this.launchOnce(executable)) return;
+    const again = await this.stopOwnChild();
+    const still = otherHolders(chromeHoldingProfile(this.profileDir), again);
+    if (still.length) throw new Error(profileHeldMessage(still, this.profileDir));
+    throw new Error(`Chrome 调试端口两次都没起来${this.profileDir}（已收掉自己起的浏览器进程）：多半是被安全软件拦了，手动开一次那个浏览器窗口再点验证`);
+  }
+
+  async launchOnce(executable) {
     const args = [
       `--remote-debugging-port=${this.port}`,
       `--user-data-dir=${this.profileDir}`,
@@ -113,24 +189,43 @@ export class CdpBrowser {
       '--disable-features=Translate,MediaRouter,OptimizationHints',
       `--lang=${this.lang}`,
       '--window-size=1280,900',
-      visible ? '--window-position=80,60' : '--window-position=-32000,-32000',
+      this.visible ? '--window-position=80,60' : '--window-position=-32000,-32000',
       ...(this.proxyServer ? [`--proxy-server=${this.proxyServer}`] : []),
       'about:blank',
     ];
-    logger.info('启动小红书专用浏览器', { executable, visible });
+    logger.info('启动专用浏览器', { executable, visible: this.visible, port: this.port });
     this.child = spawn(executable, args, {
       detached: true,
       stdio: 'ignore',
       windowsHide: false,
     });
     this.child.unref();
-    this.launchedVisible = visible;
+    this.launchedVisible = this.visible;
     for (let i = 0; i < 50; i += 1) {
-      if (await this.alive()) break;
+      if (await this.alive()) {
+        await this.attach();
+        return true;
+      }
       await sleep(300);
     }
-    if (!(await this.alive())) throw new Error('Chrome 调试端口没有起来');
-    await this.attach();
+    return false;
+  }
+
+  // 只退自己 spawn 的那一个进程：拿不到 pid 就什么都不做，绝不按名字找浏览器去杀。
+  async stopOwnChild() {
+    const pid = Number(this.child?.pid) || 0;
+    this.child = null;
+    if (!pid) return 0;
+    try {
+      process.kill(pid);
+    } catch (error) {
+      if (error.code !== 'ESRCH') logger.debug('收回自己起的浏览器进程失败', { pid, error: String(error.message).slice(0, 60) });
+    }
+    for (let i = 0; i < 20; i += 1) {
+      if (!chromeHoldingProfile(this.profileDir).map(String).includes(String(pid))) return pid;
+      await sleep(150);
+    }
+    return pid;
   }
 
   async relaunch({ visible = true } = {}) {
@@ -139,31 +234,6 @@ export class CdpBrowser {
     await this.ensure({ visible });
   }
 
-  // 人工登录专用：Google 一看到"被自动化控制"的浏览器就拒绝授权（实测 accounts.google.com
-  // 回 "This browser or app may not be secure"），所以登录那一下用一个普通窗口——
-  // 不带调试端口、不带自动化旗子，只带同一个 profile 和代理。他登完关掉窗口，
-  // 登录态留在 profile 里，之后 CDP 再接管同一个目录。
-  async launchForManualLogin(url = "about:blank") {
-    if (env.testMode) throw new Error("隔离测试禁止启动真实浏览器");
-    const executable = findBrowser();
-    if (!executable) throw new Error("找不到 Chrome/Edge，可在 .env 设置 CHROME_PATH");
-    if (await this.alive()) throw new Error("专用浏览器还开着，同一个数据目录不能开两个窗口：先点「关闭浏览器」");
-    fs.mkdirSync(this.profileDir, { recursive: true });
-    const args = [
-      `--user-data-dir=${this.profileDir}`,
-      "--no-first-run",
-      "--no-default-browser-check",
-      "--disable-sync",
-      `--lang=${this.lang}`,
-      "--window-size=1280,900",
-      ...(this.proxyServer ? [`--proxy-server=${this.proxyServer}`] : []),
-      String(url || "about:blank"),
-    ];
-    logger.info("启动人工登录窗口（无调试端口、无自动化旗子）", { executable, profile: this.profileDir });
-    const child = spawn(executable, args, { detached: true, stdio: "ignore", windowsHide: false });
-    child.unref();
-    return { args, pid: child.pid };
-  }
   async assertOwnership() {
     let reason = '';
     try {
@@ -201,17 +271,53 @@ export class CdpBrowser {
   async attach() {
     const listRes = await fetch(`${this.endpoint}/json/list`, { signal: AbortSignal.timeout(3000) });
     let pages = await listRes.json();
-    if (!Array.isArray(pages) || !pages.length) {
-      const created = await fetch(`${this.endpoint}/json/new?about:blank`, {
-        method: 'PUT',
-        signal: AbortSignal.timeout(3000),
-      });
-      pages = [await created.json()];
+    if (!Array.isArray(pages)) pages = [];
+    // 用户自己也会在这个窗口里开标签页（实测 8 个 target，3 个 about:blank），
+    // Chrome 还会"丢弃"后台标签页——被丢掉的页连 Page.enable 都不回。
+    // 抓第一个 page 就等于把指令发进一个永远不答话的页：实测所有导航都报"操作超时"。
+    // 所以排队候选，谁答话用谁；全都不答话就自己开一个标签页，那个必然归我们控制。
+    const pageTargets = pages.filter((item) => item.type === 'page' && item.webSocketDebuggerUrl);
+    const reused = this.pageInfo?.webSocketDebuggerUrl
+      ? pageTargets.find((item) => item.webSocketDebuggerUrl === this.pageInfo.webSocketDebuggerUrl)
+      : null;
+    const ranked = [...pageTargets].sort((a, b) => liveScore(b) - liveScore(a));
+    const candidates = [reused, ...ranked].filter(Boolean);
+    for (const page of candidates) {
+      if (await this.tryConnect(page)) return;
     }
-    const page = pages.find((item) => item.type === 'page') || pages[0];
-    if (!page?.webSocketDebuggerUrl) throw new Error('没有可控制的浏览器页面');
+    const created = await fetch(`${this.endpoint}/json/new?about:blank`, {
+      method: 'PUT',
+      signal: AbortSignal.timeout(3000),
+    }).catch(() => null);
+    const fresh = created ? await created.json().catch(() => null) : null;
+    if (fresh?.webSocketDebuggerUrl && await this.tryConnect(fresh)) return;
+    throw new Error('浏览器没有答话的标签页（开着的页都不回话，新开的也不回）');
+  }
+
+  // 连一个候选页：问三句话都答了才算可用；不答就断开换下一个。归属不对是硬失败，不换页重试。
+  async tryConnect(page) {
+    await this.close();
     this.pageInfo = page;
-    this.ws = new WebSocket(page.webSocketDebuggerUrl, { perMessageDeflate: false });
+    try {
+      await this.openSocket(page.webSocketDebuggerUrl);
+      await this.send('Page.enable', {}, 6000);
+      await this.send('Runtime.enable', {}, 6000);
+      await this.send('Network.enable', {}, 6000);
+    } catch (error) {
+      logger.debug('这个标签页不答话，换下一个', { url: String(page.url || '').slice(0, 50), error: String(error.message).slice(0, 50) });
+      await this.close();
+      return false;
+    }
+    const ownership = await this.assertOwnership();
+    if (ownership) {
+      await this.close();
+      throw new Error(ownership + '；若旧窗口占着调试端口，关掉它再重新登录');
+    }
+    return true;
+  }
+
+  openSocket(url) {
+    this.ws = new WebSocket(url, { perMessageDeflate: false });
     this.ws.on('message', (raw) => {
       let message;
       try {
@@ -235,9 +341,9 @@ export class CdpBrowser {
       this.pending.clear();
     });
     this.ws.on('error', (error) => {
-      logger.warn('小红书浏览器 WebSocket 错误', { error: error.message });
+      logger.debug('专用浏览器 WebSocket 报错', { error: error.message });
     });
-    await new Promise((resolve, reject) => {
+    return new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('浏览器 CDP 连接超时')), 8000);
       this.ws.once('open', () => {
         clearTimeout(timer);
@@ -248,14 +354,6 @@ export class CdpBrowser {
         reject(error);
       });
     });
-    await this.send('Page.enable');
-    await this.send('Runtime.enable');
-    await this.send('Network.enable');
-    const ownership = await this.assertOwnership();
-    if (ownership) {
-      await this.close();
-      throw new Error(ownership + '；若旧窗口占着调试端口，关掉它再重新登录');
-    }
   }
 
   send(method, params = {}, timeoutMs = 20000) {
@@ -303,7 +401,16 @@ export class CdpBrowser {
   }
 
   async navigate(url, { waitMs = 1600, timeoutMs = 30000 } = {}) {
-    await this.send('Page.navigate', { url }, timeoutMs);
+    // Page.navigate 要等导航"提交"才返回；X 这种重页面在这张网上提交可能拖过 30 秒。
+    // 把超时的命令发出去、页面其实已经跳过去了，却报"操作超时"——实测时间线和主页都栽在这。
+    // 所以超时后回头核实地址：地址已经是目标就算成功（内容有没有 load 另有 assertTimelineLoaded 把关）。
+    try {
+      await this.send('Page.navigate', { url }, timeoutMs);
+    } catch (error) {
+      const where = await this.getUrl().catch(() => '');
+      if (!sameLocation(where, url)) throw error;
+      logger.debug('导航未及时返回，但地址已经到了目标页', { url, where });
+    }
     await sleep(waitMs);
     await this.waitReady(timeoutMs);
   }

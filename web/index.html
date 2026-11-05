@@ -659,7 +659,7 @@
                   <button type="button" id="xCloseBtn">关闭浏览器</button>
                 </div>
                 <p class="muted small" id="xAccountLine">当前登录的 X 账号：读取中…</p>
-                <p class="muted small">X 在这台机器上直连不通（实测直连超时、走本机代理 200），必须走 <code>X_PROXY_URL</code>（默认 <code>http://127.0.0.1:7897</code>）。代理没起来时她不动手，也不会把这件事说成"页面打不开"。登录用普通 Chrome 窗口（不带调试端口和自动化旗子，否则 Google 会拒绝授权）：登完关掉窗口再点「验证登录」，登录态只存本机 <code>data/x-profile</code>，不保存密码。</p>
+                <p class="muted small">X 在这台机器上直连不通（实测直连超时、走本机代理 200），必须走 <code>X_PROXY_URL</code>（默认 <code>http://127.0.0.1:7897</code>）。代理没起来时她不动手，也不会把这件事说成"页面打不开"。登录窗口不带自动化旗子（Google 就是看这个才拒绝授权的）：登完直接点「验证登录」，不用关窗口。登录态只存本机 <code>data/x-profile</code>，不保存密码。</p>
                 <label class="check"><input type="checkbox" id="setXEnabled"> 启用 X（推特）互动</label>
                 <label class="check"><input type="checkbox" id="setXAutoBrowse"> 自动逛时间线并回别人的推文</label>
                 <label class="check"><input type="checkbox" id="setXAutoReply"> 自动回复别人在她推文下的评论</label>
