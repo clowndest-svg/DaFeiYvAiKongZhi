@@ -531,6 +531,31 @@ export class CdpBrowser {
     }, [selector]);
   }
 
+  // 真鼠标点一下：内容编辑器（Draft.js/Slate）只认落在真焦点上的输入，
+  // node.click() 这种合成点击不会把光标放进去，Input.insertText 就插了个空（X 实测读到空框）。
+  async clickAt(selector) {
+    const spot = await this.evaluateFunction((sel) => {
+      const node = document.querySelector(sel);
+      if (!node) return null;
+      node.scrollIntoView({ block: 'center' });
+      const r = node.getBoundingClientRect();
+      if (!r.width || !r.height) return null;
+      return { x: Math.round(r.x + Math.min(48, r.width / 2)), y: Math.round(r.y + Math.min(20, r.height / 2)) };
+    }, [selector]);
+    if (!spot) return false;
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await this.send('Input.dispatchMouseEvent', {
+        type,
+        x: spot.x,
+        y: spot.y,
+        button: 'left',
+        clickCount: 1,
+        buttons: type === 'mousePressed' ? 1 : 0,
+      });
+    }
+    return true;
+  }
+
   async type(selector, text) {
     const focused = await this.focus(selector);
     if (!focused) throw new Error(`找不到输入框：${selector}`);

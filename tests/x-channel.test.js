@@ -261,6 +261,9 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   assert.ok(!reply[0].includes('await sleep(900);\n  let readback'), '又是固定等 900ms：Draft.js 下一帧才挂字，读到空的就又打一遍');
   assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
   assert.ok(reply[0].includes('composerFocus()'), '聚焦没走同一个挑框逻辑：browser.focus 用 querySelector 抓第一个，会点到主页发帖框');
+  assert.ok(reply[0].includes("clickAt('[data-bizhi-target=\"composer\"]')"), '没用真鼠标点框：Draft.js 只认落在真焦点上的输入，合成点击实测插进去是空的');
+  const state2 = /function composerState\(action\)[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(state2[0].includes("setAttribute('data-bizhi-target', 'composer')"), '没把选中的框标出来：Node 侧再查一次选择器可能点到另一个框');
   assert.ok(reply[0].includes('composerSend()'), '发送没走同一段挑按钮逻辑：可能点到主页的发帖按钮，把回复发成一条独立新推文');
   assert.ok(reply[0].includes('if (normalizeTyped(before.text)) throw'), '打字前没要求框是空的：补第二遍就成同一句话两遍（实测第 28、第 50 个字重复）');
   assert.equal((reply[0].match(/Input\.insertText/g) || []).length, 1, '一句话被打了两次的写法又回来了');

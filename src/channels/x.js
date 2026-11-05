@@ -477,6 +477,10 @@ function composerState(action) {
     const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const box = pickBox();
     const btn = pickButton();
+    // 把我们真正选中的那两个元素标出来：Node 侧要用真鼠标点其中的框，
+    // 而"再查一次选择器"可能挑到另一个（主页那个发帖框）。
+    if (box) box.setAttribute('data-bizhi-target', 'composer');
+    if (btn) btn.setAttribute('data-bizhi-target', 'send');
     const did = ${JSON.stringify(action)};
     if (did === 'focus' && box) { box.focus(); box.click(); }
     if (did === 'send' && btn) btn.click();
@@ -558,6 +562,7 @@ async function replyToTweetLocked(href, text) {
   if (!before.found) throw new Error('回复弹层里的输入框找不到了，这次没回');
   if (normalizeTyped(before.text)) throw new Error(`回复的输入框里已经有别的内容，这次没往里打字（${before.text.slice(0, 40)}）`);
   await browser.evaluate(composerFocus());
+  await browser.clickAt('[data-bizhi-target="composer"]');
   await browser.send('Input.insertText', { text: content });
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
@@ -602,6 +607,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   const box = await browser.evaluate(String.raw`(() => Boolean(document.querySelector('div[data-testid="tweetTextarea_0"]')))`);
   if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
   await browser.evaluate(composerFocus());
+  await browser.clickAt('[data-bizhi-target="composer"]');
   await browser.send('Input.insertText', { text: content });
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
