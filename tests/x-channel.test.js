@@ -20,7 +20,7 @@ import {
   xCooldownUntil,
 } from '../src/channels/x-safety.js';
 import { canActX, manualXAct, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
-import { readXTimeline, xProxyAlive, normalizeTyped } from '../src/channels/x.js';
+import { readXTimeline, xProxyAlive, normalizeTyped, firstDifference } from '../src/channels/x.js';
 import { otherHolders } from '../src/browser/cdp.js';
 
 test.after(closeDb);
@@ -253,6 +253,9 @@ test('回复的送达证据：在原推文下面逐字读到才算发出去', ()
 test('比对输入框要忽略零宽字符，重试前必须先清空：实测同一句话在框里出现了两遍', () => {
   assert.equal(normalizeTyped('早​上‎好'), '早上好');
   assert.equal(normalizeTyped('  今天想聊聊  '), '今天想聊聊');
+  assert.equal(normalizeTyped('带­软连字​符'), '带软连字符');
+  assert.equal(firstDifference('早上好呀朋友', '早上好呀'), '第 5 个字起不一样：期望「朋友」实际「」');
+  assert.equal(firstDifference('同一句话', '同一句话'), '', '一样就不该报差异');
   const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');

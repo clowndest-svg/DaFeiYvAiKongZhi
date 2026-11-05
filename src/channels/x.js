@@ -432,10 +432,23 @@ async function reactXLocked(href, kind = 'like') {
   return { ok: true, already: false, kind };
 }
 
-// X 的输入框是 Draft.js，里面会夹零宽占位符。拿 innerText 和原文逐字 !== 比，
-// 会把"其实已经打对了"判成没打上，于是再打一遍——实测同一句话出现在输入框里两次，整条作废。
+// X 的输入框是 Draft.js，里面会夹零宽占位符、软连字符、方向标记这类看不见的字符。
+// 拿 innerText 和原文逐字 !== 比，会把"其实已经打对了"判成没打上，于是再打一遍——
+// 实测同一句话出现在输入框里两次，整条作废。
+const INVISIBLE = /[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g;
+
 export function normalizeTyped(text) {
-  return String(text || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+  return String(text || '').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+}
+
+// 说清"差在第几个字"：线上只看到两句前缀相同的话，永远猜不到是中间哪个字符不对。
+export function firstDifference(expected, actual) {
+  const a = normalizeTyped(expected);
+  const b = normalizeTyped(actual);
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i += 1;
+  if (i === a.length && i === b.length) return '';
+  return `第 ${i + 1} 个字起不一样：期望「${a.slice(i, i + 12)}」实际「${b.slice(i, i + 12)}」`;
 }
 
 // 重试前必须先把输入框清空，不然"再打一遍"等于"打两遍"。
@@ -449,7 +462,7 @@ const COMPOSER_CLEAR = String.raw`(() => {
 })()`;
 
 const COMPOSER_READ = String.raw`(() => {
-  const clean = (s) => (s || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+  const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
   const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
   return { text: clean(box?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
@@ -465,7 +478,7 @@ const COMPOSER_SEND = String.raw`(() => {
 // 值必须在建串时就变成字面量——页面里没有 Node 的变量，写进去就是 ReferenceError。
 function replyProof(content, handle) {
   return String.raw`(() => {
-    const clean = (s) => (s || '').replace(/[\u200b-\u200f\u2060\ufeff]/g, '').replace(/\s+/g, ' ').trim();
+    const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const want = ${JSON.stringify(content)};
     const mine = '[data-testid="User-Name"]';
     const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
@@ -510,7 +523,7 @@ async function replyToTweetLocked(href, text) {
     await sleep(900);
     readback = await browser.evaluate(COMPOSER_READ);
   }
-  if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
   if (!(await browser.evaluate(COMPOSER_SEND))) throw new Error('没找到回复的发送按钮，这次没发');
   await sleep(3000);
@@ -555,7 +568,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   await browser.send('Input.insertText', { text: content });
   await sleep(800);
   const readback = await browser.evaluate(COMPOSER_READ);
-  if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
   kvSetJson('x_last_fill', { id, handle: kvGet('x_self_handle'), text: content, at: nowIso() });
