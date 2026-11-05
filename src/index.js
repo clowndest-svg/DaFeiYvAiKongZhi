@@ -269,6 +269,31 @@ import {
   PLATFORM_LABELS,
 } from './social.js';
 import { extractReadableUrl, notePageRead, noteSearchEvent, readWebPage, searchStatus, searchWeb } from './search.js';
+import {
+  closeXBrowser,
+  fillXPost,
+  locateXFollow,
+  openXLogin,
+  prepareXDm,
+  publishFilledXPost,
+  readCachedXStats,
+  getRecentXActivity,
+  readSelfTweets,
+  readTweetThread,
+  readXTimeline,
+  xBrowserBusy,
+  xProxyAlive,
+  xStatus,
+} from './channels/x.js';
+import {
+  canActX,
+  draftXPost,
+  manualXAct,
+  processXExplore,
+  processXOwnReplies,
+  xActivitySummary,
+  xBudgetStatus,
+} from './channels/x-actions.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -522,6 +547,15 @@ const EXPENSIVE_API = new Set([
   '/api/voice/rvc/preview',
   '/api/voice/rvc/select',
   '/api/search/test',
+  '/api/x/login',
+  '/api/x/verify',
+  '/api/x/read',
+  '/api/x/act',
+  '/api/x/draft',
+  '/api/x/publish',
+  '/api/x/dm-draft',
+  '/api/x/follow-locate',
+  '/api/x/run',
   '/api/voice/echo',
   '/api/qq/test-voice',
   '/api/qq/token/reveal',
@@ -1491,6 +1525,103 @@ async function handleApi(req, res, pathname, url) {
       items: found.items || [],
       status: searchStatus(),
     });
+  }
+
+  if (pathname === '/api/x/status' && method === 'GET') {
+    const status = await xStatus({ verify: false });
+    return sendJson(res, 200, {
+      ok: true,
+      status,
+      cached: readCachedXStats(),
+      budget: xBudgetStatus(),
+      activity: getRecentXActivity({ hours: 48, limit: 10 }),
+      summary: xActivitySummary({ days: 7 }),
+      busy: xBrowserBusy(),
+      proxy: await xProxyAlive(),
+    });
+  }
+
+  if (pathname === '/api/x/login' && method === 'POST') {
+    return sendJson(res, 200, await openXLogin());
+  }
+
+  if (pathname === '/api/x/verify' && method === 'POST') {
+    const status = await xStatus({ verify: true });
+    addEvent(status.loggedIn ? 'x_login_ok' : 'x_login_waiting', status.loggedIn ? 'X 登录态确认了' : 'X 还没登录好', {
+      proxyOk: status.proxyOk !== false,
+      reason: String(status.error || status.lastError || '').slice(0, 120),
+    });
+    return sendJson(res, 200, status);
+  }
+
+  if (pathname === '/api/x/close' && method === 'POST') {
+    return sendJson(res, 200, await closeXBrowser());
+  }
+
+  if (pathname === '/api/x/read' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const mode = String(body.mode || 'timeline');
+    if (mode === 'self') return sendJson(res, 200, { ok: true, ...(await readSelfTweets(Number(body.limit) || 8)) });
+    if (mode === 'thread') {
+      if (!body.href) throw new HttpError(400, '要读哪条推文的回复，得给链接');
+      return sendJson(res, 200, { ok: true, replies: await readTweetThread(String(body.href), Number(body.limit) || 12) });
+    }
+    if (mode === 'follow-graph') return sendJson(res, 200, { ok: true, graph: await readXFollowGraph() });
+    const items = await readXTimeline({ tab: String(body.tab || 'home'), limit: Number(body.limit) || 12, keyword: String(body.keyword || '') });
+    return sendJson(res, 200, { ok: true, items, count: items.length });
+  }
+
+  if (pathname === '/api/x/act' && method === 'POST') {
+    // 界面上手动点：走和自动流程同一个闸门、同一个计数
+    const body = await readJsonBody(req);
+    const kind = String(body.kind || '');
+    if (!['like', 'retweet', 'reply'].includes(kind)) throw new HttpError(400, '只支持 like/retweet/reply');
+    if (!body.href) throw new HttpError(400, '缺少推文链接');
+    const out = await manualXAct(kind, { href: String(body.href), text: String(body.text || '') });
+    if (!out.ok && !out.already) throw new HttpError(out.code === 'DELIVERY_UNKNOWN' ? 502 : 409, out.reason || '这个动作没做成');
+    return sendJson(res, 200, { ok: true, ...out, budget: xBudgetStatus() });
+  }
+
+  if (pathname === '/api/x/draft' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const text = String(body.text || '').trim();
+    const out = text ? await fillXPost({ text }) : await draftXPost({ topic: String(body.topic || ''), llm });
+    if (!out.ok) throw new HttpError(409, out.reason || '这条稿子没填成');
+    addEvent('x_draft', '她把一条推文填进了输入框（没发）', { chars: out.chars || text.length, fillId: out.fillId });
+    return sendJson(res, 200, { ok: true, ...out, budget: xBudgetStatus() });
+  }
+
+  if (pathname === '/api/x/publish' && method === 'POST') {
+    // 真发只认这一条路：界面上点"发布"，逐字核对填稿记录后才点发送
+    const body = await readJsonBody(req);
+    const out = await publishFilledXPost({ fillId: String(body.fillId || '') });
+    return sendJson(res, 200, { ok: true, ...out, budget: xBudgetStatus() });
+  }
+
+  if (pathname === '/api/x/dm-draft' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (!body.handle || !body.text) throw new HttpError(400, '要给谁、说什么，两个都得填');
+    return sendJson(res, 200, await prepareXDm(String(body.handle), String(body.text)));
+  }
+
+  if (pathname === '/api/x/follow-locate' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (!body.handle) throw new HttpError(400, '要关注谁');
+    return sendJson(res, 200, await locateXFollow(String(body.handle)));
+  }
+
+  if (pathname === '/api/x/run' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const step = String(body.step || 'explore');
+    if (step === 'replies') return sendJson(res, 200, await processXOwnReplies({ llm, force: true }));
+    if (step === 'browse') return sendJson(res, 200, await processXExplore({ llm, force: true }));
+    return sendJson(res, 400, { error: '只有 explore/replies 两种' });
+  }
+
+  if (pathname === '/api/x/gate' && method === 'POST') {
+    // 界面上问"现在能不能做某个动作"：拿到的是闸门原话，不是界面自己编的理由
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, canActX(String(body.kind || 'reply'), { ignoreCounts: body.ignoreCounts === true }));
   }
 
   if (pathname === '/api/voice/echo' && method === 'POST') {
