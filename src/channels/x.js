@@ -391,12 +391,25 @@ async function clickTweetActionLocked(href, testid, labelRegex) {
   return found;
 }
 
+// 动作前先站到那条推文自己的页面上：卡片一定在眼前，回复/点赞不用赌时间线还在不在。
+function threadPath(href) {
+  const value = String(href || '');
+  return `${BASE}${value.startsWith('/') ? value : `/${value.replace(/^https?:\/\/[^/]+/, '')}`}`;
+}
+
+async function openTweet(thread) {
+  await browser.navigate(thread);
+  await sleep(2500);
+  await assertTimelineLoaded('X 推文详情');
+}
+
 async function reactXLocked(href, kind = 'like') {
   assertXAction(kind);
   await requireProxy();
   const map = { like: { testid: 'like', undo: 'unlike', aria: 'Like|Unlike', label: '点赞' }, retweet: { testid: 'retweet', undo: 'unretweet', aria: 'Repost|Undo Repost', label: '转推' } };
   const spec = map[kind];
   if (!spec) throw new Error(`不支持的动作：${kind}`);
+  await openTweet(threadPath(href));
   const before = await browser.evaluate(String.raw`(({ href }) => {
     const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
     const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(href));
@@ -451,11 +464,15 @@ export function firstDifference(expected, actual) {
   return `第 ${i + 1} 个字起不一样：期望「${a.slice(i, i + 12)}」实际「${b.slice(i, i + 12)}」`;
 }
 
-// 三个动作共用同一段页面脚本（读/聚焦/点发送），因为"挑哪个框"这件事只能有一份答案：
+// 四个动作共用同一段页面脚本（读/粘贴/点发送/标焦点），因为"挑哪个框"只能有一份答案：
 // 实测点回复后地址是 https://x.com/compose/post，输入框 tweetTextarea_0 不在任何 [role="dialog"] 里；
 // 只认弹层就"找不到输入框"，只认 querySelector 的第一个又会抓到主页顶部的发帖框。
 // 规矩：弹层里有就用弹层的，没有就用页面上最后长出来的那一个（新页/新弹层总在后面）。
-function composerState(action) {
+//
+// 输入方式只认粘贴：在真页面上试过四种——真鼠标点 + Input.insertText（空的）、
+// execCommand('insertText')（空的）、逐字符键盘事件（空的）、派发 ClipboardEvent('paste')
+// 带 DataTransfer（出现了"测试文字甲乙丙"）。X 的编辑器是 Slate，只接粘贴通道。
+function composerState(action, text = '') {
   return String.raw`(() => {
     const pickBox = () => {
       const inDialog = document.querySelector('[role="dialog"] div[data-testid="tweetTextarea_0"]');
@@ -477,26 +494,41 @@ function composerState(action) {
     const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const box = pickBox();
     const btn = pickButton();
-    // 把我们真正选中的那两个元素标出来：Node 侧要用真鼠标点其中的框，
-    // 而"再查一次选择器"可能挑到另一个（主页那个发帖框）。
+    // 把我们真正选中的那两个元素标出来，Node 侧后续动作要用同一个，不能再查一次选择器。
     if (box) box.setAttribute('data-bizhi-target', 'composer');
     if (btn) btn.setAttribute('data-bizhi-target', 'send');
     const did = ${JSON.stringify(action)};
-    if (did === 'focus' && box) { box.focus(); box.click(); }
-    if (did === 'send' && btn) btn.click();
+    // 发送这里只标出按钮，真点由 Node 侧用可信鼠标事件做（合成 click() 在这套页面上不生效，
+    if (did === 'paste' && box) {
+      box.focus();
+      const dt = new DataTransfer();
+      dt.setData('text/plain', ${JSON.stringify(String(text || ''))});
+      box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    }
     return {
       text: clean(box?.innerText),
       found: Boolean(box),
       ready: Boolean(btn && !btn.disabled),
-      acted: did === 'read' ? true : Boolean(did === 'focus' ? box : btn),
+      acted: did === 'read' ? true : Boolean(did === 'paste' ? box : btn),
       risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)),
     };
   })()`;
 }
 
 const composerRead = () => composerState('read');
-const composerFocus = () => composerState('focus');
+const composerPaste = (text) => composerState('paste', text);
 const composerSend = () => composerState('send');
+
+// 私信的输入框是另一个 testid，但同样只认粘贴（同一个 Slate 编辑器）。
+const composerPasteDm = (text) => String.raw`(() => {
+  const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
+  if (!box) return false;
+  box.focus();
+  const dt = new DataTransfer();
+  dt.setData('text/plain', ${JSON.stringify(String(text || ''))});
+  box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+  return true;
+})()`;
 
 // Draft.js 把打进去的字要下一帧才挂到 DOM 上：先等 900ms、再等 4 秒都读到过"空的"，
 // 于是代码以为没落字、又打一遍——实测框里成了同一句话两遍。
@@ -544,6 +576,10 @@ async function replyToTweetLocked(href, text) {
   const handle = kvGet('x_self_handle') || '';
   if (!handle) throw new Error('还不知道她的 X 用户名（先点「验证登录」），没法核实回复真的发出去了');
   await requireProxy();
+  // 每条动作都从"那条推文自己的页面"开始：弹层/整页回复会把标签页带到别处，
+  // 下一次再回时间线找卡片就成了"找不到那条推文"（实测连着三条都是这个错）。
+  const thread = threadPath(href);
+  await openTweet(thread);
   const opened = await clickTweetActionLocked(href, 'reply', 'Reply');
   if (!opened.ok) throw new Error(opened.reason || '回复按钮没点到');
   // 弹层里的输入框是异步挂出来的：实测点完 1.5 秒还没有，硬往下走就变成"回复没有真的填进去"。
@@ -561,17 +597,16 @@ async function replyToTweetLocked(href, text) {
   const before = await browser.evaluate(composerRead());
   if (!before.found) throw new Error('回复弹层里的输入框找不到了，这次没回');
   if (normalizeTyped(before.text)) throw new Error(`回复的输入框里已经有别的内容，这次没往里打字（${before.text.slice(0, 40)}）`);
-  await browser.evaluate(composerFocus());
-  await browser.clickAt('[data-bizhi-target="composer"]');
-  await browser.send('Input.insertText', { text: content });
+  await browser.evaluate(composerPaste(content));
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
+  // 发送要用可信鼠标事件：合成 click() 在这页上点了没反应（实测粘贴成功、按钮不灰、点完没有回复）。
   if (!(await browser.evaluate(composerSend()))) throw new Error('没找到回复的发送按钮，这次没发');
+  if (!(await browser.clickAt('[data-bizhi-target="send"]'))) throw new Error('发送按钮点不到（可能已被页面挪走了），这次没发');
   await sleep(3000);
   // 弹层一关，新回复不会留在她刚才刷的时间线上——原地数卡片证明不了发出去了
   // （实测今天两次"没核实成功"就是这么来的）。回到那条推文下面，按她的账号逐字核对。
-  const thread = `${BASE}${String(href).startsWith('/') ? href : `/${String(href).replace(/^https?:\/\/[^/]+/, '')}`}`;
   await browser.navigate(thread);
   let after = { found: false, text: '', mineCount: 0, risky: false };
   for (let i = 0; i < 6 && !after.found; i += 1) {
@@ -606,9 +641,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   await sleep(900);
   const box = await browser.evaluate(String.raw`(() => Boolean(document.querySelector('div[data-testid="tweetTextarea_0"]')))`);
   if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
-  await browser.evaluate(composerFocus());
-  await browser.clickAt('[data-bizhi-target="composer"]');
-  await browser.send('Input.insertText', { text: content });
+  await browser.evaluate(composerPaste(content));
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
@@ -688,7 +721,7 @@ async function prepareXDmLocked(handle, text) {
     return { ok: true, before: clean(box.innerText), hasRecipient: Boolean(document.querySelector('[data-testid="dm-composer-recipient"]')) };
   })()`);
   if (!filled.ok) throw new Error(filled.reason || '私信页面没打开');
-  await browser.send('Input.insertText', { text: content });
+  await browser.evaluate(composerPasteDm(content));
   await sleep(600);
   const readback = await browser.evaluate(String.raw`(({ content }) => {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();

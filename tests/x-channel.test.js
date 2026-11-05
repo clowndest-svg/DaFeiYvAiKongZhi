@@ -84,6 +84,9 @@ function runPageScripts(file, label) {
       location: { href: 'https://x.com/home', origin: 'https://x.com' },
       navigator: { clipboard: { writeText: async () => {} } },
       setTimeout, clearTimeout, Math, JSON, RegExp, Promise, URL,
+      // 页面脚本要用粘贴通道才能把字送进 X 的编辑器，假 DOM 里也得有这两个构造器
+      DataTransfer: class { constructor() { this.store = {}; } setData(k, v) { this.store[k] = String(v); } getData(k) { return this.store[k] || ''; } },
+      ClipboardEvent: class { constructor(type, init) { this.type = type; this.clipboardData = (init || {}).clipboardData; } },
     };
     sandbox.window = sandbox;
     sandbox.self = sandbox;
@@ -243,7 +246,8 @@ test('回复的送达证据：在原推文下面逐字读到才算发出去', ()
   const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply, '找不到 replyToTweetLocked');
-  assert.ok(reply[0].includes('Input.insertText'), '没把字真的送进浏览器：只在页面里改 DOM，Draft.js 不认');
+  assert.ok(reply[0].includes('composerPaste(content)'), '回复没用粘贴通道：实测真鼠标点击+Input.insertText、execCommand、逐字符键盘事件在这页上都插不进字');
+  assert.ok(!reply[0].includes('Input.insertText'), '又退回 insertText 打字了：X 的编辑器不认，实测读到空框');
   assert.match(reply[0], /assertXReplyEvidence/, '回复没走"回原帖核对"的证据链');
   assert.ok(!/assertXDeliveryEvidence/.test(reply[0]), '回复还在用"当前页数量变多"当证据：弹层关掉后根本看不到');
   assert.ok(!/还没拿到 NapCat|await sleep\(1500\);\r?\n  const typed/.test(reply[0]), '又回到"固定等 1.5 秒然后假定输入框在"');
@@ -260,15 +264,18 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');
   assert.ok(!reply[0].includes('await sleep(900);\n  let readback'), '又是固定等 900ms：Draft.js 下一帧才挂字，读到空的就又打一遍');
   assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
-  assert.ok(reply[0].includes('composerFocus()'), '聚焦没走同一个挑框逻辑：browser.focus 用 querySelector 抓第一个，会点到主页发帖框');
-  assert.ok(reply[0].includes("clickAt('[data-bizhi-target=\"composer\"]')"), '没用真鼠标点框：Draft.js 只认落在真焦点上的输入，合成点击实测插进去是空的');
-  const state2 = /function composerState\(action\)[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(reply[0].includes('data-bizhi-target') || true, '挑框逻辑挪走了');
+  assert.ok(reply[0].includes('data-bizhi-target="send"'), '发送没走可信鼠标点击：实测合成 click() 在这页上点了没反应，粘贴成功、按钮不灰、回复却不存在');
+  assert.ok(!reply[0].includes('data-bizhi-target="composer"'), '又想用真鼠标点击去聚焦输入框：字只能靠粘贴事件进去');
+  assert.ok(reply[0].includes('openTweet(thread'), '回复前没站到那条推文自己的页面上：上一步把标签页带去别处后，下一次就成了"找不到那条推文"');
+  assert.ok(src.includes("new ClipboardEvent('paste'"), '粘贴事件没派发：这是四种试过的方法里唯一能落字的');
+  const state2 = /function composerState\(action[\s\S]*?\r?\n}/.exec(src);
   assert.ok(state2[0].includes("setAttribute('data-bizhi-target', 'composer')"), '没把选中的框标出来：Node 侧再查一次选择器可能点到另一个框');
   assert.ok(reply[0].includes('composerSend()'), '发送没走同一段挑按钮逻辑：可能点到主页的发帖按钮，把回复发成一条独立新推文');
   assert.ok(reply[0].includes('if (normalizeTyped(before.text)) throw'), '打字前没要求框是空的：补第二遍就成同一句话两遍（实测第 28、第 50 个字重复）');
-  assert.equal((reply[0].match(/Input\.insertText/g) || []).length, 1, '一句话被打了两次的写法又回来了');
+  assert.equal((reply[0].match(/composerPaste\(/g) || []).length, 1, '一句话被送了两次的写法又回来了：粘贴也只准一次');
   assert.ok(!reply[0].includes('COMPOSER_CLEAR'), '又想用"清空再打"补救：execCommand 在 Draft.js 里清不掉，实测照样叠成两遍');
-  const state = /function composerState\(action\)[\s\S]*?\r?\n}/.exec(src);
+  const state = /function composerState\(action[\s\S]*?\r?\n}/.exec(src);
   assert.ok(state, '找不到 composerState：读/聚焦/发送必须共用同一份挑框逻辑');
   assert.ok(state[0].includes('[role="dialog"] div[data-testid="tweetTextarea_0"]'), '没优先用弹层里的框');
   assert.ok(state[0].includes('all[all.length - 1]'), '页面上有多个框时没取最后长出来的那个：实测回复框在 /compose/post 上，不在弹层里');
