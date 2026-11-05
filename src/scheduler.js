@@ -71,6 +71,9 @@ export class Scheduler {
     this.xhsTimer = null;
     this.xhsBusy = false;
     this.lastXhsError = null;
+    this.xTimer = null;
+    this.xBusy = false;
+    this.lastXError = null;
     this.tickFailAt = new Map();
   }
 
@@ -101,6 +104,13 @@ export class Scheduler {
       });
     }, 15 * 60 * 1000);
     if (!kvGet('next_xhs_at')) kvSet('next_xhs_at', hoursFromNow(1));
+    if (!kvGet('next_x_at')) kvSet('next_x_at', hoursFromNow(1));
+    this.xTimer = setInterval(() => {
+      this.pollX().catch((error) => {
+        this.lastXError = error.message;
+        logger.warn('X 定时动作失败', { error: String(error.message).slice(0, 120) });
+      });
+    }, 10 * 60000);
     this.xhsTimer = setInterval(() => {
       this.pollXhs().catch((error) => {
         this.lastXhsError = error.message;
@@ -114,11 +124,14 @@ export class Scheduler {
   stop() {
     if (this.timer) clearInterval(this.timer);
     if (this.qzoneTimer) clearInterval(this.qzoneTimer);
+    if (this.xTimer) clearInterval(this.xTimer);
     if (this.xhsTimer) clearInterval(this.xhsTimer);
     this.timer = null;
     this.qzoneTimer = null;
     this.xhsTimer = null;
-    this.xhsTimer = null;
+    this.xTimer = null;
+    this.xBusy = false;
+    this.lastXError = null;
     this.xhsBusy = false;
     this.lastXhsError = null;
   }
@@ -153,6 +166,67 @@ export class Scheduler {
     } finally {
       this.qzoneBusy = false;
     }
+  }
+
+  async pollX() {
+    const { withXBrowser } = await import('./channels/x.js');
+    return withXBrowser(() => this.pollXLocked());
+  }
+
+  async pollXLocked() {
+    const settings = loadSettings();
+    if (!settings.social?.xEnabled) return null;
+    if (this.costGate('xAuto', 'X 自动互动')) return null;
+    if (!isWithinWindow(settings.social.activeStart, settings.social.activeEnd)) return null;
+    if (Date.parse(kvGet('x_cooldown_until') || '') > Date.now()) return null;
+    if (Date.now() < (this.xRetryAt || 0)) return null;
+    const { xStatus } = await import('./channels/x.js');
+    const connection = await xStatus({ verify: true }).catch((error) => ({ loggedIn: false, error: error.message }));
+    if (!connection.loggedIn) {
+      // 代理不通和登录失效要分开记：前者是这台机器的网络，后者是他的账号。
+      this.xFailures = Math.min(4, (this.xFailures || 0) + 1);
+      this.xRetryAt = Date.now() + Math.min(60, 10 * 2 ** (this.xFailures - 1)) * 60000;
+      this.lastXError = connection.error || connection.lastError || 'X 还没登录或代理不通';
+      addEvent('x_connection_waiting', 'X 连接未就绪，已退避并暂停本轮', {
+        retryAt: new Date(this.xRetryAt).toISOString(),
+        proxyOk: connection.proxyOk !== false,
+        reason: String(this.lastXError).slice(0, 120),
+      });
+      return null;
+    }
+    this.xFailures = 0;
+    this.xRetryAt = 0;
+    const due = kvGet('next_x_at');
+    if (due && new Date(due).getTime() > Date.now()) return { nextAt: due };
+    if (this.xBusy) return null;
+    this.xBusy = true;
+    try {
+      const { draftXPost, processXExplore, processXOwnReplies, xBudgetStatus } = await import('./channels/x-actions.js');
+      const replies = await processXOwnReplies({ llm: this.llm }).catch((error) => {
+        this.lastXError = error.message;
+        addEvent('x_step_failed', '回评论这一步没做成', { step: 'reply', error: String(error.message).slice(0, 100) });
+        return { ok: false, actions: [] };
+      });
+      const browse = await processXExplore({ llm: this.llm }).catch((error) => {
+        this.lastXError = error.message;
+        addEvent('x_step_failed', '逛 X 这一步没做成', { step: 'browse', error: String(error.message).slice(0, 100) });
+        return { ok: false, actions: [] };
+      });
+      const social = settings.social;
+      const budget = xBudgetStatus();
+      if ((browse.ok || replies.ok) && Number(social.xDailyPostMax) > 0 && budget.draftsToday < budget.dailyPostMax) {
+        await draftXPost({ llm: this.llm }).catch((error) => {
+          this.lastXError = error.message;
+          addEvent('x_step_failed', '起草这一步没做成', { step: 'draft', error: String(error.message).slice(0, 100) });
+        });
+      }
+    } finally {
+      this.xBusy = false;
+      const min = Number(settings.social?.xPollHoursMin || 3);
+      const max = Math.max(min, Number(settings.social?.xPollHoursMax || 5));
+      kvSet('next_x_at', hoursFromNow(Math.max(1, min + Math.random() * (max - min))));
+    }
+    return { nextAt: kvGet('next_x_at') };
   }
 
   async pollXhs() {

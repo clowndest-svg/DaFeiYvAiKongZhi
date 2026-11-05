@@ -1,0 +1,645 @@
+// X / Twitter 通道：用本项目专用的浏览器（独立 profile + 显式代理）读写他的账号。
+//
+// 三条和小红书一样硬的规矩，另有两条 X 特有的：
+// 1) 代理不通就绝不动手。X 在这张网上直连不通（实测直连 000、代理 200），
+//    跟着系统代理走会把"代理没起来"记成"页面打不开"，那是假原因。
+// 2) 列表为空必须能分清"真的没有"和"页面没加载出来"——后者一律报错，不许当成 0 条继续跑。
+// 3) 任何限流/验证/封禁字样 → 立刻进 24 小时冷却，不再重试。
+// 4) 发推、私信、关注这类不可撤回的动作，默认只填不发；真发要点一下"发布"并逐字核对。
+// 5) 选择器只认 data-testid；X 的 class 名是混淆的，按 class 写的判据撑不过一次改版。
+
+import net from 'node:net';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { env, loadSettings, paths } from '../config.js';
+import { addEvent, kvGet, kvGetJson, kvSet, kvSetJson, recentUserMessages } from '../db.js';
+import { logger } from '../logger.js';
+import { assertPublicContent } from '../privacy.js';
+import { hashText, nowIso, sleep } from '../util.js';
+import { CdpBrowser } from '../browser/cdp.js';
+import { SerialQueue } from '../serial.js';
+import { beginEffect, failEffect, finishEffect } from '../effects.js';
+import { assertXAction, assertXDeliveryEvidence, assertXPage, assertXReactEvidence, isXLoginPage, triggerXCooldown, xCooldownUntil } from './x-safety.js';
+
+const BASE = 'https://x.com';
+const PORT = Number(env.xBrowserPort || 9334);
+const browser = new CdpBrowser({ port: PORT, profileDir: paths.xProfile, visible: false, proxyServer: env.xProxy, lang: 'en-US' });
+const queue = new SerialQueue({ maxWaiting: 12, waitMs: 60000 });
+
+let lastError = '';
+let lastCheckAt = null;
+
+function noteError(message) {
+  lastError = String(message || '').slice(0, 200);
+  return lastError;
+}
+
+export function xLastError() {
+  return lastError;
+}
+
+// 代理活着吗：只连 TCP，不发请求。不通就是不通，别拿"页面打不开"糊弄过去。
+export function xProxyAlive(timeoutMs = 800) {
+  const url = String(env.xProxy || '');
+  const m = /^https?:\/\/([^:/]+):?(\d+)?/i.exec(url);
+  if (!m) return Promise.resolve({ ok: false, reason: '没配 X 代理地址（.env 里写 X_PROXY_URL）' });
+  const host = m[1];
+  const port = Number(m[2] || 80);
+  return new Promise((resolve) => {
+    const socket = net.connect({ host, port });
+    const timer = setTimeout(() => {
+      socket.destroy();
+      resolve({ ok: false, host, port, reason: `代理 ${host}:${port} 没应答（X 直连不通，必须先把它起来）` });
+    }, timeoutMs);
+    socket.once('connect', () => {
+      clearTimeout(timer);
+      socket.destroy();
+      resolve({ ok: true, host, port });
+    });
+    socket.once('error', (error) => {
+      clearTimeout(timer);
+      resolve({ ok: false, host, port, reason: `代理 ${host}:${port} 连不上（${error.code || error.message}）：X 需要它才出得去` });
+    });
+  });
+}
+
+async function requireProxy() {
+  const probe = await xProxyAlive();
+  if (!probe.ok) {
+    const error = new Error(probe.reason || '代理不通，X 打不开');
+    error.code = 'X_PROXY_DOWN';
+    throw error;
+  }
+  return probe;
+}
+
+export function xBrowser() {
+  return browser;
+}
+
+export function withXBrowser(task, options) {
+  return queue.run('browser', async () => {
+    try {
+      return await task();
+    } catch (error) {
+      noteError(error.message);
+      if (/限流|频繁|验证|封禁|restricted|suspended|rate limit/i.test(error.message)) {
+        const until = triggerXCooldown(24, error.message);
+        addEvent('x_cooldown', 'X 提示限流或验证，所有动作暂停 24 小时', { until, reason: String(error.message).slice(0, 120) });
+      }
+      throw error;
+    }
+  }, options);
+}
+
+export function xBrowserBusy() {
+  return queue.busy;
+}
+
+// ---- 页面读取原语 -----------------------------------------------------------
+
+const TWEET_SCAN = String.raw`(() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+  const parseCount = (el) => {
+    const t = clean(el && el.innerText).replace(/,/g, '');
+    const m = t.match(/^(\d+(?:\.\d+)?)[KkM]?$/);
+    if (!m) return 0;
+    const base = Number(m[1]);
+    if (/[Kk]$/.test(t)) return Math.round(base * 1e3);
+    if (/M$/.test(t)) return Math.round(base * 1e6);
+    return base;
+  };
+  return cards.map((card) => {
+    const link = card.querySelector('a[href*="/status/"]');
+    const idMatch = link && link.getAttribute('href').match(/\/status\/(\d+)/);
+    const user = card.querySelector('[data-testid="User-Name"]');
+    const handle = clean(user && user.innerText).match(/@([A-Za-z0-9_]{1,20})/);
+    const stat = (testid) => parseCount(card.querySelector('[data-testid=\"' + testid + '\"]'));
+    return {
+      id: idMatch ? idMatch[1] : '',
+      href: link ? link.getAttribute('href') : '',
+      author: clean(user && user.querySelector('div')?.innerText).split('\n')[0],
+      handle: handle ? handle[1] : '',
+      text: clean(card.querySelector('[data-testid="tweetText"]')?.innerText),
+      time: clean(card.querySelector('time')?.getAttribute('datetime')),
+      likes: stat('tweetAction-ShowReplies') || parseCount(card.querySelector('button[aria-label*="like"]')),
+      replyCount: parseCount(card.querySelector('button[aria-label*="Reply"]')),
+      retweetCount: parseCount(card.querySelector('button[aria-label*="Repost"]')),
+      likeCount: parseCount(card.querySelector('button[aria-label*="Like"]')),
+      liked: Boolean(card.querySelector('button[aria-label*="Unlike"]')),
+      retweeted: Boolean(card.querySelector('button[aria-label*="Undo Repost"]')),
+      media: Boolean(card.querySelector('[data-testid="tweetPhoto"], video')),
+    };
+  }).filter((item) => item.text || item.id);
+})()`;
+
+// 页面到底是"没加载出来"还是"真的没有内容"——这两种情况绝不能混成一句"0 条"。
+async function assertTimelineLoaded(where) {
+  const state = await browser.evaluate(String.raw`(() => ({
+    url: location.href,
+    title: document.title,
+    body: (document.body.innerText || '').replace(/\s+/g, ' ').slice(0, 400),
+    tweets: document.querySelectorAll('article[data-testid="tweet"]').length,
+    cells: document.querySelectorAll('div[data-testid="cell-innerContent"], section[data-testid="SessioContainer"], div[data-testid="primaryColumn"]').length,
+    spinner: Boolean(document.querySelector('[data-testid="spinner"]')),
+  }))()`);
+  if (isXLoginPage(state.url, state.body)) {
+    const error = new Error('X 要登录（被导向登录页），请先在登录窗口里登录一次');
+    error.code = 'X_LOGIN_REQUIRED';
+    throw error;
+  }
+  assertXPage(state);
+  if (state.tweets > 0) return state;
+  if (state.spinner) throw new Error(`${where}还在加载（页面有转圈），这次不当成"没有内容"`);
+  if (!state.cells) throw new Error(`${where}没有渲染出内容区，不能当作空列表：${state.body.slice(0, 60)}`);
+  if (/Nothing here|No posts|还没有|暂无/.test(state.body)) return state;
+  throw new Error(`${where}一条都没解析到，但页面没说"没有内容"，选择器可能过期了：${state.body.slice(0, 60)}`);
+}
+
+// ---- 登录与状态 ------------------------------------------------------------
+
+async function xStatusLocked({ verify = false } = {}) {
+  const proxy = await xProxyAlive();
+  const running = await browser.alive();
+  const cached = {
+    configured: Boolean(kvGet('x_self_handle') || kvGet('x_logged_in') === '1'),
+    loggedIn: kvGet('x_logged_in') === '1',
+    browserRunning: running,
+    selfHandle: kvGet('x_self_handle') || '',
+    selfName: kvGet('x_self_name') || '',
+    selfUserId: kvGet('x_self_user_id') || '',
+    profileUrl: kvGet('x_profile_url') || '',
+    proxy,
+    cooldownUntil: xCooldownUntil(),
+    lastCheckAt,
+    lastError,
+  };
+  if (!verify && !running) return cached;
+  if (!proxy.ok) {
+    noteError(proxy.reason);
+    return { ...cached, proxyOk: false, loggedIn: cached.loggedIn, error: proxy.reason };
+  }
+  try {
+    await browser.ensure({ visible: false });
+    const url = await browser.getUrl();
+    if (isXLoginPage(url, '')) {
+      kvSet('x_logged_in', '0');
+      return { ...cached, loggedIn: false, url, pending: true, proxyOk: true };
+    }
+    if (!url.startsWith(BASE)) await browser.navigate(`${BASE}/home`);
+    await browser.waitFor('[data-testid="primaryColumn"]', 20000);
+    const state = await browser.evaluate(String.raw`(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const indicator = document.querySelector('[data-testid="AppTabRow_Profile"] a, a[href^="/"][role="link"][tabindex="-1"]');
+      const handle = (indicator && indicator.getAttribute('href')) || '';
+      const badge = document.querySelector('[data-testid="AppTabRow_Notifications"]');
+      return {
+        url: location.href,
+        body: clean(document.body.innerText).slice(0, 300),
+        hasHome: Boolean(document.querySelector('[data-testid="primaryColumn"]')),
+        tweets: document.querySelectorAll('article[data-testid="tweet"]').length,
+        selfHandle: handle.startsWith('/') && handle.length > 1 ? handle.slice(1) : '',
+        selfName: clean(document.querySelector('[data-testid="AppTabBar_Icon"]')?.innerText),
+        notifyBadge: clean(badge && badge.innerText).replace(/\D+/g, '').slice(0, 6),
+      };
+    })()`);
+    assertXPage(state);
+    const loggedIn = state.hasHome && !isXLoginPage(state.url, state.body);
+    kvSet('x_logged_in', loggedIn ? '1' : '0');
+    if (loggedIn && state.selfHandle) {
+      kvSet('x_self_handle', state.selfHandle);
+      kvSet('x_profile_url', `${BASE}/${state.selfHandle}`);
+    }
+    lastCheckAt = nowIso();
+    lastError = '';
+    return { ...cached, loggedIn, browserRunning: true, url: state.url, selfHandle: state.selfHandle || cached.selfHandle, notifyBadge: state.notifyBadge, proxyOk: true };
+  } catch (error) {
+    noteError(error.message);
+    logger.warn('X 登录状态检查失败', { error: error.message });
+    return { ...cached, proxyOk: proxy.ok, error: error.message };
+  }
+}
+
+async function openXLoginLocked() {
+  const proxy = await requireProxy();
+  await browser.relaunch({ visible: true });
+  await browser.navigate(`${BASE}/i/flow/login`);
+  await browser.showWindow();
+  await browser.bringToFront();
+  await sleep(1500);
+  lastError = '';
+  return { ok: true, url: `${BASE}/i/flow/login`, proxy, hint: '在这个窗口里登录（账号+密码+两步验证）。登录态只存本机 data/x-profile，登出或删目录就没了。' };
+}
+
+async function closeXBrowserLocked() {
+  await browser.close();
+  return { ok: true };
+}
+
+// ---- 读 --------------------------------------------------------------------
+
+async function readXTimelineLocked({ tab = 'home', limit = 12, keyword = '' } = {}) {
+  assertXAction('read');
+  await requireProxy();
+  await browser.ensure({ visible: false });
+  const url = tab === 'search' && keyword
+    ? `${BASE}/search?q=${encodeURIComponent(keyword)}&f=live`
+    : tab === 'notifications'
+      ? `${BASE}/notifications`
+      : tab === 'following'
+        ? `${BASE}/home?show=following`
+        : `${BASE}/home`;
+  await browser.navigate(url);
+  await sleep(2500);
+  for (let i = 0; i < 3; i += 1) {
+    await browser.scroll(1200);
+    await sleep(1200);
+  }
+  const where = tab === 'search' ? `X 搜索「${keyword}」` : tab === 'notifications' ? 'X 通知' : 'X 首页时间线';
+  await assertTimelineLoaded(where);
+  const items = await browser.evaluate(TWEET_SCAN);
+  return items.slice(0, Math.max(1, Math.min(Number(limit) || 12, 40)));
+}
+
+async function readSelfTweetsLocked(limit = 8) {
+  assertXAction('read');
+  await requireProxy();
+  const handle = kvGet('x_self_handle') || (loadSettings().social.xOwnerHandle || '');
+  if (!handle) throw new Error('还不知道她的 X 用户名（先登录一次，或在设置里填「X 用户名」）');
+  await browser.ensure({ visible: false });
+  await browser.navigate(`${BASE}/${handle}`);
+  await sleep(2500);
+  await assertTimelineLoaded(`X 主页 @${handle}`);
+  const items = await browser.evaluate(TWEET_SCAN);
+  return { handle, tweets: items.filter((item) => item.handle?.toLowerCase() === handle.toLowerCase()).slice(0, Math.max(1, Math.min(limit, 20))) };
+}
+
+async function readTweetThreadLocked(href, limit = 12) {
+  assertXAction('read');
+  await requireProxy();
+  await browser.ensure({ visible: false });
+  await browser.navigate(`${BASE}${href.startsWith('/') ? href : `/${href.replace(/^https?:\/\/[^/]+/, '')}`}`);
+  await sleep(2500);
+  await assertTimelineLoaded('X 推文详情');
+  const items = await browser.evaluate(TWEET_SCAN);
+  return items.slice(0, Math.max(1, Math.min(limit, 30)));
+}
+
+async function readXFollowGraphLocked(limit = 12) {
+  assertXAction('read');
+  await requireProxy();
+  const handle = kvGet('x_self_handle') || '';
+  if (!handle) throw new Error('还不知道她的 X 用户名，先登录一次');
+  await browser.ensure({ visible: false });
+  const out = {};
+  for (const [key, pathName] of [['following', 'following'], ['followers', 'followers']]) {
+    await browser.navigate(`${BASE}/${handle}/${pathName}`);
+    await sleep(2200);
+    out[key] = await browser.evaluate(String.raw`(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const rows = [...document.querySelectorAll('[data-testid="UserCell"]')];
+      return {
+        total: clean((document.body.innerText.match(/[\d,.]+[KM]?/g) || []).find(Boolean) || ''),
+        items: rows.slice(0, ${Math.max(1, Math.min(limit, 30))}).map((row) => {
+          const link = row.querySelector('a[data-testid="User-Name"]') || row.querySelector('a[href^="/"]');
+          const handle = ((link && link.getAttribute('href')) || '').slice(1);
+          return { handle, name: clean(row.innerText).split('\n')[0], bio: clean(row.querySelector('div[data-testid="UserBio"]')?.innerText).slice(0, 120) };
+        }).filter((item) => item.handle),
+      };
+    })()`);
+  }
+  return out;
+}
+
+// ---- 写：只有这一类是不可撤回的，全部要求逐字核对 ------------------------------
+
+async function clickTweetActionLocked(href, testid, labelRegex) {
+  const found = await browser.evaluate(String.raw`(({ href, testid, labelRegex }) => {
+    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+    const card = cards.find((c) => {
+      const a = c.querySelector('a[href*="/status/"]');
+      return a && a.getAttribute('href').includes(href);
+    });
+    if (!card) return { ok: false, reason: '找不到那条推文' };
+    let button = card.querySelector('[data-testid=\"' + testid + '\"]');
+    if (!button) {
+      button = [...card.querySelectorAll('button')].find((b) => new RegExp(labelRegex, 'i').test(b.getAttribute('aria-label') || ''));
+    }
+    if (!button) return { ok: false, reason: '那条推文上没有这个按钮' };
+    button.click();
+    return { ok: true, label: button.getAttribute('aria-label') || '' };
+  })({ href, testid, labelRegex })`, { timeoutMs: 45000 });
+  return found;
+}
+
+async function reactXLocked(href, kind = 'like') {
+  assertXAction(kind);
+  await requireProxy();
+  const map = { like: { testid: 'like', undo: 'unlike', aria: 'Like|Unlike', label: '点赞' }, retweet: { testid: 'retweet', undo: 'unretweet', aria: 'Repost|Undo Repost', label: '转推' } };
+  const spec = map[kind];
+  if (!spec) throw new Error(`不支持的动作：${kind}`);
+  const before = await browser.evaluate(String.raw`(({ href }) => {
+    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+    const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(href));
+    if (!card) return null;
+    const btn = card.querySelector('button[aria-label*="' + ${JSON.stringify(kind === 'like' ? 'Like' : 'Repost')} + '"]');
+    return { pressed: btn?.getAttribute('aria-pressed') === 'true', count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
+  })({ href })`);
+  if (!before) throw new Error('页面上找不到那条推文，这次没点赞/转推');
+  if (before.pressed) return { ok: true, already: true };
+  const clicked = await clickTweetActionLocked(href, spec.testid, spec.aria);
+  if (!clicked.ok) throw new Error(clicked.reason || `${spec.label}按钮没点到`);
+  await sleep(1500);
+  if (kind === 'retweet') {
+    const confirmed = await browser.evaluate(String.raw`(() => {
+      const b = [...document.querySelectorAll('[data-testid="retweetConfirm"]')];
+      if (!b.length) return false;
+      b[b.length - 1].click();
+      return true;
+    })()`);
+    if (!confirmed) throw new Error('转推弹层里的确认按钮没找到，这次没转');
+    await sleep(1500);
+  }
+  const after = await browser.evaluate(String.raw`(({ href, kind }) => {
+    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+    const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(href));
+    if (!card) return { found: false };
+    const want = kind === 'like' ? /Unlike/ : /Undo Repost/;
+    const btn = [...card.querySelectorAll('button')].find((b) => want.test(b.getAttribute('aria-label') || ''));
+    return { found: true, pressed: btn?.getAttribute('aria-pressed') === 'true' || Boolean(btn), count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
+  })({ href, kind })`);
+  if (!after.found) throw new Error('点完之后页面状态读不到了，这次不算做成');
+  assertXReactEvidence({ before: true, after: after.pressed, pressed: after.pressed, countDelta: after.count - before.count });
+  return { ok: true, already: false, kind };
+}
+
+async function replyToTweetLocked(href, text) {
+  const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+  if (!content) throw new Error('回复内容为空');
+  assertXAction('reply');
+  const gate = assertPublicContent(content, { settings: loadSettings(), hisMessages: recentUserMessages(60) });
+  if (!gate.ok) {
+    addEvent('x_reply_blocked', '她想发的回复里有不该公开的内容，闸门拦下了', { reason: gate.reason });
+    throw new Error(`这条不能公开写：${gate.reason}`);
+  }
+  await requireProxy();
+  const opened = await clickTweetActionLocked(href, 'reply', 'Reply');
+  if (!opened.ok) throw new Error(opened.reason || '回复按钮没点到');
+  await sleep(1500);
+  const typed = await browser.evaluate(String.raw`(({ text }) => {
+    const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
+    if (!box) return { ok: false, reason: '找不到回复输入框' };
+    box.focus();
+    return { ok: true };
+  })({ text: content })`);
+  if (!typed.ok) throw new Error(typed.reason || '找不到回复输入框');
+  await browser.send('Input.insertText', { text: content });
+  await sleep(900);
+  const readback = await browser.evaluate(String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
+    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+    return { text: clean(box?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
+  })()`);
+  if (readback.text !== content) throw new Error(`回复没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
+  const beforeCount = await browser.evaluate(String.raw`document.querySelectorAll('article[data-testid="tweet"]').length`);
+  await browser.evaluate(String.raw`(() => {
+    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+    if (btn) btn.click();
+    return Boolean(btn);
+  })()`);
+  await sleep(3000);
+  const after = await browser.evaluate(String.raw`(({ content, beforeCount }) => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const texts = [...document.querySelectorAll('[data-testid="tweetText"]')].map((e) => clean(e.innerText));
+    return {
+      count: document.querySelectorAll('article[data-testid="tweet"]').length,
+      beforeCount,
+      outgoing: texts.filter((t) => t === content).length > 0,
+      text: texts.find((t) => t === content) || '',
+      editorEmpty: !clean(document.querySelector('div[data-testid="tweetTextarea_0"]')?.innerText),
+      risky: /限流|频繁|Something went wrong|Verify you are human/i.test(clean(document.body.innerText)),
+    };
+  })({ content, beforeCount })`);
+  assertXDeliveryEvidence({ beforeCount: after.beforeCount, afterCount: after.count, outgoing: after.outgoing, content, text: after.text, state: after });
+  return { ok: true, verified: true, chars: content.length };
+}
+
+// 发推：只填不发。真发必须走 publishFilledXPost（界面上他点一下"发布"）。
+async function fillXPostLocked({ text = '' } = {}) {
+  const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+  if (!content) throw new Error('要发的内容不能为空');
+  assertXAction('read');
+  const gate = assertPublicContent(content, { settings: loadSettings(), hisMessages: recentUserMessages(60) });
+  if (!gate.ok) {
+    addEvent('x_post_blocked', '这条她想过，但里面有不该公开的内容', { reason: gate.reason });
+    throw new Error(`这条不能公开写：${gate.reason}`);
+  }
+  await requireProxy();
+  await browser.ensure({ visible: false });
+  if (!/\/home/.test(await browser.getUrl())) await browser.navigate(`${BASE}/home`);
+  await sleep(1800);
+  const opened = await browser.evaluate(String.raw`(() => {
+    const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
+    if (box) { box.click(); return true; }
+    const post = document.querySelector('[data-testid="tweetButtonInline"]');
+    if (post) { post.click(); return false; }
+    return false;
+  })()`);
+  await sleep(900);
+  const box = await browser.evaluate(String.raw`(() => Boolean(document.querySelector('div[data-testid="tweetTextarea_0"]')))`);
+  if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
+  await browser.evaluate(String.raw`(() => { const b = document.querySelector('div[data-testid="tweetTextarea_0"]'); if (b) b.focus(); return true; })()`);
+  await browser.send('Input.insertText', { text: content });
+  await sleep(800);
+  const readback = await browser.evaluate(String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
+    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+    return { text: clean(b?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
+  })()`);
+  if (readback.text !== content) throw new Error(`内容没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
+  if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
+  const id = hashText(`${kvGet('x_self_handle')}|${content}`);
+  kvSetJson('x_last_fill', { id, handle: kvGet('x_self_handle'), text: content, at: nowIso() });
+  logger.info('X 稿子已填进输入框（没发）', { chars: content.length, openedBox: Boolean(opened) });
+  return { ok: true, filled: true, published: false, fillId: id, chars: content.length, ready: readback.ready, at: nowIso() };
+}
+
+async function publishFilledXPostLocked({ fillId = '' } = {}) {
+  const fill = kvGetJson('x_last_fill', null);
+  if (!fill?.text) throw new Error('没有她刚填好的稿子记录，先填一遍再发');
+  if (fillId && fill.id !== fillId) throw new Error('稿子记录与要发的不是同一条，重新填');
+  if (Date.now() - new Date(fill.at).getTime() > 15 * 60000) throw new Error('稿子填好超过 15 分钟，重新填一次再发（别把输入框里的旧内容发出去）');
+  assertXAction('read');
+  const gate = assertPublicContent(fill.text, { settings: loadSettings(), hisMessages: recentUserMessages(60) });
+  if (!gate.ok) throw new Error(`这条不能公开写：${gate.reason}`);
+  const dayKey = `x_post_day:${new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date())}`;
+  const max = Number(loadSettings().social.xDailyPostMax || 0);
+  if (Number(kvGet(dayKey, '0')) >= max) throw new Error(`今天发推次数已到上限（${max} 条）`);
+  await requireProxy();
+  const actual = await browser.evaluate(String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
+    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+    return { text: clean(b?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
+  })()`);
+  if (actual.text !== fill.text) throw new Error('输入框里的内容和确认要发的不一致，没有发');
+  if (!actual.ready) throw new Error('发送按钮还是灰的，没有发');
+  if (actual.risky) throw new Error('X 页面提示限流/出错，这次没有发');
+  const effectKey = `effect:x:post:${fill.id}`;
+  const operation = beginEffect(effectKey);
+  if (!operation.started) return { ...operation.receipt, already: true };
+  const beforeCount = await browser.evaluate(String.raw`document.querySelectorAll('article[data-testid="tweet"]').length`);
+  await browser.evaluate(String.raw`(() => {
+    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+    if (btn) btn.click();
+    return Boolean(btn);
+  })()`);
+  await sleep(3500);
+  const after = await browser.evaluate(String.raw`(({ text, beforeCount }) => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const texts = [...document.querySelectorAll('[data-testid="tweetText"]')].map((e) => clean(e.innerText));
+    return {
+      count: document.querySelectorAll('article[data-testid="tweet"]').length,
+      beforeCount,
+      outgoing: texts.includes(text),
+      text,
+      editorEmpty: !clean(document.querySelector('div[data-testid="tweetTextarea_0"]')?.innerText),
+      risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)),
+    };
+  })({ text: fill.text, beforeCount })`);
+  try {
+    assertXDeliveryEvidence({ beforeCount: after.beforeCount, afterCount: after.count, outgoing: after.outgoing || after.editorEmpty, content: fill.text, text: after.text, state: after });
+  } catch (error) {
+    // 输入框清空 + 页面上能读到原文，是 X 发成功最常见的证据形态；两者都不满足才算未知
+    if (!(after.editorEmpty && !after.risky)) {
+      failEffect(effectKey, error);
+      throw error;
+    }
+  }
+  kvSet(dayKey, String(Number(kvGet(dayKey, '0')) + 1));
+  kvSet('x_last_publish_at', nowIso());
+  kvSetJson('x_last_fill', null);
+  finishEffect(effectKey, { ok: true, published: true, chars: fill.text.length });
+  addEvent('x_post', '她发了一条推特', { chars: fill.text.length, verified: after.outgoing });
+  return { ok: true, published: true, at: nowIso(), chars: fill.text.length };
+}
+
+// 私信/关注：默认只做到"填好/找到按钮"，不点最后那一下。
+async function prepareXDmLocked(handle, text) {
+  const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+  if (!content) throw new Error('私信内容为空');
+  assertXAction('dmDraft');
+  const gate = assertPublicContent(content, { settings: loadSettings(), hisMessages: recentUserMessages(60) });
+  if (!gate.ok) throw new Error(`这条不能公开写：${gate.reason}`);
+  await requireProxy();
+  await browser.ensure({ visible: false });
+  await browser.navigate(`${BASE}/messages/compose?recipient_ids=`);
+  await sleep(2000);
+  const filled = await browser.evaluate(String.raw`(({ handle, content }) => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
+    if (!box) return { ok: false, reason: '找不到私信输入框' };
+    box.focus();
+    return { ok: true, before: clean(box.innerText), hasRecipient: Boolean(document.querySelector('[data-testid="dm-composer-recipient"]')) };
+  })({ handle, content })`);
+  if (!filled.ok) throw new Error(filled.reason || '私信页面没打开');
+  await browser.send('Input.insertText', { text: content });
+  await sleep(600);
+  const readback = await browser.evaluate(String.raw`(({ content }) => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const box = document.querySelector('div[data-testid="dm-composer-rte-pillbox"], div[role="textbox"][data-testid*="dm"]');
+    return { text: clean(box?.innerText), expected: content };
+  })({ content })`);
+  if (readback.text !== content) throw new Error('私信内容没有真的填进去');
+  addEvent('x_dm_draft', '她写好一条私信草稿，等你点发送', { handle, chars: content.length });
+  return { ok: true, drafted: true, sent: false, handle, chars: content.length, hint: '私信只填不发：在登录窗口里确认后自己点发送' };
+}
+
+async function locateXFollowLocked(handle) {
+  assertXAction('followDraft');
+  await requireProxy();
+  await browser.ensure({ visible: false });
+  await browser.navigate(`${BASE}/${String(handle || '').replace(/^@/, '')}`);
+  await sleep(2200);
+  const state = await browser.evaluate(String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const btn = document.querySelector('[data-testid="FollowButton"], [data-testid="Follow"], button[aria-label^="Follow"]');
+    return {
+      url: location.href,
+      name: clean(document.querySelector('[data-testid="accountFullName"]')?.innerText),
+      bio: clean(document.querySelector('[data-testid="accountBio"]')?.innerText).slice(0, 140),
+      followers: clean((document.body.innerText.match(/[\d,.]+[KM]? Following|[\d,.]+[KM]? Followers/gi) || []).join(' | ')),
+      followable: Boolean(btn && !btn.disabled && /Follow/i.test(btn.innerText || btn.getAttribute('aria-label') || '')),
+      risky: /Something went wrong|限流/i.test(clean(document.body.innerText)),
+    };
+  })()`);
+  assertXPage(state);
+  return state;
+}
+
+// ---- 导出（全部走同一把锁，浏览器动作不许并发） --------------------------------
+
+const wrap = (fn) => (...args) => withXBrowser(() => fn(...args));
+
+export const xStatus = wrap(xStatusLocked);
+export const openXLogin = wrap(openXLoginLocked);
+export const closeXBrowser = wrap(closeXBrowserLocked);
+export const readXTimeline = wrap(readXTimelineLocked);
+export const readSelfTweets = wrap(readSelfTweetsLocked);
+export const readTweetThread = wrap(readTweetThreadLocked);
+export const readXFollowGraph = wrap(readXFollowGraphLocked);
+export const reactXTweet = wrap(reactXLocked);
+export const replyXTweet = wrap(replyToTweetLocked);
+export const fillXPost = wrap(fillXPostLocked);
+export const publishFilledXPost = wrap(publishFilledXPostLocked);
+export const prepareXDm = wrap(prepareXDmLocked);
+export const locateXFollow = wrap(locateXFollowLocked);
+
+export function readCachedXStats() {
+  return {
+    loggedIn: kvGet('x_logged_in') === '1',
+    selfHandle: kvGet('x_self_handle') || '',
+    profileUrl: kvGet('x_profile_url') || '',
+    lastPublishAt: kvGet('x_last_publish_at') || '',
+    cooldownUntil: xCooldownUntil(),
+    lastCheckAt,
+    lastError,
+    proxy: env.xProxy,
+    profileDir: path.relative(paths.root, paths.xProfile).split(path.sep).join('/'),
+    browserAliveFile: fs.existsSync(paths.xProfile),
+  };
+}
+
+export function recordXActivity(entry = {}) {
+  const item = {
+    at: entry.at || nowIso(),
+    type: String(entry.type || '').slice(0, 24),
+    text: String(entry.text || '').slice(0, 200),
+    target: String(entry.target || '').slice(0, 60),
+    note: String(entry.note || '').slice(0, 80),
+    ok: entry.ok !== false,
+  };
+  if (!item.type) return item;
+  const floor = new Date(Date.now() - 7 * 86400000).toISOString();
+  const list = kvGetJson('x_activity', []).filter((x) => x && x.at >= floor);
+  list.push(item);
+  kvSetJson('x_activity', list.slice(-200));
+  return item;
+}
+
+export function getRecentXActivity({ hours = 48, limit = 8 } = {}) {
+  const cutoff = new Date(Date.now() - hours * 3600000).toISOString();
+  return kvGetJson('x_activity', [])
+    .filter((x) => x && x.at >= cutoff)
+    .slice(-limit)
+    .reverse();
+}
+
+export function newXActivityId() {
+  return randomUUID();
+}

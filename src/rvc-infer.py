@@ -4,13 +4,15 @@
 #
 # 为什么不直接用 rvc_python 自带的 infer_file：那个封装在新版 torch 上会把
 # vc_single 的返回值原样塞给 scipy.wavfile.write（返回 tuple 时直接崩），而且默认
-# weights_only=True 会拒掉带 fairseq Dictionary 的检查点。这里自己调底层并处理两种返回形状。
+# weights_only=True 会拒掉带 fairseq Dictionary 的检查点。这里自己调底层并处理多种返回形状。
 import argparse
 import json
 import os
 import sys
 import tempfile
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def main():
@@ -28,11 +30,11 @@ def main():
     started = time.time()
     tmp = ""
     try:
-        import numpy as np
+        import librosa
         import soundfile as sf
         import torch
-        import librosa
         from fairseq.data.dictionary import Dictionary
+        from rvc_audio import pick_audio_and_sr, write_output
         from rvc_python.infer import RVCInference
 
         # 检查点里存了 fairseq 的 Dictionary；torch 2.6 起默认拒收，这里只放行这一个类。
@@ -59,33 +61,15 @@ def main():
             f0_file="",
             file_index2="",
         )
-        # 有的版本返回 (音频, 采样率)，有的直接返回音频数组。
-        if isinstance(result, tuple):
-            audio = result[0]
-            out_sr = int(result[1]) if len(result) > 1 and result[1] else int(rvc.vc.tgt_sr)
-        else:
-            audio = result
-            out_sr = int(rvc.vc.tgt_sr)
-        audio = np.asarray(audio)
-        if audio.ndim > 1:
-            audio = audio.reshape(-1)
-        # vc_single 交回来的是 int16（实测 min -18240 / max 28953）：整数就按整数写，
-        # 转成 float 再写会被当成 -1..1 归一化，超出部分全部削顶，听起来就是卡住的广播。
-        if np.issubdtype(audio.dtype, np.integer):
-            sf.write(args.dst, audio, out_sr)
-        else:
-            sf.write(args.dst, audio.astype(np.float32), out_sr)
-
-        size = os.path.getsize(args.dst)
-        if size < 2048:
-            raise RuntimeError("输出只有 %d 字节，当失败处理" % size)
+        audio, out_sr = pick_audio_and_sr(result, rvc.vc.tgt_sr)
+        size = write_output(args.dst, audio, out_sr)
         print(json.dumps({
             "ok": True,
             "bytes": size,
             "srcSr": int(sr),
             "outSr": out_sr,
             "seconds": round(time.time() - started, 2),
-            "audioSeconds": round(len(audio) / out_sr, 2),
+            "audioSeconds": round(len(audio.reshape(-1)) / out_sr, 2),
         }, ensure_ascii=False))
         return 0
     except Exception as error:  # noqa: BLE001 - 任何一层炸了都要变成一行可读的 JSON

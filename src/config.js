@@ -61,6 +61,7 @@ export const paths = {
   get letters() { return path.join(this.data, 'letters'); },
   get archives() { return path.join(this.data, 'archives'); },
   get xhsProfile() { return path.join(this.data, 'xhs-profile'); },
+  get xProfile() { return path.join(this.data, 'x-profile'); },
   get presenceTmp() { return path.join(this.data, 'presence-tmp'); },
   get db() { return path.join(this.data, 'bizhi.db'); },
   get settings() {
@@ -83,6 +84,7 @@ for (const dir of [
   paths.letters,
   paths.archives,
   paths.xhsProfile,
+  paths.xProfile,
   paths.presenceTmp,
 ]) {
   ensureDir(dir);
@@ -102,6 +104,9 @@ export const env = {
       ? ''
       : (process.env.CONSOLE_PASSWORD || process.env.CONSOLE_TOKEN || '').trim(),
   edgePython: (process.env.BIZHI_EDGE_PYTHON || '').trim(),
+  // X/Twitter 在这张网上直连不通（实测直连 000、走本机代理 200），代理地址必须是显式配置：
+  // 跟着系统代理走的话，一旦代理没起来，失败会被记成"页面打不开"这种假原因。
+  xProxy: (process.env.X_PROXY_URL || 'http://127.0.0.1:7897').trim(),
   mock: process.env.LLM_MOCK === '1',
 };
 
@@ -297,6 +302,27 @@ export function normalizeSettings(settings) {
   s.social.xhsDailyActionMax = Math.min(60, Math.max(0, numberOr(s.social.xhsDailyActionMax, 12)));
   s.social.xhsPollHoursMin = Math.min(12, Math.max(1, numberOr(s.social.xhsPollHoursMin, 2)));
   s.social.xhsPollHoursMax = Math.min(24, Math.max(s.social.xhsPollHoursMin, numberOr(s.social.xhsPollHoursMax, 3.5)));
+  // X 的限速：账号两年但零粉零内容，行为模式和新号一样可疑，默认按中低档起步。
+  s.social.xEnabled = s.social.xEnabled === true;
+  s.social.xAutoBrowse = s.social.xAutoBrowse === true;
+  s.social.xAutoReply = s.social.xAutoReply !== false;
+  s.social.xAutoLike = s.social.xAutoLike === true;
+  s.social.xAutoRetweet = s.social.xAutoRetweet === true;
+  s.social.xOwnerName = String(s.social.xOwnerName || '').trim().slice(0, 40);
+  s.social.xOwnerHandle = String(s.social.xOwnerHandle || '').trim().replace(/^@/, '').slice(0, 20);
+  s.social.xSearchKeywords = String(s.social.xSearchKeywords || '').trim().slice(0, 200);
+  s.social.xDailyReplyMax = Math.min(30, Math.max(0, numberOr(s.social.xDailyReplyMax, 5)));
+  s.social.xDailyLikeMax = Math.min(40, Math.max(0, numberOr(s.social.xDailyLikeMax, 10)));
+  s.social.xDailyRetweetMax = Math.min(20, Math.max(0, numberOr(s.social.xDailyRetweetMax, 3)));
+  s.social.xDailyPostMax = Math.min(10, Math.max(0, numberOr(s.social.xDailyPostMax, 1)));
+  s.social.xHourlyActionMax = Math.min(8, Math.max(1, numberOr(s.social.xHourlyActionMax, 2)));
+  s.social.xDailyActionMax = Math.min(60, Math.max(0, numberOr(s.social.xDailyActionMax, 10)));
+  // 关注与私信是 X 上最容易直接进封禁名单的动作，默认只能出草稿；开关只允许"草稿/不做"两档。
+  s.social.xDmDraft = s.social.xDmDraft !== false;
+  s.social.xFollowDraft = s.social.xFollowDraft !== false;
+  s.social.xDailyFollowMax = Math.min(10, Math.max(0, numberOr(s.social.xDailyFollowMax, 0)));
+  s.social.xPollHoursMin = Math.min(12, Math.max(1, numberOr(s.social.xPollHoursMin, 3)));
+  s.social.xPollHoursMax = Math.min(24, Math.max(s.social.xPollHoursMin, numberOr(s.social.xPollHoursMax, 5)));
 
   return s;
 }

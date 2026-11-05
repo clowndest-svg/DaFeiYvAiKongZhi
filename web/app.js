@@ -436,7 +436,7 @@ async function liveRefresh() {
     await loadStatus();
     const now = Date.now();
     if (state.view === 'settings') {
-      await Promise.allSettled([loadQqSetup(), loadXhsStatus(), loadQzoneStatus()]);
+      await Promise.allSettled([loadQqSetup(), loadXhsStatus(), loadQzoneStatus(), loadXStatus()]);
       if (now - state.eventsRefreshAt > 10000) {
         state.eventsRefreshAt = now;
         await loadEvents();
@@ -2045,6 +2045,23 @@ function fillSettings() {
   $('#setQzoneAutoReplyAge').value = settings.social?.qzoneAutoReplyMaxAgeHours ?? 48;
   $('#setDouyinAuto').checked = Boolean(settings.social?.douyinAutoPost);
   $('#setXhsEnabled').checked = Boolean(settings.social?.xhsEnabled);
+  $('#setXEnabled').checked = Boolean(settings.social?.xEnabled);
+  $('#setXAutoBrowse').checked = Boolean(settings.social?.xAutoBrowse);
+  $('#setXAutoReply').checked = settings.social?.xAutoReply !== false;
+  $('#setXAutoLike').checked = Boolean(settings.social?.xAutoLike);
+  $('#setXAutoRetweet').checked = Boolean(settings.social?.xAutoRetweet);
+  $('#setXDmDraft').checked = settings.social?.xDmDraft !== false;
+  $('#setXFollowDraft').checked = settings.social?.xFollowDraft !== false;
+  $('#setXOwnerHandle').value = settings.social?.xOwnerHandle || '';
+  $('#setXSearchKeywords').value = settings.social?.xSearchKeywords || '';
+  $('#setXDailyReply').value = settings.social?.xDailyReplyMax ?? 5;
+  $('#setXDailyLike').value = settings.social?.xDailyLikeMax ?? 10;
+  $('#setXDailyRetweet').value = settings.social?.xDailyRetweetMax ?? 3;
+  $('#setXDailyPost').value = settings.social?.xDailyPostMax ?? 1;
+  $('#setXHourly').value = settings.social?.xHourlyActionMax ?? 2;
+  $('#setXActionMax').value = settings.social?.xDailyActionMax ?? 10;
+  $('#setXPollMin').value = settings.social?.xPollHoursMin ?? 3;
+  $('#setXPollMax').value = settings.social?.xPollHoursMax ?? 5;
   $('#setXhsAutoBrowse').checked = Boolean(settings.social?.xhsAutoBrowse);
   $('#setXhsAutoReply').checked = settings.social?.xhsAutoReply !== false;
   $('#setXhsAutoLike').checked = settings.social?.xhsAutoLike === true;
@@ -2201,6 +2218,23 @@ function collectSettings() {
       qzoneAutoReplyMaxPerDay: Number($('#setQzoneAutoReplyDaily').value) || 10,
       qzoneAutoReplyMaxAgeHours: Number($('#setQzoneAutoReplyAge').value) || 48,
       douyinAutoPost: $('#setDouyinAuto').checked,
+      xEnabled: $('#setXEnabled').checked,
+      xAutoBrowse: $('#setXAutoBrowse').checked,
+      xAutoReply: $('#setXAutoReply').checked,
+      xAutoLike: $('#setXAutoLike').checked,
+      xAutoRetweet: $('#setXAutoRetweet').checked,
+      xDmDraft: $('#setXDmDraft').checked,
+      xFollowDraft: $('#setXFollowDraft').checked,
+      xOwnerHandle: $('#setXOwnerHandle').value.trim().replace(/^@/, ''),
+      xSearchKeywords: $('#setXSearchKeywords').value.trim(),
+      xDailyReplyMax: Number($('#setXDailyReply').value) || 0,
+      xDailyLikeMax: Number($('#setXDailyLike').value) || 0,
+      xDailyRetweetMax: Number($('#setXDailyRetweet').value) || 0,
+      xDailyPostMax: Number($('#setXDailyPost').value) || 0,
+      xHourlyActionMax: Number($('#setXHourly').value) || 2,
+      xDailyActionMax: Number($('#setXActionMax').value) || 0,
+      xPollHoursMin: Number($('#setXPollMin').value) || 3,
+      xPollHoursMax: Number($('#setXPollMax').value) || 5,
       xhsEnabled: $('#setXhsEnabled').checked,
       xhsAutoBrowse: $('#setXhsAutoBrowse').checked,
       xhsAutoReply: $('#setXhsAutoReply').checked,
@@ -2539,6 +2573,68 @@ function startXhsQrPolling() {
   stopXhsQrPolling();
   refreshXhsQr();
   state.xhsQrTimer = setInterval(refreshXhsQr, 3000);
+}
+
+async function loadXStatus(verify = false) {
+  const box = $('#xStatusText');
+  if (!box) return;
+  try {
+    const data = await api(`/api/x/status${verify ? '' : ''}`, { method: 'GET' });
+    const s = data.status || {};
+    const b = data.budget || {};
+    const proxy = data.proxy || {};
+    if (!proxy.ok) {
+      box.textContent = `代理不通：${proxy.reason || '未知原因'} —— X 直连不通，代理不起来她就一次都动不了。`;
+    } else if (!s.loggedIn) {
+      box.textContent = '未登录：点「打开登录窗口」自己登录一次（账号+密码+两步验证），登录态只存本机 data/x-profile。';
+    } else {
+      box.textContent = `已登录 @${s.selfHandle || '未知'} · 浏览器${s.browserRunning ? '开着' : '没开（用时才起）'} · 冷却${b.cooldownUntil ? `中，到 ${b.cooldownUntil.slice(11, 16)}` : '没有'}`;
+    }
+    const line = $('#xAccountLine');
+    if (line) {
+      line.textContent = s.loggedIn || s.selfHandle
+        ? `当前账号：@${s.selfHandle || '未读到'} · 今天回复 ${b.repliesToday}/${b.dailyReplyMax} · 赞 ${b.likesToday}/${b.dailyLikeMax} · 转推 ${b.retweetsToday}/${b.dailyRetweetMax} · 草稿 ${b.draftsToday}/${b.dailyPostMax} · 本小时动作 ${b.actionsThisHour}/${b.hourlyActionMax}`
+        : '当前登录的 X 账号：还没登录，读不到。';
+    }
+    const publish = $('#xPublishHint');
+    if (publish && s.cached) {
+      publish.textContent = `「发布」只发她刚填进输入框、并且逐字核对过的那一条；填稿超过 15 分钟要重新填。上次真实发布：${s.cached.lastPublishAt ? String(s.cached.lastPublishAt).slice(5, 16) : '还没有过'}。`;
+    }
+    state.xStatus = data;
+  } catch (error) {
+    box.textContent = `读 X 状态失败：${error.message}`;
+  }
+}
+
+async function xPost(pathname, body, btn) {
+  const run = async () => {
+    try {
+      return await api(pathname, { method: 'POST', body: body || {} });
+    } catch (error) {
+      toast(`${pathname.split('/').pop()} 没成：${error.message}`, 'error');
+      await loadXStatus();
+      throw error;
+    }
+  };
+  if (btn) return withBusy(btn, run);
+  return run();
+}
+
+function renderXReadBox(data) {
+  const box = $('#xReadBox');
+  if (!box) return;
+  box.textContent = '';
+  const items = data?.items || data?.tweets || [];
+  if (!items.length) {
+    box.appendChild(el('p', 'muted small', data?.error ? `没读到：${data.error}` : '这次没读到推文。'));
+    return;
+  }
+  for (const item of items.slice(0, 8)) {
+    const row = el('div', 'search-row');
+    row.appendChild(el('strong', '', `@${item.handle || '?'}：${String(item.text || '').slice(0, 90)}`));
+    row.appendChild(el('p', 'muted small', `赞 ${item.likeCount ?? item.likes ?? 0} · 回 ${item.replyCount ?? 0} · 转 ${item.retweetCount ?? 0}${item.liked ? ' · 已赞' : ''}`));
+    box.appendChild(row);
+  }
 }
 
 async function loadXhsStatus(verify = false) {
@@ -3250,6 +3346,46 @@ function bindSettings() {
     } catch (error) {
       toast(error.message, 'error');
     }
+  }));
+  $('#xLoginBtn').addEventListener('click', () => withBusy($('#xLoginBtn'), async () => {
+    const data = await xPost('/api/x/login', {}, null);
+    toast(data.hint || '登录窗口已打开。');
+    await loadXStatus();
+  }));
+  $('#xVerifyBtn').addEventListener('click', () => withBusy($('#xVerifyBtn'), async () => {
+    const data = await xPost('/api/x/verify', {}, null);
+    toast(data.loggedIn ? `X 登录态确认：@${data.selfHandle || '未知'}` : `还没登录好：${data.error || data.lastError || '页面还在登录页'}`, data.loggedIn ? undefined : 'error');
+    await loadXStatus();
+  }));
+  $('#xReadBtn').addEventListener('click', () => withBusy($('#xReadBtn'), async () => {
+    const data = await xPost('/api/x/read', { mode: 'timeline', limit: 8 }, null);
+    renderXReadBox(data);
+    toast(`读到 ${(data.items || []).length} 条推文`);
+  }));
+  $('#xCloseBtn').addEventListener('click', () => withBusy($('#xCloseBtn'), async () => {
+    await xPost('/api/x/close', {}, null);
+    toast('X 的浏览器已关闭（登录态还在）。');
+    await loadXStatus();
+  }));
+  $('#xRunBrowse').addEventListener('click', () => withBusy($('#xRunBrowse'), async () => {
+    const data = await xPost('/api/x/run', { step: 'explore' }, null);
+    toast(`逛了 ${data.browsed ?? 0} 条：回了 ${data.replied ?? 0} 句，点了 ${data.liked ?? 0} 个赞${data.reason ? `（${data.reason}` : ''}${data.reason ? '）' : ''}`);
+    await loadXStatus();
+  }));
+  $('#xRunReplies').addEventListener('click', () => withBusy($('#xRunReplies'), async () => {
+    const data = await xPost('/api/x/run', { step: 'replies' }, null);
+    toast(`回了 ${(data.actions || []).length} 条${data.reason ? `（${data.reason}` : ''}${data.reason ? '）' : ''}`);
+    await loadXStatus();
+  }));
+  $('#xDraftBtn').addEventListener('click', () => withBusy($('#xDraftBtn'), async () => {
+    const data = await xPost('/api/x/draft', {}, null);
+    toast(data.ok ? `稿子填进输入框了（${data.chars} 字），核对后点「发布填好的那条」` : `没起草：${data.reason || '未知原因'}`, data.ok ? undefined : 'error');
+    await loadXStatus();
+  }));
+  $('#xPublishBtn').addEventListener('click', () => withBusy($('#xPublishBtn'), async () => {
+    const data = await xPost('/api/x/publish', {}, null);
+    toast(data.ok ? `发出去了${data.already ? '（这条之前已经发过，没重复点）' : ''}` : `没发：${data.reason || data.error || '未知原因'}`, data.ok ? undefined : 'error');
+    await loadXStatus();
   }));
   $('#xhsLoginBtn').addEventListener('click', () => withBusy($('#xhsLoginBtn'), async () => {
     try {

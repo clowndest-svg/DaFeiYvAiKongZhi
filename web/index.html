@@ -386,6 +386,7 @@
               <a href="#set-card-qq-login">QQ 登录</a>
               <a href="#set-card-social">社交</a>
               <a href="#set-card-xhs">小红书</a>
+              <a href="#set-card-x">X/推特</a>
               <button type="button" data-save-scope="channels">保存账号与社交</button>
               </details><details><summary>界面与系统</summary>
               <a href="#set-card-ui">界面</a>
@@ -648,6 +649,52 @@
                 </details>
               </section>
 
+              <section class="card" id="set-card-x">
+                <h3>X / 推特（浏览器自动化）</h3>
+                <p class="muted small" id="xStatusText">正在读取登录状态…</p>
+                <div class="btn-row">
+                  <button type="button" id="xLoginBtn">打开登录窗口</button>
+                  <button type="button" id="xVerifyBtn">验证登录</button>
+                  <button type="button" id="xReadBtn">读一次时间线</button>
+                  <button type="button" id="xCloseBtn">关闭浏览器</button>
+                </div>
+                <p class="muted small" id="xAccountLine">当前登录的 X 账号：读取中…</p>
+                <p class="muted small">X 在这台机器上直连不通（实测直连超时、走本机代理 200），必须走 <code>X_PROXY_URL</code>（默认 <code>http://127.0.0.1:7897</code>）。代理没起来时她不动手，也不会把这件事说成"页面打不开"。登录态只存本机 <code>data/x-profile</code>，不保存密码。</p>
+                <label class="check"><input type="checkbox" id="setXEnabled"> 启用 X（推特）互动</label>
+                <label class="check"><input type="checkbox" id="setXAutoBrowse"> 自动逛时间线并回别人的推文</label>
+                <label class="check"><input type="checkbox" id="setXAutoReply"> 自动回复别人在她推文下的评论</label>
+                <label class="check"><input type="checkbox" id="setXAutoLike"> 顺手点赞</label>
+                <label class="check"><input type="checkbox" id="setXAutoRetweet"> 顺手转推</label>
+                <label class="check"><input type="checkbox" id="setXDmDraft"> 允许她起草私信（只填不发，发送那一下你点）</label>
+                <label class="check"><input type="checkbox" id="setXFollowDraft"> 允许她定位到某人的关注按钮（不自动点）</label>
+                <label>主人 X 用户名 @（他的推文和评论必须回，不占陌生人额度）<input id="setXOwnerHandle" maxlength="20" placeholder="例如 my_handle"></label>
+                <label>逛的关键词（可选，逗号分隔）<input id="setXSearchKeywords" maxlength="200" placeholder="留空 = 看首页时间线"></label>
+                <div class="row">
+                  <label>每天回复上限<input id="setXDailyReply" type="number" min="0" max="30"></label>
+                  <label>每天点赞上限<input id="setXDailyLike" type="number" min="0" max="40"></label>
+                </div>
+                <div class="row">
+                  <label>每天转推上限<input id="setXDailyRetweet" type="number" min="0" max="20"></label>
+                  <label>每天起草上限<input id="setXDailyPost" type="number" min="0" max="10"></label>
+                </div>
+                <div class="row">
+                  <label>每小时动作上限<input id="setXHourly" type="number" min="1" max="8"></label>
+                  <label>每天动作总和上限<input id="setXActionMax" type="number" min="0" max="60"></label>
+                </div>
+                <div class="row">
+                  <label>自动逛间隔下限（小时）<input id="setXPollMin" type="number" min="1" max="12" step="0.5" class="num-sm"></label>
+                  <label>上限（小时）<input id="setXPollMax" type="number" min="1" max="24" step="0.5" class="num-sm"></label>
+                </div>
+                <p class="muted small">风控保护：页面一出现"限流 / 验证 / 封禁"字样，所有 X 动作停 24 小时（比小红书更保守）；两次动作之间隔 20–60 秒；主动关注默认 0 次，因为 X 对这类行为直接进封禁队列。</p>
+                <div class="btn-row">
+                  <button type="button" id="xRunBrowse">现在逛一轮</button>
+                  <button type="button" id="xRunReplies">现在检查回复</button>
+                  <button type="button" id="xDraftBtn">让她起草一条</button>
+                  <button type="button" id="xPublishBtn">发布填好的那条</button>
+                </div>
+                <p class="muted small" id="xPublishHint">「发布」只发她刚填进输入框、并且逐字核对过的那一条；填稿超过 15 分钟必须重新填，避免把输入框里的旧内容发出去。</p>
+                <div id="xReadBox" class="search-results"></div>
+              </section>
               <section class="card" id="set-card-xhs">
                 <h3>小红书（浏览器自动化）</h3>
                 <p class="muted small" id="xhsStatusText">正在读取登录状态…</p>

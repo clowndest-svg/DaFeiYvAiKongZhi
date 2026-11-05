@@ -63,10 +63,14 @@ function windowsCommandLineForPort(port) {
 }
 
 export class CdpBrowser {
-  constructor({ port = 9333, profileDir, visible = false } = {}) {
+  constructor({ port = 9333, profileDir, visible = false, proxyServer = '', lang = 'zh-CN' } = {}) {
     this.port = port;
     this.profileDir = profileDir;
     this.visible = visible;
+    // 有些站点在这张网上直连不通（X 实测直连 000、走本机代理 200），
+    // 代理地址必须由调用方显式给，不能悄悄跟着系统代理走——那样失败原因会被记成"页面打不开"。
+    this.proxyServer = String(proxyServer || '').trim();
+    this.lang = lang;
     this.ws = null;
     this.seq = 0;
     this.pending = new Map();
@@ -108,9 +112,10 @@ export class CdpBrowser {
       '--disable-sync',
       '--disable-background-networking',
       '--disable-features=Translate,MediaRouter,OptimizationHints',
-      '--lang=zh-CN',
+      `--lang=${this.lang}`,
       '--window-size=1280,900',
       visible ? '--window-position=80,60' : '--window-position=-32000,-32000',
+      ...(this.proxyServer ? [`--proxy-server=${this.proxyServer}`] : []),
       'about:blank',
     ];
     logger.info('启动小红书专用浏览器', { executable, visible });

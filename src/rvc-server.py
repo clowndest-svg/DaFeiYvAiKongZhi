@@ -9,6 +9,8 @@ import os
 import sys
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 STATE = {"rvc": None, "loaded": "", "pth": "", "index": ""}
 
 
@@ -32,6 +34,7 @@ def ensure_engine():
 
 
 def do_load(task):
+    from rvc_audio import pick_audio_and_sr  # noqa: F401  (与 convert 共用同一套形状处理)
     started = time.time()
     pth = os.path.abspath(str(task.get("model") or ""))
     index = os.path.abspath(str(task.get("index") or "")) if task.get("index") else ""
@@ -41,7 +44,7 @@ def do_load(task):
         return {"ok": True, "loaded": STATE["loaded"], "ms": 0, "cached": True}
     rvc = ensure_engine()
     # 换模型之前先把上一个从内存里丢掉：连着载入第三个会把机器吃干
-    # （实测 OpenBLAS malloc failed，整个工人进程直接没了，用户看到的是"这条没变出声"）。
+    # （实测 OpenBLAS malloc failed / 0xC0000005，整个工人进程直接没了）。
     if STATE["loaded"] and STATE["pth"] != pth:
         try:
             import gc
@@ -58,9 +61,9 @@ def do_load(task):
 
 
 def do_convert(task):
-    import numpy as np
-    import soundfile as sf
     import librosa
+    import soundfile as sf
+    from rvc_audio import pick_audio_and_sr, write_output
 
     src = str(task.get("src") or "")
     dst = str(task.get("dst") or "")
@@ -69,11 +72,16 @@ def do_convert(task):
     if not STATE["rvc"] or not STATE["loaded"]:
         return {"ok": False, "error": "还没载入音色模型"}
     started = time.time()
-    y, sr = librosa.load(src, sr=None, mono=True)
     rvc = STATE["rvc"]
+    # 上游可能给 mp3：vc_single 内部按路径读，先统一解成 wav 再交给它。
+    path_in = src
+    if not src.lower().endswith(".wav"):
+        y, sr = librosa.load(src, sr=None, mono=True)
+        path_in = os.path.join(os.environ.get("TEMP", tempfile_dir()), "bizhi-rvc-in-%d.wav" % os.getpid())
+        sf.write(path_in, y, sr)
     result = rvc.vc.vc_single(
         sid=0,
-        input_audio_path=src if src.lower().endswith(".wav") else write_tmp(y, sr),
+        input_audio_path=path_in,
         f0_up_key=int(task.get("transpose") or 0),
         f0_method=str(task.get("f0") or "harvest"),
         file_index=STATE["index"],
@@ -85,32 +93,26 @@ def do_convert(task):
         f0_file="",
         file_index2="",
     )
-    if isinstance(result, tuple):
-        audio = result[0]
-        out_sr = int(result[1]) if len(result) > 1 and result[1] else int(rvc.vc.tgt_sr)
-    else:
-        audio = result
-        out_sr = int(rvc.vc.tgt_sr)
-    audio = np.asarray(audio)
-    if audio.ndim > 1:
-        audio = audio.reshape(-1)
-    # 同上：int16 原样写；按 float 写会整段削顶。
-    if np.issubdtype(audio.dtype, np.integer):
-        sf.write(dst, audio, out_sr)
-    else:
-        sf.write(dst, audio.astype(np.float32), out_sr)
-    size = os.path.getsize(dst)
-    if size < 2048:
-        return {"ok": False, "error": "输出只有 %d 字节" % size}
-    return {"ok": True, "bytes": size, "outSr": out_sr, "ms": round((time.time() - started) * 1000), "loaded": STATE["loaded"]}
+    audio, out_sr = pick_audio_and_sr(result, rvc.vc.tgt_sr)
+    size = write_output(dst, audio, out_sr)
+    if path_in != src:
+        try:
+            os.remove(path_in)
+        except OSError:
+            pass
+    return {
+        "ok": True,
+        "bytes": size,
+        "outSr": out_sr,
+        "ms": round((time.time() - started) * 1000),
+        "loaded": STATE["loaded"],
+        "audioSeconds": round(len(audio.reshape(-1)) / out_sr, 2),
+    }
 
 
-def write_tmp(y, sr):
-    import soundfile as sf
+def tempfile_dir():
     import tempfile
-    path = os.path.join(tempfile.gettempdir(), "bizhi-rvc-tmp-%d.wav" % os.getpid())
-    sf.write(path, y, sr)
-    return path
+    return tempfile.gettempdir()
 
 
 def main():
