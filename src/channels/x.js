@@ -451,16 +451,6 @@ export function firstDifference(expected, actual) {
   return `第 ${i + 1} 个字起不一样：期望「${a.slice(i, i + 12)}」实际「${b.slice(i, i + 12)}」`;
 }
 
-// 重试前必须先把输入框清空，不然"再打一遍"等于"打两遍"。
-const COMPOSER_CLEAR = String.raw`(() => {
-  const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
-  if (!box) return false;
-  box.focus();
-  document.execCommand('selectAll', false, null);
-  document.execCommand('delete', false, null);
-  return true;
-})()`;
-
 const COMPOSER_READ = String.raw`(() => {
   const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
   const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
@@ -483,7 +473,9 @@ function replyProof(content, handle) {
     const mine = '[data-testid="User-Name"]';
     const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
     const own = cards.filter((c) => clean(c.querySelector(mine)?.innerText).toLowerCase().includes(${JSON.stringify(`@${handle}`.toLowerCase())}));
-    const texts = own.map((c) => clean(c.querySelector('[data-testid="tweetText"]')?.innerText));
+    // X 把回复开头的 @对方 也放进正文里；核对时把最前面那串提及去掉，正文本身仍要逐字相同。
+    const stripMentions = (s) => s.replace(/^(?:@\w{1,15}\s+)+/, '');
+    const texts = own.map((c) => stripMentions(clean(c.querySelector('[data-testid="tweetText"]')?.innerText)));
     return {
       found: texts.includes(want),
       text: texts.find((t) => t === want) || '',
@@ -493,10 +485,11 @@ function replyProof(content, handle) {
   })()`;
 }
 
-// Draft.js 把打进去的字要下一帧才挂到 DOM 上：固定等 900ms 读到过一次"空的"，
-// 于是代码以为没落字、又打一遍——结果框里是同一句话两遍（实测差异出现在第 50 个字）。
-// 所以读到字为止；只有真的一个字都没有才重试，框里有别的内容就不叠第二遍。
-async function readComposerUntil(timeoutMs = 4000) {
+// Draft.js 把打进去的字要下一帧才挂到 DOM 上：先等 900ms、再等 4 秒都读到过"空的"，
+// 于是代码以为没落字、又打一遍——实测框里成了同一句话两遍（差异正好出现在第 28、第 50 个字）。
+// 规矩改成一句话只打一次：打之前要求框是空的，打之后等到出现字为止；
+// 对不上就把"差在第几个字"报出去然后放弃这条，绝不补第二遍。
+async function readComposerUntil(timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
   let read = { text: '', ready: false, risky: false };
   for (;;) {
@@ -524,16 +517,11 @@ async function replyToTweetLocked(href, text) {
   if (!(await browser.waitFor('div[data-testid="tweetTextarea_0"]', 9000))) {
     throw new Error('回复弹层里没有长出输入框，这次没回');
   }
+  const before = await browser.evaluate(COMPOSER_READ);
+  if (normalizeTyped(before.text)) throw new Error(`回复的输入框里已经有别的内容，这次没往里打字（${before.text.slice(0, 40)}）`);
   await browser.focus('div[data-testid="tweetTextarea_0"]');
   await browser.send('Input.insertText', { text: content });
-  let readback = await readComposerUntil();
-  if (!normalizeTyped(readback.text)) {
-    // 一个字都没落进框里才重试；框里已经有别的内容就绝不叠第二遍。
-    await browser.evaluate(COMPOSER_CLEAR);
-    await browser.focus('div[data-testid="tweetTextarea_0"]');
-    await browser.send('Input.insertText', { text: content });
-    readback = await readComposerUntil();
-  }
+  const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
   if (!(await browser.evaluate(COMPOSER_SEND))) throw new Error('没找到回复的发送按钮，这次没发');

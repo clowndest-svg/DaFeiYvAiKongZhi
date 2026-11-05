@@ -260,9 +260,10 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');
   assert.ok(!reply[0].includes('await sleep(900);\n  let readback'), '又是固定等 900ms：Draft.js 下一帧才挂字，读到空的就又打一遍');
-  assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字为止');
-  assert.ok(/if \(!normalizeTyped\(readback\.text\)\)/.test(reply[0]), '重试条件写错了：框里已经有内容还再打一遍，就成了两遍同样的话');
-  assert.ok(reply[0].indexOf('COMPOSER_CLEAR') < reply[0].lastIndexOf("browser.focus('div[data-testid=\"tweetTextarea_0\"]')"), '重试没先清空：等于在同一句话后面再接一遍');
+  assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
+  assert.ok(reply[0].includes('if (normalizeTyped(before.text)) throw'), '打字前没要求框是空的：补第二遍就成同一句话两遍（实测第 28、第 50 个字重复）');
+  assert.equal((reply[0].match(/Input\.insertText/g) || []).length, 1, '一句话被打了两次的写法又回来了');
+  assert.ok(!reply[0].includes('COMPOSER_CLEAR'), '又想用"清空再打"补救：execCommand 在 Draft.js 里清不掉，实测照样叠成两遍');
 });
 
 test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {
