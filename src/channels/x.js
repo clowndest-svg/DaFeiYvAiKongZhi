@@ -451,46 +451,57 @@ export function firstDifference(expected, actual) {
   return `第 ${i + 1} 个字起不一样：期望「${a.slice(i, i + 12)}」实际「${b.slice(i, i + 12)}」`;
 }
 
-// 页面上同时有两个 div[data-testid="tweetTextarea_0"]：主页顶部那个发帖框，和回复弹层里的那个。
-// document.querySelector 返回 DOM 里靠前的一个——也就是发帖框。实测她"回复"的字被打进了发帖框，
-// 读回来还带着上一次没清掉的半句（第 28/38 个字起多出来一段），而对不上的话要么整条作废，
-// 要么一按发送就发成一条独立的新推文，不是回复。所以回复必须锁在弹层里读写。
-const COMPOSERS = {
-  modal: {
-    box: '[role="dialog"] div[data-testid="tweetTextarea_0"]',
-    btn: '[role="dialog"] [data-testid="tweetButtonInline"], [role="dialog"] [data-testid="tweetButton"]',
-  },
-  home: {
-    box: 'div[data-testid="tweetTextarea_0"]',
-    btn: '[data-testid="tweetButtonInline"], [data-testid="tweetButton"]',
-  },
-};
-
-function composerRead(scope) {
+// 三个动作共用同一段页面脚本（读/聚焦/点发送），因为"挑哪个框"这件事只能有一份答案：
+// 实测点回复后地址是 https://x.com/compose/post，输入框 tweetTextarea_0 不在任何 [role="dialog"] 里；
+// 只认弹层就"找不到输入框"，只认 querySelector 的第一个又会抓到主页顶部的发帖框。
+// 规矩：弹层里有就用弹层的，没有就用页面上最后长出来的那一个（新页/新弹层总在后面）。
+function composerState(action) {
   return String.raw`(() => {
+    const pickBox = () => {
+      const inDialog = document.querySelector('[role="dialog"] div[data-testid="tweetTextarea_0"]');
+      if (inDialog) return inDialog;
+      const all = [...document.querySelectorAll('div[data-testid="tweetTextarea_0"]')];
+      return all.length ? all[all.length - 1] : null;
+    };
+    const pickButton = () => {
+      for (const id of ['tweetButton', 'tweetButtonInline']) {
+        const inDialog = document.querySelector('[role="dialog"] button[data-testid="' + id + '"]');
+        if (inDialog) return inDialog;
+      }
+      for (const id of ['tweetButton', 'tweetButtonInline']) {
+        const all = [...document.querySelectorAll('button[data-testid="' + id + '"]')];
+        if (all.length) return all[all.length - 1];
+      }
+      return null;
+    };
     const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
-    const box = document.querySelector(${JSON.stringify(scope.box)});
-    const btn = document.querySelector(${JSON.stringify(scope.btn)});
-    return { text: clean(box?.innerText), found: Boolean(box), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
+    const box = pickBox();
+    const btn = pickButton();
+    const did = ${JSON.stringify(action)};
+    if (did === 'focus' && box) { box.focus(); box.click(); }
+    if (did === 'send' && btn) btn.click();
+    return {
+      text: clean(box?.innerText),
+      found: Boolean(box),
+      ready: Boolean(btn && !btn.disabled),
+      acted: did === 'read' ? true : Boolean(did === 'focus' ? box : btn),
+      risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)),
+    };
   })()`;
 }
 
-function composerSend(scope) {
-  return String.raw`(() => {
-    const btn = document.querySelector(${JSON.stringify(scope.btn)});
-    if (btn) btn.click();
-    return Boolean(btn);
-  })()`;
-}
+const composerRead = () => composerState('read');
+const composerFocus = () => composerState('focus');
+const composerSend = () => composerState('send');
 
 // Draft.js 把打进去的字要下一帧才挂到 DOM 上：先等 900ms、再等 4 秒都读到过"空的"，
 // 于是代码以为没落字、又打一遍——实测框里成了同一句话两遍。
 // 规矩：一句话只打一次，打之前要求那个框是空的，打之后等到出现字为止；对不上就报出差异然后放弃。
-async function readComposerUntil(scope, timeoutMs = 8000) {
+async function readComposerUntil(timeoutMs = 8000) {
   const deadline = Date.now() + timeoutMs;
   let read = { text: '', found: false, ready: false, risky: false };
   for (;;) {
-    read = await browser.evaluate(composerRead(scope));
+    read = await browser.evaluate(composerRead());
     if (normalizeTyped(read.text) || Date.now() >= deadline) return read;
     await sleep(400);
   }
@@ -533,7 +544,7 @@ async function replyToTweetLocked(href, text) {
   if (!opened.ok) throw new Error(opened.reason || '回复按钮没点到');
   // 弹层里的输入框是异步挂出来的：实测点完 1.5 秒还没有，硬往下走就变成"回复没有真的填进去"。
   // 只认弹层里那个框（[role=dialog] 下面）——不带范围的那句 querySelector 抓到的是主页发帖框。
-  if (!(await browser.waitFor(COMPOSERS.modal.box, 9000))) {
+  if (!(await browser.waitFor('div[data-testid="tweetTextarea_0"]', 9000))) {
     // 这一条现在是"失败但不说话"：报出页面到底有什么，下一次自动尝试自己就能告诉我们
     // 回复框到底挂在哪儿（弹层几个、页面上有几个输入框、地址是什么），不用再靠人手去点一遍。
     const where = await browser.evaluate(String.raw`(() => ({
@@ -543,15 +554,15 @@ async function replyToTweetLocked(href, text) {
     }))()`).catch(() => ({ url: '', dialogs: -1, boxes: [] }));
     throw new Error(`回复弹层里没有长出输入框，这次没回（地址 ${String(where.url).slice(0, 40)}；弹层 ${where.dialogs} 个；页面上的输入框 ${where.boxes.join('、') || '无'}）`);
   }
-  const before = await browser.evaluate(composerRead(COMPOSERS.modal));
+  const before = await browser.evaluate(composerRead());
   if (!before.found) throw new Error('回复弹层里的输入框找不到了，这次没回');
   if (normalizeTyped(before.text)) throw new Error(`回复的输入框里已经有别的内容，这次没往里打字（${before.text.slice(0, 40)}）`);
-  await browser.focus(COMPOSERS.modal.box);
+  await browser.evaluate(composerFocus());
   await browser.send('Input.insertText', { text: content });
-  const readback = await readComposerUntil(COMPOSERS.modal);
+  const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
-  if (!(await browser.evaluate(composerSend(COMPOSERS.modal)))) throw new Error('没找到回复的发送按钮，这次没发');
+  if (!(await browser.evaluate(composerSend()))) throw new Error('没找到回复的发送按钮，这次没发');
   await sleep(3000);
   // 弹层一关，新回复不会留在她刚才刷的时间线上——原地数卡片证明不了发出去了
   // （实测今天两次"没核实成功"就是这么来的）。回到那条推文下面，按她的账号逐字核对。
@@ -590,9 +601,9 @@ async function fillXPostLocked({ text = '' } = {}) {
   await sleep(900);
   const box = await browser.evaluate(String.raw`(() => Boolean(document.querySelector('div[data-testid="tweetTextarea_0"]')))`);
   if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
-  await browser.focus('div[data-testid="tweetTextarea_0"]');
+  await browser.evaluate(composerFocus());
   await browser.send('Input.insertText', { text: content });
-  const readback = await readComposerUntil(COMPOSERS.home);
+  const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
@@ -613,7 +624,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   const max = Number(loadSettings().social.xDailyPostMax || 0);
   if (Number(kvGet(dayKey, '0')) >= max) throw new Error(`今天发推次数已到上限（${max} 条）`);
   await requireProxy();
-  const actual = await browser.evaluate(composerRead(COMPOSERS.home));
+  const actual = await browser.evaluate(composerRead());
   if (normalizeTyped(actual.text) !== normalizeTyped(fill.text)) throw new Error('输入框里的内容和确认要发的不一致，没有发');
   if (!actual.ready) throw new Error('发送按钮还是灰的，没有发');
   if (actual.risky) throw new Error('X 页面提示限流/出错，这次没有发');
@@ -621,7 +632,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   const operation = beginEffect(effectKey);
   if (!operation.started) return { ...operation.receipt, already: true };
   const beforeCount = await browser.evaluate(String.raw`document.querySelectorAll('article[data-testid="tweet"]').length`);
-  await browser.evaluate(composerSend(COMPOSERS.home));
+  await browser.evaluate(composerSend());
   await sleep(3500);
   const after = await browser.evaluate(String.raw`(({ text, beforeCount }) => {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();

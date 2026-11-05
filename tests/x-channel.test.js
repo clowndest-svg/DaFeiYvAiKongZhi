@@ -243,8 +243,7 @@ test('回复的送达证据：在原推文下面逐字读到才算发出去', ()
   const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply, '找不到 replyToTweetLocked');
-  assert.ok(reply[0].includes('browser.waitFor(COMPOSERS.modal.box'), '没等弹层里的输入框长出来就打字');
-  assert.ok(reply[0].includes('browser.focus('), 'Draft.js 只认落在真焦点上的输入，页内 focus() 插空过');
+  assert.ok(reply[0].includes('Input.insertText'), '没把字真的送进浏览器：只在页面里改 DOM，Draft.js 不认');
   assert.match(reply[0], /assertXReplyEvidence/, '回复没走"回原帖核对"的证据链');
   assert.ok(!/assertXDeliveryEvidence/.test(reply[0]), '回复还在用"当前页数量变多"当证据：弹层关掉后根本看不到');
   assert.ok(!/还没拿到 NapCat|await sleep\(1500\);\r?\n  const typed/.test(reply[0]), '又回到"固定等 1.5 秒然后假定输入框在"');
@@ -260,15 +259,17 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');
   assert.ok(!reply[0].includes('await sleep(900);\n  let readback'), '又是固定等 900ms：Draft.js 下一帧才挂字，读到空的就又打一遍');
-  assert.ok(reply[0].includes('readComposerUntil(COMPOSERS.modal)'), '没等到弹层里那个框出现字就往下走');
-  assert.ok(reply[0].includes("browser.waitFor(COMPOSERS.modal.box"), '没锁定弹层里的输入框：querySelector 抓到的是主页发帖框');
-  assert.ok(reply[0].includes('composerSend(COMPOSERS.modal)'), '发送没锁在弹层里：会点到主页的发帖按钮，把回复发成一条独立新推文');
+  assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
+  assert.ok(reply[0].includes('composerFocus()'), '聚焦没走同一个挑框逻辑：browser.focus 用 querySelector 抓第一个，会点到主页发帖框');
+  assert.ok(reply[0].includes('composerSend()'), '发送没走同一段挑按钮逻辑：可能点到主页的发帖按钮，把回复发成一条独立新推文');
   assert.ok(reply[0].includes('if (normalizeTyped(before.text)) throw'), '打字前没要求框是空的：补第二遍就成同一句话两遍（实测第 28、第 50 个字重复）');
   assert.equal((reply[0].match(/Input\.insertText/g) || []).length, 1, '一句话被打了两次的写法又回来了');
   assert.ok(!reply[0].includes('COMPOSER_CLEAR'), '又想用"清空再打"补救：execCommand 在 Draft.js 里清不掉，实测照样叠成两遍');
-  const scoped = /const COMPOSERS = \{[\s\S]*?\r?\n\};/.exec(src);
-  assert.ok(scoped, '找不到 COMPOSERS：回复和发帖共用一个选择器就会互相串');
-  assert.ok(scoped[0].includes('[role="dialog"] div[data-testid="tweetTextarea_0"]'), '弹层作用域没落到输入框上');
+  const state = /function composerState\(action\)[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(state, '找不到 composerState：读/聚焦/发送必须共用同一份挑框逻辑');
+  assert.ok(state[0].includes('[role="dialog"] div[data-testid="tweetTextarea_0"]'), '没优先用弹层里的框');
+  assert.ok(state[0].includes('all[all.length - 1]'), '页面上有多个框时没取最后长出来的那个：实测回复框在 /compose/post 上，不在弹层里');
+  assert.ok(!/document\.querySelector\('div\[data-testid="tweetTextarea_0"'\)\)/.test(reply[0]), '回复里还用了"抓第一个"的选择器：会点到主页发帖框');
   assert.ok(!/document\.querySelector\('div\[data-testid="tweetTextarea_0"\]'\)/.test(reply[0]), '回复里还用了不限范围的发帖框选择器');
 });
 
