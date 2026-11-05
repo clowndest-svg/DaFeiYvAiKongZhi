@@ -13,12 +13,13 @@ import {
   assertXAction,
   assertXDeliveryEvidence,
   assertXPage,
+  assertXReplyEvidence,
   isRiskyXError,
   isXLoginPage,
   triggerXCooldown,
   xCooldownUntil,
 } from '../src/channels/x-safety.js';
-import { canActX, manualXAct, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
+import { canActX, manualXAct, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
 import { readXTimeline, xProxyAlive } from '../src/channels/x.js';
 import { otherHolders } from '../src/browser/cdp.js';
 
@@ -229,6 +230,32 @@ test('assertXAction：开关、冷却、省钱模式、动作开关各说一件�
   kvSet('x_cooldown_until', until);
   assert.throws(() => assertXAction('like'), /风控冷却中/);
   kvSet('x_cooldown_until', '');
+});
+
+test('回复的送达证据：在原推文下面逐字读到才算发出去', () => {
+  assert.doesNotThrow(() => assertXReplyEvidence({ found: true, text: '早上好呀', content: '早上好呀', risky: false }));
+  // 找不到 / 文字不一致 / 有限流提示：一律"状态未知"，不许报成功，也不许鼓励再点一次
+  assert.throws(() => assertXReplyEvidence({ found: false, text: '', content: '早上好呀' }), DeliveryUnknownError);
+  assert.throws(() => assertXReplyEvidence({ found: true, text: '早上好呀（改过了）', content: '早上好呀' }), DeliveryUnknownError);
+  assert.throws(() => assertXReplyEvidence({ found: true, text: '早上好呀', content: '早上好呀', risky: true }), DeliveryUnknownError);
+
+  // 弹层一关，新回复不留在原来的时间线上——原地数卡片证明不了发出去（实测两次"没核实成功"就是这个）
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(reply, '找不到 replyToTweetLocked');
+  assert.match(reply[0], /browser\.waitFor\('div\[data-testid="tweetTextarea_0"\]'/, '没等回复输入框长出来就打字');
+  assert.ok(reply[0].includes('browser.focus('), 'Draft.js 只认落在真焦点上的输入，页内 focus() 插空过');
+  assert.match(reply[0], /assertXReplyEvidence/, '回复没走"回原帖核对"的证据链');
+  assert.ok(!/assertXDeliveryEvidence/.test(reply[0]), '回复还在用"当前页数量变多"当证据：弹层关掉后根本看不到');
+  assert.ok(!/还没拿到 NapCat|await sleep\(1500\);\r?\n  const typed/.test(reply[0]), '又回到"固定等 1.5 秒然后假定输入框在"');
+});
+
+test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {
+  // 日志里的真实截断（260 token 砍在 text 中间）
+  assert.deepEqual(parseHerAnswer('{"reply":true,"text":"早上把窗台擦了'), { reply: true, text: '早上把窗台擦了', salvaged: true });
+  assert.deepEqual(parseHerAnswer('{"reply":true,"text":"她说\\\"早\\\"，今天想多聊'), { reply: true, text: '她说"早"，今天想多聊', salvaged: true });
+  assert.deepEqual(parseHerAnswer('不是 JSON'), {}, '解不出就该当没想好，别抛出去');
+  assert.deepEqual(parseHerAnswer('{"reply":false,"text":"","reason":"不想说话"}'), { reply: false, text: '', reason: '不想说话' });
 });
 
 test('该跳过的推文：敏感话题、空正文、转发；正常生活话不许误伤', () => {

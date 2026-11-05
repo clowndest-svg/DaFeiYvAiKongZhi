@@ -129,6 +129,32 @@ export function shouldSkipTweet(tweet) {
   return '';
 }
 
+// 实测模型偶尔在 maxTokens 处把 JSON 截断（日志原话：Unterminated string in JSON at position 44）。
+// 这种时候不该把异常抛出去把整轮逛打断：能捞出 reply/text 就用，捞不出就当"这条她没想好"，
+// 下一条照看——丢一条对话比记一次系统故障好。
+export function parseHerAnswer(content) {
+  try {
+    return parseJsonLoose(content) || {};
+  } catch {
+    const raw = String(content || '');
+    const reply = /"reply"\s*:\s*(true|false)/.exec(raw);
+    if (!reply) return {};
+    const open = /"text"\s*:\s*"/.exec(raw);
+    let text = '';
+    if (open) {
+      const rest = raw.slice(open.index + open[0].length);
+      const closed = rest.match(/^((?:[^"\\]|\\.)*)"/);
+      const fragment = closed ? closed[1] : rest;
+      try {
+        text = JSON.parse(`"${fragment}"`);
+      } catch {
+        text = fragment;
+      }
+    }
+    return { reply: reply[1] === 'true', text: String(text || ''), salvaged: true };
+  }
+}
+
 async function askHer(llm, { tweet, isOwner, ownerHandle, mode }) {
   const settings = loadSettings();
   const result = await llm.chat(
@@ -146,7 +172,7 @@ async function askHer(llm, { tweet, isOwner, ownerHandle, mode }) {
       mockKind: 'x_reply',
     },
   );
-  return parseJsonLoose(result.content) || {};
+  return parseHerAnswer(result.content);
 }
 
 // 逛时间线 → 该说话就回一句，想赞就赞。发推不在这里（那是草稿链路）。
@@ -321,7 +347,7 @@ export async function draftXPost({ topic = '', llm } = {}) {
       ],
       { kind: 'x_post', model: settings.model.name, temperature: 0.9, maxTokens: 220, reasoningEffort: 'low', responseFormat: { type: 'json_object' }, mockKind: 'x_post' },
     );
-    text = String((parseJsonLoose(result.content) || {}).text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
+    text = String((parseHerAnswer(result.content) || {}).text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
   } catch (error) {
     return { ok: false, reason: `她没写出这条：${String(error.message).slice(0, 60)}` };
   }

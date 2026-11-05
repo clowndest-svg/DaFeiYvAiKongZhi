@@ -20,7 +20,7 @@ import { hashText, nowIso, sleep } from '../util.js';
 import { CdpBrowser } from '../browser/cdp.js';
 import { SerialQueue } from '../serial.js';
 import { beginEffect, failEffect, finishEffect } from '../effects.js';
-import { assertXAction, assertXDeliveryEvidence, assertXPage, assertXReactEvidence, isXLoginPage, triggerXCooldown, xCooldownUntil } from './x-safety.js';
+import { assertXAction, assertXDeliveryEvidence, assertXPage, assertXReactEvidence, assertXReplyEvidence, isXLoginPage, triggerXCooldown, xCooldownUntil } from './x-safety.js';
 
 const BASE = 'https://x.com';
 const PORT = Number(env.xBrowserPort || 9334);
@@ -432,6 +432,39 @@ async function reactXLocked(href, kind = 'like') {
   return { ok: true, already: false, kind };
 }
 
+// 输入框和发送按钮的读法，回复/填稿/发布三处一模一样，别再抄三份。
+const COMPOSER_READ = String.raw`(() => {
+  const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+  const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
+  const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+  return { text: clean(box?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
+})()`;
+
+const COMPOSER_SEND = String.raw`(() => {
+  const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
+  if (btn) btn.click();
+  return Boolean(btn);
+})()`;
+
+// 回复的送达证据：在原推文下面，找"她账号发的、逐字相同的那一条"。
+// 值必须在建串时就变成字面量——页面里没有 Node 的变量，写进去就是 ReferenceError。
+function replyProof(content, handle) {
+  return String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const want = ${JSON.stringify(content)};
+    const mine = '[data-testid="User-Name"]';
+    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+    const own = cards.filter((c) => clean(c.querySelector(mine)?.innerText).toLowerCase().includes(${JSON.stringify(`@${handle}`.toLowerCase())}));
+    const texts = own.map((c) => clean(c.querySelector('[data-testid="tweetText"]')?.innerText));
+    return {
+      found: texts.includes(want),
+      text: texts.find((t) => t === want) || '',
+      mineCount: own.length,
+      risky: /限流|频繁|Something went wrong|Verify you are human/i.test(clean(document.body.innerText)),
+    };
+  })()`;
+}
+
 async function replyToTweetLocked(href, text) {
   const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
   if (!content) throw new Error('回复内容为空');
@@ -441,47 +474,40 @@ async function replyToTweetLocked(href, text) {
     addEvent('x_reply_blocked', '她想发的回复里有不该公开的内容，闸门拦下了', { reason: gate.reason });
     throw new Error(`这条不能公开写：${gate.reason}`);
   }
+  const handle = kvGet('x_self_handle') || '';
+  if (!handle) throw new Error('还不知道她的 X 用户名（先点「验证登录」），没法核实回复真的发出去了');
   await requireProxy();
   const opened = await clickTweetActionLocked(href, 'reply', 'Reply');
   if (!opened.ok) throw new Error(opened.reason || '回复按钮没点到');
-  await sleep(1500);
-  const typed = await browser.evaluate(String.raw`(({ text }) => {
-    const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
-    if (!box) return { ok: false, reason: '找不到回复输入框' };
-    box.focus();
-    return { ok: true };
-  })({ text: ${JSON.stringify(content)} })`);
-  if (!typed.ok) throw new Error(typed.reason || '找不到回复输入框');
+  // 弹层里的输入框是异步挂出来的：实测点完 1.5 秒还没有，硬往下走就变成"回复没有真的填进去"。
+  if (!(await browser.waitFor('div[data-testid="tweetTextarea_0"]', 9000))) {
+    throw new Error('回复弹层里没有长出输入框，这次没回');
+  }
+  await browser.focus('div[data-testid="tweetTextarea_0"]');
   await browser.send('Input.insertText', { text: content });
   await sleep(900);
-  const readback = await browser.evaluate(String.raw`(() => {
-    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    const box = document.querySelector('div[data-testid="tweetTextarea_0"]');
-    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-    return { text: clean(box?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
-  })()`);
+  let readback = await browser.evaluate(COMPOSER_READ);
+  if (readback.text !== content) {
+    // X 的输入框是 Draft.js，输入只落在真焦点上；第一次插空了就重新聚焦再打一遍。
+    await browser.focus('div[data-testid="tweetTextarea_0"]');
+    await browser.send('Input.insertText', { text: content });
+    await sleep(900);
+    readback = await browser.evaluate(COMPOSER_READ);
+  }
   if (readback.text !== content) throw new Error(`回复没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
-  const beforeCount = await browser.evaluate(String.raw`document.querySelectorAll('article[data-testid="tweet"]').length`);
-  await browser.evaluate(String.raw`(() => {
-    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-    if (btn) btn.click();
-    return Boolean(btn);
-  })()`);
+  if (!(await browser.evaluate(COMPOSER_SEND))) throw new Error('没找到回复的发送按钮，这次没发');
   await sleep(3000);
-  const after = await browser.evaluate(String.raw`(({ content, beforeCount }) => {
-    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    const texts = [...document.querySelectorAll('[data-testid="tweetText"]')].map((e) => clean(e.innerText));
-    return {
-      count: document.querySelectorAll('article[data-testid="tweet"]').length,
-      beforeCount,
-      outgoing: texts.filter((t) => t === content).length > 0,
-      text: texts.find((t) => t === content) || '',
-      editorEmpty: !clean(document.querySelector('div[data-testid="tweetTextarea_0"]')?.innerText),
-      risky: /限流|频繁|Something went wrong|Verify you are human/i.test(clean(document.body.innerText)),
-    };
-  })({ content: ${JSON.stringify(content)}, beforeCount: ${JSON.stringify(beforeCount)} })`);
-  assertXDeliveryEvidence({ beforeCount: after.beforeCount, afterCount: after.count, outgoing: after.outgoing, content, text: after.text, state: after });
+  // 弹层一关，新回复不会留在她刚才刷的时间线上——原地数卡片证明不了发出去了
+  // （实测今天两次"没核实成功"就是这么来的）。回到那条推文下面，按她的账号逐字核对。
+  const thread = `${BASE}${String(href).startsWith('/') ? href : `/${String(href).replace(/^https?:\/\/[^/]+/, '')}`}`;
+  await browser.navigate(thread);
+  let after = { found: false, text: '', mineCount: 0, risky: false };
+  for (let i = 0; i < 6 && !after.found; i += 1) {
+    after = await browser.evaluate(replyProof(content, handle));
+    if (!after.found) await sleep(1500);
+  }
+  assertXReplyEvidence({ ...after, content, handle });
   return { ok: true, verified: true, chars: content.length };
 }
 
@@ -509,15 +535,10 @@ async function fillXPostLocked({ text = '' } = {}) {
   await sleep(900);
   const box = await browser.evaluate(String.raw`(() => Boolean(document.querySelector('div[data-testid="tweetTextarea_0"]')))`);
   if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
-  await browser.evaluate(String.raw`(() => { const b = document.querySelector('div[data-testid="tweetTextarea_0"]'); if (b) b.focus(); return true; })()`);
+  await browser.focus('div[data-testid="tweetTextarea_0"]');
   await browser.send('Input.insertText', { text: content });
   await sleep(800);
-  const readback = await browser.evaluate(String.raw`(() => {
-    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
-    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-    return { text: clean(b?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
-  })()`);
+  const readback = await browser.evaluate(COMPOSER_READ);
   if (readback.text !== content) throw new Error(`内容没有真的填进去（读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
@@ -538,12 +559,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   const max = Number(loadSettings().social.xDailyPostMax || 0);
   if (Number(kvGet(dayKey, '0')) >= max) throw new Error(`今天发推次数已到上限（${max} 条）`);
   await requireProxy();
-  const actual = await browser.evaluate(String.raw`(() => {
-    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
-    const b = document.querySelector('div[data-testid="tweetTextarea_0"]');
-    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-    return { text: clean(b?.innerText), ready: Boolean(btn && !btn.disabled), risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)) };
-  })()`);
+  const actual = await browser.evaluate(COMPOSER_READ);
   if (actual.text !== fill.text) throw new Error('输入框里的内容和确认要发的不一致，没有发');
   if (!actual.ready) throw new Error('发送按钮还是灰的，没有发');
   if (actual.risky) throw new Error('X 页面提示限流/出错，这次没有发');
@@ -551,11 +567,7 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   const operation = beginEffect(effectKey);
   if (!operation.started) return { ...operation.receipt, already: true };
   const beforeCount = await browser.evaluate(String.raw`document.querySelectorAll('article[data-testid="tweet"]').length`);
-  await browser.evaluate(String.raw`(() => {
-    const btn = document.querySelector('[data-testid="tweetButtonInline"], [data-testid="tweetButton"]');
-    if (btn) btn.click();
-    return Boolean(btn);
-  })()`);
+  await browser.evaluate(COMPOSER_SEND);
   await sleep(3500);
   const after = await browser.evaluate(String.raw`(({ text, beforeCount }) => {
     const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();

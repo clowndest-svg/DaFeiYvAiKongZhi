@@ -67,6 +67,14 @@ export function assertXDeliveryEvidence({ beforeCount, afterCount, outgoing, con
   if (state && state.risky) throw new DeliveryUnknownError('页面出现限流/验证提示，这条状态未知，不要去重复点');
 }
 
+// 回复的送达证据：时间线弹层一关就看不到自己那条了，所以要回到原推文下面，
+// 按"她的账号 + 逐字相同"读到才算发出去；读不到就是状态未知，不许重试去点第二遍。
+export function assertXReplyEvidence({ found, text, content, risky }) {
+  const same = String(text || '').replace(/\s+/g, ' ').trim() === String(content || '').replace(/\s+/g, ' ').trim();
+  if (!(found === true && same)) throw new DeliveryUnknownError('回到那条推文下面没读到她的回复，这条状态未知，别重复点');
+  if (risky) throw new DeliveryUnknownError('页面出现限流/验证提示，这条状态未知，不要去重复点');
+}
+
 export function assertXReactEvidence({ before, after, pressed, countDelta }) {
   if (after !== true || pressed !== true) throw new DeliveryUnknownError('点赞/转推状态没有真的翻过来，这次不算做成');
   if (countDelta < 0) throw new DeliveryUnknownError('按钮状态变了但计数对不上，页面可能没同步');
