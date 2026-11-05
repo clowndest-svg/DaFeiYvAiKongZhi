@@ -534,7 +534,14 @@ async function replyToTweetLocked(href, text) {
   // 弹层里的输入框是异步挂出来的：实测点完 1.5 秒还没有，硬往下走就变成"回复没有真的填进去"。
   // 只认弹层里那个框（[role=dialog] 下面）——不带范围的那句 querySelector 抓到的是主页发帖框。
   if (!(await browser.waitFor(COMPOSERS.modal.box, 9000))) {
-    throw new Error('回复弹层里没有长出输入框，这次没回');
+    // 这一条现在是"失败但不说话"：报出页面到底有什么，下一次自动尝试自己就能告诉我们
+    // 回复框到底挂在哪儿（弹层几个、页面上有几个输入框、地址是什么），不用再靠人手去点一遍。
+    const where = await browser.evaluate(String.raw`(() => ({
+      url: location.href,
+      dialogs: document.querySelectorAll('[role="dialog"]').length,
+      boxes: [...document.querySelectorAll('div[role="textbox"][data-testid]')].map((b) => b.getAttribute('data-testid')).slice(0, 6),
+    }))()`).catch(() => ({ url: '', dialogs: -1, boxes: [] }));
+    throw new Error(`回复弹层里没有长出输入框，这次没回（地址 ${String(where.url).slice(0, 40)}；弹层 ${where.dialogs} 个；页面上的输入框 ${where.boxes.join('、') || '无'}）`);
   }
   const before = await browser.evaluate(composerRead(COMPOSERS.modal));
   if (!before.found) throw new Error('回复弹层里的输入框找不到了，这次没回');
