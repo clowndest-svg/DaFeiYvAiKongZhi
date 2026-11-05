@@ -291,6 +291,18 @@ test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到�
   assert.deepEqual(parseHerAnswer('{"reply":false,"text":"","reason":"不想说话"}'), { reply: false, text: '', reason: '不想说话' });
 });
 
+test('X 上所有动作都用可信点击；发送前必须确认这一页真的在回复', () => {
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const clicker = /async function clickTweetActionLocked[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(clicker, '找不到 clickTweetActionLocked');
+  assert.ok(clicker[0].includes("setAttribute('data-bizhi-target', 'action')"), '没标出要点的按钮');
+  assert.ok(clicker[0].includes("browser.clickAt('[data-bizhi-target=\"action\"]')"), '还是在页面里 click()：实测点赞状态不翻、发送没反应，合成点击对这套界面无效');
+  assert.ok(!/button\.click\(\);/.test(clicker[0]), '标完又自己 click 了一次');
+  const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
+  assert.ok(reply[0].includes('readback.sendLabel'), '没读发送按钮上写的字');
+  assert.ok(reply[0].includes('/回复|reply/i'), '没确认这一页真的在回复：/compose/post 上那颗按钮写的是「发帖」，点下去就是把心里话发成独立推文');
+});
+
 test('该跳过的推文：敏感话题、空正文、转发；正常生活话不许误伤', () => {
   assert.equal(shouldSkipTweet({ text: '' }), '没有正文');
   assert.match(shouldSkipTweet({ text: '某地发生地震已致多人伤亡' }), /敏感/);

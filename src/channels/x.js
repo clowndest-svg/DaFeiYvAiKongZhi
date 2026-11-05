@@ -385,9 +385,14 @@ async function clickTweetActionLocked(href, testid, labelRegex) {
       button = [...card.querySelectorAll('button')].find((b) => new RegExp(labelRegex, 'i').test(b.getAttribute('aria-label') || ''));
     }
     if (!button) return { ok: false, reason: '那条推文上没有这个按钮' };
-    button.click();
+    // 只标出来，不在页面里 click()：实测 X 这套界面对合成点击完全不响应
+    // （点赞点了状态不翻、发送点了没有回复——所有动作都是同一个原因）。
+    button.setAttribute('data-bizhi-target', 'action');
     return { ok: true, label: button.getAttribute('aria-label') || '' };
   })({ href: ${JSON.stringify(href)}, testid: ${JSON.stringify(testid)}, labelRegex: ${JSON.stringify(labelRegex)} })`, { timeoutMs: 45000 });
+  if (!found.ok) return found;
+  // 真鼠标事件点在标出来的那颗按钮上（合成 click() 实测不生效）。
+  if (!(await browser.clickAt('[data-bizhi-target="action"]'))) return { ok: false, reason: '按钮点不到（位置或尺寸读不到）' };
   return found;
 }
 
@@ -509,6 +514,7 @@ function composerState(action, text = '') {
       text: clean(box?.innerText),
       found: Boolean(box),
       ready: Boolean(btn && !btn.disabled),
+      sendLabel: clean(btn?.innerText) || clean(btn?.getAttribute('aria-label')),
       acted: did === 'read' ? true : Boolean(did === 'paste' ? box : btn),
       risky: /限流|频繁|Something went wrong/i.test(clean(document.body.innerText)),
     };
@@ -601,6 +607,11 @@ async function replyToTweetLocked(href, text) {
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
+  // 发出去之前确认这一页真的在"回复"：实测点回复后落在 /compose/post，那颗按钮写的是"发帖"。
+  // 分不清就把一句心里话发成他账号上的一条独立推文——这种事一次都不能错。
+  if (!/回复|reply/i.test(readback.sendLabel || '')) {
+    throw new Error(`这一页的发送按钮写的是「${readback.sendLabel || '空'}」，不是回复；她停手了，没把这句话当成新推文发出去`);
+  }
   // 发送要用可信鼠标事件：合成 click() 在这页上点了没反应（实测粘贴成功、按钮不灰、点完没有回复）。
   if (!(await browser.evaluate(composerSend()))) throw new Error('没找到回复的发送按钮，这次没发');
   if (!(await browser.clickAt('[data-bizhi-target="send"]'))) throw new Error('发送按钮点不到（可能已被页面挪走了），这次没发');
