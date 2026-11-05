@@ -100,10 +100,15 @@ function fakeServer({ tasks = [], onConvert = null, hang = false, dieOnConvert =
   return child;
 }
 
+// 内存闸门读的是真机空闲内存：不钉死的话，判据会随着机器当时还剩多少 GB 时好时坏
+// （实测 6 条判据在一次全量跑里因为只剩 1.2GB 集体变红）。闸门本身另有判据单独测。
+const ROOMY = () => 8;
+
 function runnerFor(root, options = {}) {
   const spawned = [];
   const runner = new RvcRunner({
     root,
+    freeMemory: ROOMY,
     spawnImpl: () => {
       const child = fakeServer(options);
       spawned.push(child);
@@ -427,6 +432,7 @@ test('工人半路死了要重起一个再试一次，而不是直接把这条�
     let first = true;
     const runner = new RvcRunner({
       root,
+      freeMemory: ROOMY,
       spawnImpl: () => {
         const child = fakeServer({ tasks, dieOnConvert: first });
         spawned.push(child);
@@ -449,6 +455,7 @@ test('重试也只试一次：连着死不许无限重起', async () => {
     const spawned = [];
     const runner = new RvcRunner({
       root,
+      freeMemory: ROOMY,
       spawnImpl: () => {
         const child = fakeServer({ tasks: [], dieOnConvert: true });
         spawned.push(child);
@@ -483,7 +490,7 @@ test('崩过两次不是永久拒绝：过了冷却时间会再试', async () =>
   const { root, input } = fakeRoot();
   try {
     const spawned = [];
-    const runner = new RvcRunner({ root, spawnImpl: () => { const c = fakeServer({ tasks: [] }); spawned.push(c); return c; } });
+    const runner = new RvcRunner({ root, freeMemory: ROOMY, spawnImpl: () => { const c = fakeServer({ tasks: [] }); spawned.push(c); return c; } });
     runner.deaths = 2;
     runner.lastDeathAt = Date.now();
     const blocked = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'c1.wav') });
