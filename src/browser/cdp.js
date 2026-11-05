@@ -105,7 +105,6 @@ export class CdpBrowser {
     fs.mkdirSync(this.profileDir, { recursive: true });
     const args = [
       `--remote-debugging-port=${this.port}`,
-      '--enable-automation',
       `--user-data-dir=${this.profileDir}`,
       '--no-first-run',
       '--no-default-browser-check',
@@ -140,6 +139,31 @@ export class CdpBrowser {
     await this.ensure({ visible });
   }
 
+  // 人工登录专用：Google 一看到"被自动化控制"的浏览器就拒绝授权（实测 accounts.google.com
+  // 回 "This browser or app may not be secure"），所以登录那一下用一个普通窗口——
+  // 不带调试端口、不带自动化旗子，只带同一个 profile 和代理。他登完关掉窗口，
+  // 登录态留在 profile 里，之后 CDP 再接管同一个目录。
+  async launchForManualLogin(url = "about:blank") {
+    if (env.testMode) throw new Error("隔离测试禁止启动真实浏览器");
+    const executable = findBrowser();
+    if (!executable) throw new Error("找不到 Chrome/Edge，可在 .env 设置 CHROME_PATH");
+    if (await this.alive()) throw new Error("专用浏览器还开着，同一个数据目录不能开两个窗口：先点「关闭浏览器」");
+    fs.mkdirSync(this.profileDir, { recursive: true });
+    const args = [
+      `--user-data-dir=${this.profileDir}`,
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-sync",
+      `--lang=${this.lang}`,
+      "--window-size=1280,900",
+      ...(this.proxyServer ? [`--proxy-server=${this.proxyServer}`] : []),
+      String(url || "about:blank"),
+    ];
+    logger.info("启动人工登录窗口（无调试端口、无自动化旗子）", { executable, profile: this.profileDir });
+    const child = spawn(executable, args, { detached: true, stdio: "ignore", windowsHide: false });
+    child.unref();
+    return { args, pid: child.pid };
+  }
   async assertOwnership() {
     let reason = '';
     try {

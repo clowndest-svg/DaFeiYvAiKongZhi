@@ -27,6 +27,21 @@ function setSocial(patch) {
   saveSettings({ social: { ...SOCIAL_BASE, ...(loadSettings().social || {}), ...patch } });
 }
 
+test('登录窗口不许带自动化旗子：Google 看到就拒绝授权', () => {
+  const cdp = fs.readFileSync(path.join(paths.root, 'src', 'browser', 'cdp.js'), 'utf8');
+  const x = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const argsBlock = /const args = \[([\s\S]*?)\];/.exec(cdp);
+  assert.ok(argsBlock, '找不到浏览器启动参数块');
+  assert.ok(!/--enable-automation/.test(argsBlock[1]), 'CDP 启动又加回了 --enable-automation');
+  const manual = /async launchForManualLogin[\s\S]*?const args = \[([\s\S]*?)\];/.exec(cdp);
+  assert.ok(manual, '没有人工登录窗口');
+  assert.ok(!/--enable-automation/.test(manual[1]), '登录窗口带了自动化旗子');
+  assert.ok(!/--remote-debugging-port/.test(manual[1]), '登录窗口带了调试端口：Google 照样拦');
+  assert.match(manual[1], /--user-data-dir/, '登录窗口必须用同一个 profile，否则登录态留不下来');
+  assert.match(x, /launchForManualLogin/, 'X 的登录没走干净窗口');
+  assert.match(x, /窗口关掉/, '没告诉他登完要关窗口');
+});
+
 test('代理不通时报的是代理，不是"页面打不开"，也不许碰浏览器', async () => {
   const original = env.xProxy;
   setSocial({ xEnabled: true });

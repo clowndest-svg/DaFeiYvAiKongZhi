@@ -224,13 +224,19 @@ async function xStatusLocked({ verify = false } = {}) {
 
 async function openXLoginLocked() {
   const proxy = await requireProxy();
-  await browser.relaunch({ visible: true });
-  await browser.navigate(`${BASE}/i/flow/login`);
-  await browser.showWindow();
-  await browser.bringToFront();
-  await sleep(1500);
+  // 登录走"干净窗口"：带调试端口的自动化窗口会被 Google 拒绝授权（实测回
+  // "This browser or app may not be secure"），X 自己的账号密码登录倒是能吃。
+  await browser.close().catch(() => {});
+  const launched = await browser.launchForManualLogin(`${BASE}/i/flow/login`);
   lastError = '';
-  return { ok: true, url: `${BASE}/i/flow/login`, proxy, hint: '在这个窗口里登录（账号+密码+两步验证）。登录态只存本机 data/x-profile，登出或删目录就没了。' };
+  return {
+    ok: true,
+    url: `${BASE}/i/flow/login`,
+    proxy,
+    pid: launched.pid,
+    manual: true,
+    hint: '登录窗口已打开（普通 Chrome，不带自动化旗子）。在里面登录，能选 Google 也能用密码；登完把那个窗口关掉，再点「验证登录」。登录态只存本机 data/x-profile。',
+  };
 }
 
 async function closeXBrowserLocked() {
