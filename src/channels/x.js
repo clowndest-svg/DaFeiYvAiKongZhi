@@ -493,6 +493,19 @@ function replyProof(content, handle) {
   })()`;
 }
 
+// Draft.js 把打进去的字要下一帧才挂到 DOM 上：固定等 900ms 读到过一次"空的"，
+// 于是代码以为没落字、又打一遍——结果框里是同一句话两遍（实测差异出现在第 50 个字）。
+// 所以读到字为止；只有真的一个字都没有才重试，框里有别的内容就不叠第二遍。
+async function readComposerUntil(timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  let read = { text: '', ready: false, risky: false };
+  for (;;) {
+    read = await browser.evaluate(COMPOSER_READ);
+    if (normalizeTyped(read.text) || Date.now() >= deadline) return read;
+    await sleep(400);
+  }
+}
+
 async function replyToTweetLocked(href, text) {
   const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
   if (!content) throw new Error('回复内容为空');
@@ -513,15 +526,13 @@ async function replyToTweetLocked(href, text) {
   }
   await browser.focus('div[data-testid="tweetTextarea_0"]');
   await browser.send('Input.insertText', { text: content });
-  await sleep(900);
-  let readback = await browser.evaluate(COMPOSER_READ);
-  if (normalizeTyped(readback.text) !== content) {
-    // 第一次没落在真焦点上就重来；重来之前必须清空，否则同一句话会在框里出现两遍（实测过）。
+  let readback = await readComposerUntil();
+  if (!normalizeTyped(readback.text)) {
+    // 一个字都没落进框里才重试；框里已经有别的内容就绝不叠第二遍。
     await browser.evaluate(COMPOSER_CLEAR);
     await browser.focus('div[data-testid="tweetTextarea_0"]');
     await browser.send('Input.insertText', { text: content });
-    await sleep(900);
-    readback = await browser.evaluate(COMPOSER_READ);
+    readback = await readComposerUntil();
   }
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
@@ -566,8 +577,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   if (!box) throw new Error('找不到 X 的发文输入框（页面可能改版了），这次没填');
   await browser.focus('div[data-testid="tweetTextarea_0"]');
   await browser.send('Input.insertText', { text: content });
-  await sleep(800);
-  const readback = await browser.evaluate(COMPOSER_READ);
+  const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
