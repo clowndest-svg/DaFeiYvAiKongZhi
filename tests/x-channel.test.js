@@ -243,7 +243,7 @@ test('回复的送达证据：在原推文下面逐字读到才算发出去', ()
   const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply, '找不到 replyToTweetLocked');
-  assert.match(reply[0], /browser\.waitFor\('div\[data-testid="tweetTextarea_0"\]'/, '没等回复输入框长出来就打字');
+  assert.ok(reply[0].includes('browser.waitFor(COMPOSERS.modal.box'), '没等弹层里的输入框长出来就打字');
   assert.ok(reply[0].includes('browser.focus('), 'Draft.js 只认落在真焦点上的输入，页内 focus() 插空过');
   assert.match(reply[0], /assertXReplyEvidence/, '回复没走"回原帖核对"的证据链');
   assert.ok(!/assertXDeliveryEvidence/.test(reply[0]), '回复还在用"当前页数量变多"当证据：弹层关掉后根本看不到');
@@ -260,10 +260,16 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src);
   assert.ok(reply[0].includes('normalizeTyped(readback.text) !== content'), '还在逐字比 innerText：Draft.js 的零宽占位符会把打对的话判成没打上');
   assert.ok(!reply[0].includes('await sleep(900);\n  let readback'), '又是固定等 900ms：Draft.js 下一帧才挂字，读到空的就又打一遍');
-  assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
+  assert.ok(reply[0].includes('readComposerUntil(COMPOSERS.modal)'), '没等到弹层里那个框出现字就往下走');
+  assert.ok(reply[0].includes("browser.waitFor(COMPOSERS.modal.box"), '没锁定弹层里的输入框：querySelector 抓到的是主页发帖框');
+  assert.ok(reply[0].includes('composerSend(COMPOSERS.modal)'), '发送没锁在弹层里：会点到主页的发帖按钮，把回复发成一条独立新推文');
   assert.ok(reply[0].includes('if (normalizeTyped(before.text)) throw'), '打字前没要求框是空的：补第二遍就成同一句话两遍（实测第 28、第 50 个字重复）');
   assert.equal((reply[0].match(/Input\.insertText/g) || []).length, 1, '一句话被打了两次的写法又回来了');
   assert.ok(!reply[0].includes('COMPOSER_CLEAR'), '又想用"清空再打"补救：execCommand 在 Draft.js 里清不掉，实测照样叠成两遍');
+  const scoped = /const COMPOSERS = \{[\s\S]*?\r?\n\};/.exec(src);
+  assert.ok(scoped, '找不到 COMPOSERS：回复和发帖共用一个选择器就会互相串');
+  assert.ok(scoped[0].includes('[role="dialog"] div[data-testid="tweetTextarea_0"]'), '弹层作用域没落到输入框上');
+  assert.ok(!/document\.querySelector\('div\[data-testid="tweetTextarea_0"\]'\)/.test(reply[0]), '回复里还用了不限范围的发帖框选择器');
 });
 
 test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {
