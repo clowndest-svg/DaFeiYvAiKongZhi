@@ -532,7 +532,7 @@
                   <p class="muted small">先按上面的音色合成，再过一遍 RVC 模型换成你选的那个声音。没装引擎、或没选模型时这一条完全不介入——她发的还是原来的声音，不会假装换过了。</p>
                   <label class="check"><input type="checkbox" id="rvcEnabled"> 发语音时用变声后的声音</label>
                   <label>音高偏移（半音，−24～24）<input id="rvcTranspose" type="number" min="-24" max="24" step="1"></label>
-                  <label>取音高算法 <select id="rvcF0"><option value="harvest">harvest（稳）</option><option value="pm">pm（最快）</option><option value="crepe">crepe（细但慢）</option><option value="rmvpe">rmvpe（吃内存）</option><option value="mfcc">mfcc</option></select></label>
+                  <label>取音高算法 <select id="rvcF0"><option value="pm">pm（默认，省内存）</option><option value="harvest">harvest（更细，更吃内存）</option><option value="crepe">crepe（细但慢）</option><option value="rmvpe">rmvpe（吃内存）</option><option value="mfcc">mfcc</option></select></label>
                   <label>单次最多等几秒（15–600）<input id="rvcTimeout" type="number" min="15" max="600"></label>
                   <p class="muted small" id="rvcStatusLine">正在读取变声引擎状态…</p>
                   <div id="rvcModelList" class="compare-list"></div>

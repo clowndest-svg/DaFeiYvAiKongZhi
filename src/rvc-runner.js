@@ -4,6 +4,7 @@
 // 功能没被用到时不产生任何进程、定时器或网络请求。
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { paths } from './config.js';
@@ -12,19 +13,35 @@ import { rvcPaths } from './rvc-paths.js';
 
 const IDLE_UNLOAD_MS = 120000;
 const RESTART_LIMIT = 2;
+// 崩过之后隔多久允许再试：不隔时间就会"崩两次→永远拒绝"，那句"下一条会再试一次"就成了假话。
+const DEATH_COOLDOWN_MS = 90000;
+// 一次变声实际要吃 1.5~2.5GB（hubert + 检查点 + BLAS 工作区）。机器只剩这么点空闲就别起，
+// 起了也是半路 segfault（实测 OpenBLAS malloc failed / 退出码 0xC0000005）。
+const MIN_FREE_BYTES = 1_600_000_000;
+
+export function rvcFreeMemoryGb() {
+  return Math.round((os.freemem() / 1e9) * 100) / 100;
+}
 
 export class RvcRunner {
-  constructor({ root = paths.root, idleMs = IDLE_UNLOAD_MS, spawnImpl = spawn, timeoutMs = 180000 } = {}) {
+  constructor({ root = paths.root, idleMs = IDLE_UNLOAD_MS, spawnImpl = spawn, timeoutMs = 180000, minFreeGb = MIN_FREE_BYTES / 1e9, freeMemory = rvcFreeMemoryGb } = {}) {
     this.p = rvcPaths(root);
     this.idleMs = idleMs;
     this.spawnImpl = spawnImpl;
     this.timeoutMs = timeoutMs;
+    this.minFreeGb = minFreeGb;
+    this.freeMemory = freeMemory;
     this.child = null;
     this.children = new Set();
     this.queue = [];
     this.busy = Promise.resolve();
     this.idleTimer = null;
     this.restarts = 0;
+    // deaths 只数"非自愿的死法"：空闲收摊是我自己关的，不该算崩，
+    // 否则他多点两次试听就被"重启到上限"永久卡住。成功一次即清零。
+    this.deaths = 0;
+    this.lastDeathAt = 0;
+    this.intentional = false;
     this.loadedKey = '';
     this.lastError = '';
     this.metrics = { calls: 0, firstMs: null, lastMs: null, failures: 0 };
@@ -39,6 +56,7 @@ export class RvcRunner {
       alive: this.alive,
       loaded: this.loadedKey,
       restarts: this.restarts,
+      deaths: this.deaths,
       lastError: this.lastError || null,
       metrics: this.metrics,
     };
@@ -49,11 +67,23 @@ export class RvcRunner {
     if (!fs.existsSync(this.p.python) || !fs.existsSync(this.p.server)) {
       throw new Error('没装变声引擎（voice/rvc-env 或 src/rvc-server.py 不在）');
     }
+    const free = this.freeMemory();
+    if (free < this.minFreeGb) {
+      throw new Error(`机器内存不够变声（现在只剩 ${free} GB 空闲，一次要 ${Math.round(this.minFreeGb * 10) / 10} GB 以上）：先关掉一些程序再试`);
+    }
     const child = this.spawnImpl(this.p.python, [this.p.server], {
       cwd: this.p.root,
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env, BIZHI_RVC_MODELS_DIR: this.p.modelDir, PYTHONIOENCODING: 'utf-8' },
+      env: {
+        ...process.env,
+        BIZHI_RVC_MODELS_DIR: this.p.modelDir,
+        PYTHONIOENCODING: 'utf-8',
+        // OpenBLAS/MKL 默认按 CPU 核数各开一份工作区，16GB 的机器上这就是第一块倒下的多米诺。
+        OMP_NUM_THREADS: '2',
+        OPENBLAS_NUM_THREADS: '2',
+        MKL_NUM_THREADS: '2',
+      },
     });
     this.child = child;
     this.children.add(child);
@@ -65,7 +95,7 @@ export class RvcRunner {
       while (index >= 0) {
         const line = buffer.slice(0, index).trim();
         buffer = buffer.slice(index + 1);
-        if (line) this.resolve(line);
+        if (line) this.resolve(line, child);
         index = buffer.indexOf('\n');
       }
     });
@@ -78,7 +108,10 @@ export class RvcRunner {
     return child;
   }
 
-  resolve(line) {
+  resolve(line, from) {
+    // 收摊中的旧进程可能还吐最后一行；那行不属于任何在等的请求，
+    // 认下来就会把新进程的回答错位消耗掉（表现是"说成功了但磁盘没文件"）。
+    if (from && from !== this.child) return;
     let payload = null;
     try {
       payload = JSON.parse(line);
@@ -92,6 +125,11 @@ export class RvcRunner {
   }
 
   die(reason) {
+    if (this.intentional) this.intentional = false;
+    else {
+      this.deaths += 1;
+      this.lastDeathAt = Date.now();
+    }
     this.lastError = reason;
     this.child = null;
     this.loadedKey = '';
@@ -105,7 +143,9 @@ export class RvcRunner {
   }
 
   ask(payload, timeoutMs) {
-    return this.ensureStarted().then(
+    return this.ensureStarted()
+      .catch((error) => ({ ok: false, error: String(error.message || error).slice(0, 140), refused: true }))
+      .then(
       () =>
         new Promise((resolve) => {
           const child = this.child;
@@ -133,7 +173,10 @@ export class RvcRunner {
 
   ensureStarted() {
     if (this.child) return Promise.resolve();
-    if (this.restarts >= RESTART_LIMIT) return Promise.reject(new Error(`变声进程已经重启到上限（${this.restarts} 次），这条先用原来的声音`));
+    if (Date.now() - this.lastDeathAt > DEATH_COOLDOWN_MS) this.deaths = 0;
+    if (this.deaths >= RESTART_LIMIT) {
+      return Promise.reject(new Error(`变声进程连着崩了 ${this.deaths} 次，这条先用原来的声音（${Math.round(DEATH_COOLDOWN_MS / 1000)} 秒后会再试一次）`));
+    }
     try {
       this.restarts += 1;
       this.start();
@@ -165,23 +208,9 @@ export class RvcRunner {
       return { ok: false, reason: String(error.message).slice(0, 140) };
     }
     if (!this.child) return { ok: false, reason: this.lastError || '变声进程没起来' };
-    if (this.loadedKey !== key) {
-      const loaded = await this.ask({ cmd: 'load', model: path.join(this.p.root, model.pth), index: model.index ? path.join(this.p.root, model.index) : '' }, budget);
-      if (!loaded.ok) return { ok: false, reason: loaded.error || '模型载入失败' };
-      this.loadedKey = key;
-    }
-    const out = await this.ask(
-      {
-        cmd: 'convert',
-        src: inputFile,
-        dst: params.outFile,
-        transpose: params.transpose,
-        index_rate: params.indexRate,
-        protect: params.protect,
-        f0: params.f0,
-      },
-      budget,
-    );
+    const loadTask = { cmd: 'load', model: path.join(this.p.root, model.pth), index: model.index ? path.join(this.p.root, model.index) : '' };
+    const convertTask = { cmd: 'convert', src: inputFile, dst: params.outFile, transpose: params.transpose, index_rate: params.indexRate, protect: params.protect, f0: params.f0 };
+    let out = await this.runTask(loadTask, convertTask, budget);
     this.metrics.calls += 1;
     this.metrics.lastMs = Date.now() - started;
     if (this.metrics.firstMs == null) this.metrics.firstMs = this.metrics.lastMs;
@@ -193,8 +222,25 @@ export class RvcRunner {
       this.metrics.failures += 1;
       return { ok: false, reason: '变声说成功了但磁盘上没有文件' };
     }
+    // 只有真出声才清零"连着崩"的计数：失败也清零的话，进程反复死就会被无限重试拖住。
+    this.deaths = 0;
     this.armIdle();
     return { ok: true, file: params.outFile, bytes: fs.statSync(params.outFile).size, ms: Date.now() - started };
+  }
+
+  // 进程半路没了（内存吃干、原生层 abort）不算这条该放弃：重新起一个进程再做一次，只重试一次。
+  async runTask(loadTask, convertTask, budget, depth = 0) {
+    if (this.loadedKey !== loadTask.model + '|' + loadTask.index) {
+      const loaded = await this.ask(loadTask, budget);
+      if (!loaded.ok) return { ok: false, error: loaded.error || '模型载入失败' };
+      this.loadedKey = loadTask.model + '|' + loadTask.index;
+    }
+    const first = await this.ask(convertTask, budget);
+    if (first.ok || first.refused) return first;
+    if (this.child || first.timedOut || depth >= 1) return first;
+    logger.warn('变声工人中途没了，重起一个进程再试一次', { error: first.error || '' });
+    this.loadedKey = '';
+    return this.runTask(loadTask, convertTask, budget, depth + 1);
   }
 
   armIdle() {
@@ -204,6 +250,7 @@ export class RvcRunner {
   }
 
   stop() {
+    this.intentional = true;
     clearTimeout(this.idleTimer);
     this.idleTimer = null;
     const child = this.child;
@@ -235,7 +282,7 @@ export class RvcRunner {
 export function rvcRunnerMetrics() {
   if (!shared) return { alive: false, calls: 0, firstMs: null, lastMs: null, failures: 0, restarts: 0, lastError: null };
   const s = shared.status();
-  return { ...s.metrics, alive: s.alive, loaded: s.loaded, restarts: s.restarts, lastError: s.lastError };
+    return { ...s.metrics, alive: s.alive, loaded: s.loaded, restarts: s.restarts, deaths: s.deaths, lastError: s.lastError };
 }
 
 let shared = null;

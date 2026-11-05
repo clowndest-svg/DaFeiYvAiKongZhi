@@ -10,6 +10,8 @@ import { loadSettings, saveSettings } from '../src/config.js';
 import { closeDb } from '../src/db.js';
 import { findRvcModel, listRvcModels, rvcConvert, rvcEngineStatus, rvcPaths, rvcSelectProblem, rvcTimeoutMs } from '../src/rvc.js';
 import { RvcRunner } from '../src/rvc-runner.js';
+
+const DEFAULT_F0 = 'pm';
 import { applyRvc } from '../src/tts.js';
 
 test.after(closeDb);
@@ -58,7 +60,7 @@ function fakeRoot({ models = 1, dropPth = false, withIndex = true, base = true }
 }
 
 // 替身 Python 进程：按行收任务、按行回结果，并把收到的任务留下来给判据核对。
-function fakeServer({ tasks = [], onConvert = null, hang = false } = {}) {
+function fakeServer({ tasks = [], onConvert = null, hang = false, dieOnConvert = false } = {}) {
   const child = new EventEmitter();
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
@@ -67,6 +69,11 @@ function fakeServer({ tasks = [], onConvert = null, hang = false } = {}) {
       const task = JSON.parse(String(text).trim());
       tasks.push(task);
       if (hang) return;
+      // 真崩法是原生层直接 abort：一行回答都没有，进程就没了
+      if (dieOnConvert && task.cmd === 'convert') {
+        setImmediate(() => child.emit('close', 1));
+        return;
+      }
       setImmediate(() => {
         if (task.cmd === 'load') {
           child.stdout.emit('data', Buffer.from(`${JSON.stringify({ ok: true, loaded: 'm1.pth', ms: 900 })}\n`));
@@ -78,7 +85,9 @@ function fakeServer({ tasks = [], onConvert = null, hang = false } = {}) {
           child.stdout.emit('data', Buffer.from(`${JSON.stringify({ ok: true, bytes: 4096, ms: 1200 })}\n`));
           return;
         }
-        child.stdout.emit('data', Buffer.from(`${JSON.stringify({ ok: true, pid: 1 })}\n`));
+        // exit 是收摊指令，真工人回完就退了；替身也不该在这里回话，
+        // 否则那行会被下一个新进程的请求错配吃掉。
+        if (task.cmd !== 'exit') child.stdout.emit('data', Buffer.from(`${JSON.stringify({ ok: true, pid: 1 })}\n`));
       });
     },
   };
@@ -179,7 +188,7 @@ test('常驻工人：先 load 再 convert，参数按白名单和边界清洗，
     assert.match(tasks[0].model, /\.pth$/, 'load 没把模型路径交给工人');
     assert.ok(tasks[0].index, '清单里有 .index 却没带上');
     assert.equal(tasks[1].cmd, 'convert');
-    assert.equal(tasks[1].f0, 'harvest', '非法 f0 没退回默认值');
+    assert.equal(tasks[1].f0, DEFAULT_F0, '非法 f0 没退回默认值');
     assert.equal(tasks[1].transpose, 24, '音高偏移没夹到 ±24');
     assert.equal(tasks[1].index_rate, 1, 'index_rate 没夹到 0~1');
     assert.equal(tasks[1].src, input);
@@ -326,4 +335,165 @@ test('界面：没挑音色时点开关不该把 400 抛给用户', () => {
   const sent = app.indexOf("api('/api/voice/rvc/select'");
   assert.ok(hint > 0 && sent > hint, '提示应当出现在发请求之前');
   assert.ok(app.slice(hint, sent).includes('return;'), '没挑音色时没提前返回，还是会把请求发出去');
+});
+
+test('空闲收摊不算崩：连着试听多次也不会被"重启到上限"卡住', async () => {
+  const { root, input } = fakeRoot();
+  try {
+    const { runner } = runnerFor(root, { tasks: [] });
+    for (let i = 1; i <= 4; i += 1) {
+      const out = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, `x${i}.wav`) });
+      assert.equal(out.ok, true, `第 ${i} 次试听被拦了：${out.reason}`);
+      runner.stop(); // 空闲收摊：这不该记成"崩了一次"
+    }
+    assert.equal(runner.deaths, 0, '空闲收摊被当成进程崩了');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('真崩才拦，而且成功一次就清零（一次抖动不该永久拒绝变声）', async () => {
+  const { root, input } = fakeRoot();
+  try {
+    const spawned = [];
+    const { runner } = runnerFor(root, { tasks: [] });
+    // 手动造一次"非自愿的死法"
+    runner.child = null;
+    runner.intentional = false;
+    runner.die('替身进程挂了');
+    assert.equal(runner.deaths, 1);
+    const ok = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'y.wav') });
+    assert.equal(ok.ok, true, `崩过一次就再也拒绝变声了：${ok.reason}`);
+    assert.equal(runner.deaths, 0, '成功后没把"连着崩"的计数清零');
+    // 连着两次非自愿死亡才拦，并且说的话要告诉他下一条还会再试
+    runner.die('又挂了');
+    runner.die('又挂了');
+    const blocked = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'z.wav') });
+    assert.equal(blocked.ok, false);
+    assert.match(blocked.reason, /连着崩了/);
+    assert.match(blocked.reason, /秒后会再试一次/, '要说清多久后再试，不能只说下一条');
+    assert.equal(spawned.length, 0);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+// 这一条真起 Python：只有本机装了引擎和模型才跑，否则如实标"没测"，不许当成通过。
+const engineHere = rvcEngineStatus().installed && rvcEngineStatus().readyCount > 0;
+test('真推理不许削顶：输出必须是 16 位整型，不是被钳平的浮点', { skip: engineHere ? false : '本机没装变声引擎或没有可用音色，这条没跑' }, async () => {
+  const { spawnSync } = await import('node:child_process');
+  const p = rvcPaths();
+  const model = listRvcModels().find((m) => m.available);
+  const src = path.join(os.tmpdir(), `bizhi-rvc-src-${process.pid}.wav`);
+  const dst = path.join(os.tmpdir(), `bizhi-rvc-dst-${process.pid}.wav`);
+  // 用一段正弦当输入：只验"写盘格式对不对、有没有整段削顶"，不验音色像不像。
+  const voice = spawnSync(p.python, ['-I', '-c', [
+    'import numpy as np,soundfile as sf,sys',
+    'sr=24000;t=np.arange(int(sr*1.2))/sr',
+    'y=(0.25*np.sin(2*np.pi*220*t)).astype(np.float32)',
+    'sf.write(sys.argv[1],y,sr)',
+  ].join('\n'), src], { encoding: 'utf8', timeout: 60000 });
+  assert.equal(voice.status, 0, `造输入音频失败：${voice.stderr}`);
+  const r = spawnSync(p.python, [p.worker, '--model', path.join(p.root, model.pth), '--src', src, '--dst', dst, '--f0', 'pm'], { encoding: 'utf8', timeout: 300000 });
+  const out = JSON.parse(String(r.stdout).trim().split(/\r?\n/).filter(Boolean).pop() || '{}');
+  assert.equal(out.ok, true, `真推理没出声音：${out.error || r.stderr}`);
+  const head = fs.readFileSync(dst).slice(0, 44);
+  // RIFF 头里 audio format=1 是 PCM 整型；3 是 IEEE float——后者说明又把 int16 当浮点写了。
+  const format = head.readUInt16LE(20);
+  const bits = head.readUInt16LE(34);
+  assert.equal(format, 1, `输出写成了浮点容器（format=${format}），int16 被当 -1..1 归一化就会整段削顶`);
+  assert.equal(bits, 16, `输出位深不是 16 位（${bits}）`);
+  // 逐样本查削顶：真声不可能几乎每个点都顶满
+  const data = fs.readFileSync(dst).subarray(44);
+  let clipped = 0;
+  let loud = 0;
+  for (let i = 0; i + 1 < data.length; i += 2) {
+    const v = data.readInt16LE(i);
+    if (Math.abs(v) >= 32760) clipped += 1;
+    if (Math.abs(v) > 8000) loud += 1;
+  }
+  const total = Math.max(1, Math.floor(data.length / 2));
+  assert.ok(clipped / total < 0.05, `削顶比例 ${(clipped / total).toFixed(2)}，听着就是卡住的广播`);
+  assert.ok(loud / total > 0.05, '输出几乎是静音，等于没变声');
+  fs.rmSync(src, { force: true });
+  fs.rmSync(dst, { force: true });
+});
+
+test('工人半路死了要重起一个再试一次，而不是直接把这条丢回原声', async () => {
+  const { root, input } = fakeRoot();
+  const tasks = [];
+  try {
+    const spawned = [];
+    let first = true;
+    const runner = new RvcRunner({
+      root,
+      spawnImpl: () => {
+        const child = fakeServer({ tasks, dieOnConvert: first });
+        spawned.push(child);
+        first = false;
+        return child;
+      },
+    });
+    const out = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'retry.wav') });
+    assert.equal(out.ok, true, `死了一次就没重试：${out.reason}`);
+    assert.equal(spawned.length, 2, '没重起进程');
+    assert.equal(tasks.filter((t) => t.cmd === 'convert').length, 2, '没把同一条任务再交一次');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('重试也只试一次：连着死不许无限重起', async () => {
+  const { root, input } = fakeRoot();
+  try {
+    const spawned = [];
+    const runner = new RvcRunner({
+      root,
+      spawnImpl: () => {
+        const child = fakeServer({ tasks: [], dieOnConvert: true });
+        spawned.push(child);
+        return child;
+      },
+    });
+    const out = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'x.wav') });
+    assert.equal(out.ok, false, '进程一直死却报了成功');
+    assert.ok(spawned.length <= 3, `重起了 ${spawned.length} 个进程，没封顶`);
+    assert.match(out.reason, /退出了|没出声音/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('内存不够时直接说清楚，不去起一个注定 segfault 的进程', async () => {
+  const { root, input } = fakeRoot();
+  const spawned = [];
+  try {
+    const runner = new RvcRunner({ root, minFreeGb: 999, freeMemory: () => 1.2, spawnImpl: () => { spawned.push(1); return fakeServer({ tasks: [] }); } });
+    const out = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'm.wav') });
+    assert.equal(out.ok, false);
+    assert.match(out.reason, /内存不够/);
+    assert.match(out.reason, /关掉一些程序/);
+    assert.equal(spawned.length, 0, '内存不够还把进程起了');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
+});
+
+test('崩过两次不是永久拒绝：过了冷却时间会再试', async () => {
+  const { root, input } = fakeRoot();
+  try {
+    const spawned = [];
+    const runner = new RvcRunner({ root, spawnImpl: () => { const c = fakeServer({ tasks: [] }); spawned.push(c); return c; } });
+    runner.deaths = 2;
+    runner.lastDeathAt = Date.now();
+    const blocked = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'c1.wav') });
+    assert.equal(blocked.ok, false, '冷却期内该拦');
+    assert.match(blocked.reason, /秒后会再试一次/);
+    runner.lastDeathAt = Date.now() - 91000;
+    const again = await rvcConvert(input, 'voice-1', { root, runner, outFile: path.join(root, 'c2.wav') });
+    assert.equal(again.ok, true, '过了冷却还不肯再试：' + again.reason);
+    assert.ok(spawned.length >= 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 8, retryDelay: 80 });
+  }
 });

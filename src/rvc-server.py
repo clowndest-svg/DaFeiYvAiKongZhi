@@ -40,6 +40,16 @@ def do_load(task):
     if STATE["pth"] == pth and STATE["index"] == index:
         return {"ok": True, "loaded": STATE["loaded"], "ms": 0, "cached": True}
     rvc = ensure_engine()
+    # 换模型之前先把上一个从内存里丢掉：连着载入第三个会把机器吃干
+    # （实测 OpenBLAS malloc failed，整个工人进程直接没了，用户看到的是"这条没变出声"）。
+    if STATE["loaded"] and STATE["pth"] != pth:
+        try:
+            import gc
+            rvc.vc.model_infos.clear()
+            rvc.vc.net_g = None
+            gc.collect()
+        except Exception:
+            pass
     rvc.load_model(pth, version="v2", index_path=index)
     STATE["pth"] = pth
     STATE["index"] = index
@@ -81,8 +91,14 @@ def do_convert(task):
     else:
         audio = result
         out_sr = int(rvc.vc.tgt_sr)
-    audio = np.asarray(audio, dtype=np.float32).reshape(-1)
-    sf.write(dst, audio, out_sr)
+    audio = np.asarray(audio)
+    if audio.ndim > 1:
+        audio = audio.reshape(-1)
+    # 同上：int16 原样写；按 float 写会整段削顶。
+    if np.issubdtype(audio.dtype, np.integer):
+        sf.write(dst, audio, out_sr)
+    else:
+        sf.write(dst, audio.astype(np.float32), out_sr)
     size = os.path.getsize(dst)
     if size < 2048:
         return {"ok": False, "error": "输出只有 %d 字节" % size}

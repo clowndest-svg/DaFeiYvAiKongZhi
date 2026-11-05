@@ -143,7 +143,7 @@
       "transpose": 0,
       "indexRate": 0.5,
       "protect": 0.33,
-      "f0": "harvest",
+      "f0": "pm",
       "timeoutSeconds": 180
     },
     "callEnabled": false,

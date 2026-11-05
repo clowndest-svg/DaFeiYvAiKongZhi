@@ -84,7 +84,7 @@ function normalizeOptions(opts) {
   const transpose = Math.max(-24, Math.min(24, Math.round(Number(opts.transpose || 0))));
   const indexRate = Math.max(0, Math.min(1, Number(opts.indexRate ?? 0.5)));
   const protect = Math.max(0, Math.min(0.5, Number(opts.protect ?? 0.33)));
-  const f0 = F0_METHODS.includes(opts.f0) ? opts.f0 : 'harvest';
+  const f0 = F0_METHODS.includes(opts.f0) ? opts.f0 : 'pm';
   return { transpose, indexRate, protect, f0 };
 }
 

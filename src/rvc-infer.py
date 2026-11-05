@@ -66,10 +66,15 @@ def main():
         else:
             audio = result
             out_sr = int(rvc.vc.tgt_sr)
-        audio = np.asarray(audio, dtype=np.float32)
+        audio = np.asarray(audio)
         if audio.ndim > 1:
             audio = audio.reshape(-1)
-        sf.write(args.dst, audio, out_sr)
+        # vc_single 交回来的是 int16（实测 min -18240 / max 28953）：整数就按整数写，
+        # 转成 float 再写会被当成 -1..1 归一化，超出部分全部削顶，听起来就是卡住的广播。
+        if np.issubdtype(audio.dtype, np.integer):
+            sf.write(args.dst, audio, out_sr)
+        else:
+            sf.write(args.dst, audio.astype(np.float32), out_sr)
 
         size = os.path.getsize(args.dst)
         if size < 2048:

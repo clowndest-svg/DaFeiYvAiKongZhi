@@ -234,7 +234,7 @@ export function normalizeSettings(settings) {
   rvc.transpose = Math.max(-24, Math.min(24, Math.round(numberOr(rvc.transpose, 0))));
   rvc.indexRate = Math.max(0, Math.min(1, numberOr(rvc.indexRate, 0.5)));
   rvc.protect = Math.max(0, Math.min(0.5, numberOr(rvc.protect, 0.33)));
-  rvc.f0 = ['harvest', 'pm', 'crepe', 'rmvpe', 'mfcc'].includes(rvc.f0) ? rvc.f0 : 'harvest';
+  rvc.f0 = ['harvest', 'pm', 'crepe', 'rmvpe', 'mfcc'].includes(rvc.f0) ? rvc.f0 : 'pm';
   rvc.timeoutSeconds = Math.max(15, Math.min(600, Math.round(numberOr(rvc.timeoutSeconds, 180))));
   s.tts.callEnabled = s.tts?.callEnabled === true;
   s.tts.callDailyMax = Math.min(80, Math.max(0, numberOr(s.tts?.callDailyMax, 40)));
