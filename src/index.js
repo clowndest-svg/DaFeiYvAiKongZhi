@@ -294,6 +294,7 @@ import {
   xActivitySummary,
   xBudgetStatus,
 } from './channels/x-actions.js';
+import { runSentinelBackup, sendSentinelHeartbeat, sentinelStatus } from './sentinel.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1525,6 +1526,22 @@ async function handleApi(req, res, pathname, url) {
       items: found.items || [],
       status: searchStatus(),
     });
+  }
+
+  if (pathname === '/api/sentinel' && method === 'GET') {
+    return sendJson(res, 200, { ok: true, status: sentinelStatus() });
+  }
+
+  if (pathname === '/api/sentinel/run' && method === 'POST') {
+    // 界面点"现在就报平安 / 现在就存一份"：跑的是和定时任务同一段代码，读数也就是同一份
+    const body = await readJsonBody(req);
+    const what = String(body.what || 'heartbeat');
+    if (what === 'backup') return sendJson(res, 200, await runSentinelBackup({ reason: '手动' }));
+    if (what === 'heartbeat') {
+      const qq = onebot?.status ? onebot.status() : {};
+      return sendJson(res, 200, await sendSentinelHeartbeat({ qq: qq.connected === true, x: kvGet('x_logged_in') === '1', xhs: kvGet('xhs_logged_in') === '1', mock: env.mock }));
+    }
+    throw new HttpError(400, '只有 heartbeat/backup 两种');
   }
 
   if (pathname === '/api/x/status' && method === 'GET') {

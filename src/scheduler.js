@@ -118,7 +118,32 @@ export class Scheduler {
         if (isRiskyError(error)) triggerXhsCooldown(6, error.message);
       });
     }, 10 * 60 * 1000);
+    // 哨兵：半小时报一次平安，超过 20 小时没存过档就补一份。
+    // 它挂了不影响任何主链路——心跳和备份都只写自己的读数，失败就如实记着。
+    this.sentinelTimer = setInterval(() => {
+      this.pollSentinel().catch((error) => {
+        this.lastSentinelError = String(error?.message || error).slice(0, 160);
+        logger.warn('哨兵没跑成', { error: this.lastSentinelError });
+      });
+    }, 30 * 60 * 1000);
     logger.info('主动行为调度器已启动');
+  }
+
+  async pollSentinel() {
+    const { sendSentinelHeartbeat, runSentinelBackup } = await import('./sentinel.js');
+    const qq = this.onebot?.status ? this.onebot.status() : {};
+    const beat = await sendSentinelHeartbeat({
+      qq: qq.connected === true,
+      x: Boolean(kvGet('x_logged_in') === '1'),
+      xhs: Boolean(kvGet('xhs_logged_in') === '1'),
+      mock: Boolean(env.mock),
+    });
+    const last = kvGetJson('sentinel_backup', null);
+    const ageHours = last?.at ? (Date.now() - new Date(last.at).getTime()) / 3600000 : 999;
+    let backup = null;
+    if (ageHours >= 20) backup = await runSentinelBackup({ reason: '定时' });
+    this.lastSentinelError = beat.ok ? (backup && !backup.ok ? `备份没成：${backup.reason}` : '') : `心跳没成：${beat.reason}`;
+    return { beat: beat.ok, backup: backup ? backup.ok : 'skip', reason: this.lastSentinelError };
   }
 
   stop() {
@@ -126,6 +151,7 @@ export class Scheduler {
     if (this.qzoneTimer) clearInterval(this.qzoneTimer);
     if (this.xTimer) clearInterval(this.xTimer);
     if (this.xhsTimer) clearInterval(this.xhsTimer);
+    if (this.sentinelTimer) clearInterval(this.sentinelTimer);
     this.timer = null;
     this.qzoneTimer = null;
     this.xhsTimer = null;

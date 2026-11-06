@@ -3031,6 +3031,25 @@ function bindSocial() {
   }));
 }
 
+// 异机哨兵的状态：全部数字都来自 /api/sentinel，界面不自己算节奏
+async function loadSentinelStatus() {
+  const el = $('#sentinelStatusText');
+  if (!el) return;
+  try {
+    const data = await api('/api/sentinel');
+    const s = data.status || {};
+    const beat = s.lastHeartbeat;
+    const backup = s.lastBackup;
+    const bits = [];
+    bits.push(s.configured ? `目标机器 ${s.host}` : `没配：${s.reason || '未知'}`);
+    bits.push(beat ? `上次报平安 ${String(beat.at || '').slice(5, 16).replace('T', ' ')}${beat.ok ? (s.heartbeatHealthy ? '（准点）' : '（超过一个半小时没报了）') : `（没报上：${beat.reason || '未知'}）`}` : '还没报过');
+    bits.push(backup && backup.at ? `上次存档 ${String(backup.at).slice(5, 10)} ${backup.ok ? `${Math.round((backup.bytes || 0) / 1024)} KB` : `失败：${backup.reason || '未知'}`}` : '还没存过档');
+    el.textContent = bits.join(' · ');
+  } catch (error) {
+    el.textContent = `读不到哨兵状态：${error.message}`;
+  }
+}
+
 function bindSettings() {
   $('#reloadSettingsBtn').addEventListener('click', async () => {
     if (state.settingsDirty && !confirm('重新载入会放弃当前未保存修改。请先复制需要保留的内容。继续？')) return;
@@ -3387,8 +3406,18 @@ function bindSettings() {
     toast(data.ok ? `发出去了${data.already ? '（这条之前已经发过，没重复点）' : ''}` : `没发：${data.reason || data.error || '未知原因'}`, data.ok ? undefined : 'error');
     await loadXStatus();
   }));
-  $('#xhsLoginBtn').addEventListener('click', () => withBusy($('#xhsLoginBtn'), async () => {
-    try {
+  $('#sentinelBeatBtn').addEventListener('click', () => withBusy($('#sentinelBeatBtn'), async () => {
+    const data = await api('/api/sentinel/run', { method: 'POST', body: JSON.stringify({ what: 'heartbeat' }) });
+    toast(data.ok ? '报过平安了' : `没报上：${data.reason || '未知原因'}`, data.ok ? undefined : 'error');
+    await loadSentinelStatus();
+  }));
+  $('#sentinelBackupBtn').addEventListener('click', () => withBusy($('#sentinelBackupBtn'), async () => {
+    const data = await api('/api/sentinel/run', { method: 'POST', body: JSON.stringify({ what: 'backup' }) });
+    toast(data.ok ? `存了一份（${Math.round((data.bytes || 0) / 1024)} KB）` : `没存成：${data.reason || '未知原因'}`, data.ok ? undefined : 'error');
+    await loadSentinelStatus();
+  }));
+
+  $('#xhsLoginBtn').addEventListener('click', () => withBusy($('#xhsLoginBtn'), async () => {    try {
       stopXhsQrPolling();
       await api('/api/xhs/login', { method: 'POST' });
       toast('登录窗口已打开，在 Chrome 里扫码或用手机号验证码登录。');
@@ -4481,6 +4510,7 @@ async function init() {
     loadQqSetup().catch(() => {});
     loadQzoneStatus().catch(() => {});
     loadXhsStatus().catch(() => {});
+    loadSentinelStatus().catch(() => {});
     if (state.status && !state.status.mock && !state.status.keyConfigured) {
       toast('还没有配置 DeepSeek API Key：编辑 .env 里的 DEEPSEEK_API_KEY，然后重启。', 'error');
     }
