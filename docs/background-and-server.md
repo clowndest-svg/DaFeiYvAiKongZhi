@@ -20,7 +20,7 @@ powershell.exe -NoProfile -File .\tools\install-background.ps1
 powershell.exe -NoProfile -File .\tools\install-background.ps1 -Remove
 ```
 
-此前自动审批拒绝代理启动第三方运行时，因此安装启用步骤由操作者执行。代码和策略测试不能代替实机隐藏启动、重启恢复及重启 Windows 验收。已手动启动的高权限运行时可能对普通权限守护不可见，此时保持待检查，不尝试提权或重复运行。
+此前自动审批拒绝代理启动第三方运行时，因此安装启用步骤由操作者执行。操作者已安装；守护自身退出恢复已实测通过。操作者关闭原手动 PowerShell 后，运行时经一次尝试隐藏恢复，已有机器人 QQ 自动重连，恢复后的独立发送取得回执。Windows 整机重启登录仍未实测。已手动启动的高权限运行时可能对普通权限守护不可见，此时保持待检查，不尝试提权或重复运行。
 
 ## 服务器
 

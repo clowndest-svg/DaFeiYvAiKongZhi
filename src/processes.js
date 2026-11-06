@@ -54,7 +54,7 @@ export function isOwnedProcess(process, kind) {
 export function listOwned(kind) {
   if (env.testMode || process.platform !== 'win32') return [];
   const name=kind==='napcat'?'NapCatWinBootMain.exe':'node.exe';
-  const raw=windowsQuery(`Get-CimInstance Win32_Process -Filter "Name='${name}'" | Select-Object ProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`);
+  const raw=windowsQuery(`Get-CimInstance Win32_Process -Filter "Name='${name}'" | Select-Object ProcessId,ParentProcessId,ExecutablePath,CommandLine | ConvertTo-Json -Compress`);
   const values=raw.trim()?JSON.parse(raw):[];
   return (Array.isArray(values)?values:[values]).filter(item=>isOwnedProcess(item,kind));
 }
@@ -78,8 +78,14 @@ export function countQqProcesses() {
   }
 }
 
+export function ownedProcessRoots(processes) {
+  const ids = new Set(processes.map(item => item.ProcessId));
+  return processes.filter(item => !ids.has(item.ParentProcessId));
+}
 export async function stopOwned(kind) {
-  const targets=listOwned(kind);
+  // SnowLuma forks its worker with the same executable and entry path. Killing
+  // the root tree already stops that worker; do not kill it a second time.
+  const targets=ownedProcessRoots(listOwned(kind));
   for(const item of targets) await new Promise((resolve,reject)=>{
     const child=spawn('taskkill.exe',['/PID',String(item.ProcessId),'/T','/F'],{stdio:'ignore',windowsHide:true});
     const timer=setTimeout(()=>{child.kill();reject(new Error('停止进程超时'));},10000);
