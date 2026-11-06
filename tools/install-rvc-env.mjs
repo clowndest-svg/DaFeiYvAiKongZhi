@@ -1,5 +1,6 @@
 // RVC 变声引擎安装：隔离 Python 环境 + rvc-python，全程只写本项目 voice/ 目录，不动系统 Python。
 // 每一步都把结论写进日志，最后 EXIT 行与产物一起才算数（后台任务的 "completed" 早于子进程结束）。
+import './project-env.mjs';
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -14,7 +15,7 @@ fs.mkdirSync(VOICE, { recursive: true });
 function run(exe, args, { timeout = 1800000, cwd = ROOT, env = {} } = {}) {
   const line = `$ ${exe} ${args.join(' ')}\n`;
   fs.appendFileSync(LOG, line);
-  const r = spawnSync(exe, args, { cwd, env: { ...process.env, ...env }, encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(exe, args, { cwd, windowsHide: true, env: { ...process.env, ...env }, encoding: 'utf8', timeout, maxBuffer: 64 * 1024 * 1024 });
   const out = String(r.stdout || '') + String(r.stderr || '');
   fs.appendFileSync(LOG, out.split(/\r?\n/).slice(-40).join('\n') + `\n--- exit=${r.status ?? 'null'} ---\n`);
   return { status: r.status, out };

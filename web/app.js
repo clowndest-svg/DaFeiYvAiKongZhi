@@ -3567,12 +3567,12 @@ function bindSettings() {
     await loadXStatus();
   }));
   $('#sentinelBeatBtn').addEventListener('click', () => withBusy($('#sentinelBeatBtn'), async () => {
-    const data = await api('/api/sentinel/run', { method: 'POST', body: JSON.stringify({ what: 'heartbeat' }) });
+    const data = await api('/api/sentinel/run', { method: 'POST', body: { what: 'heartbeat' } });
     toast(data.ok ? '报过平安了' : `没报上：${data.reason || '未知原因'}`, data.ok ? undefined : 'error');
     await loadSentinelStatus();
   }));
   $('#sentinelBackupBtn').addEventListener('click', () => withBusy($('#sentinelBackupBtn'), async () => {
-    const data = await api('/api/sentinel/run', { method: 'POST', body: JSON.stringify({ what: 'backup' }) });
+    const data = await api('/api/sentinel/run', { method: 'POST', body: { what: 'backup' } });
     toast(data.ok ? `存了一份（${Math.round((data.bytes || 0) / 1024)} KB）` : `没存成：${data.reason || '未知原因'}`, data.ok ? undefined : 'error');
     await loadSentinelStatus();
   }));

@@ -1,6 +1,7 @@
 // GPT-SoVITS（本地音色克隆引擎）安装器。一切落 E 盘，不碰 C。
 // 用法：node tools/install-voice-clone.mjs --check   只看磁盘/网络/目标目录
 //       node tools/install-voice-clone.mjs --install 下载官方整合包（GB 级，可能要几小时）
+import './project-env.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

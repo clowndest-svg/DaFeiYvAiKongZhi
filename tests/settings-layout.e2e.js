@@ -42,6 +42,12 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   assert.equal((await current()).settings.search.dailyMax, 13);
   assert.notEqual((await current()).settings.proactive.idleMinutesMin, 37);
   assert.notEqual((await current()).settings.companion.name, '分区切换保留草稿');
+  await page.getByRole('tab', { name: '界面与系统', exact: true }).click();
+  const sentinelRequests = [];
+  await page.route('**/api/sentinel/run', async route => { sentinelRequests.push(route.request().postDataJSON()); await route.fulfill({ json: { ok: true, bytes: 1024 } }); });
+  await page.locator('#sentinelBeatBtn').click();
+  await page.locator('#sentinelBackupBtn').click();
+  assert.deepEqual(sentinelRequests, [{ what: 'heartbeat' }, { what: 'backup' }], '报平安和备份不能重复编码或混为同一操作');
   await page.getByRole('tab', { name: '语音与感官', exact: true }).click();
   assert.equal(await page.locator('#rvcModelList .compare-row').count(), 6);
   assert.equal(await page.locator('#rvcModelList').isVisible(), false, '目录不应铺在主页面');

@@ -2491,7 +2491,7 @@ async function handleRequest(req, res) {
 
 function openBrowser(url) {
   if (process.platform === 'win32') {
-    spawn('cmd', ['/c', 'start', '', url], { detached: true, stdio: 'ignore' }).unref();
+    spawn('cmd', ['/c', 'start', '', url], { detached: true, windowsHide: true, stdio: 'ignore' }).unref();
   } else {
     spawn('xdg-open', [url], { detached: true, stdio: 'ignore' }).unref();
   }

@@ -1,3 +1,4 @@
+import './project-env.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -10,6 +11,7 @@ const files = fs.readdirSync(path.join(root, 'tests')).filter((name) => name.end
 const before = new Set(fs.existsSync(path.join(root, 'data')) ? fs.readdirSync(path.join(root, 'data')) : []);
 const child = spawn(process.execPath, ['--test', ...files.map((name) => path.join(root, 'tests', name))], {
   cwd: root,
+  windowsHide: true,
   env: {
     ...process.env,
     NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --import=${isolate}`.trim(),

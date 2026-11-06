@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { env, paths } from '../src/config.js';
+import { env, paths, storage } from '../src/config.js';
+import { cleanStorage } from '../src/storage.js';
 import { qqProvider } from '../src/qq-provider.js';
 import { listOwned, startQqProvider } from '../src/processes.js';
 import { acquireRuntimeLock } from '../src/runtime-lock.js';
@@ -17,6 +18,7 @@ try {
   for (const kind of ['app', 'qq']) if (Array.isArray(previous?.[kind])) attempts[kind] = previous[kind].filter(Number.isFinite);
 } catch { /* A first run has no retry history. */ }
 let stopping = false;
+let lastStorageCleanup = 0;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function save(state) {
   state.attempts = attempts;
@@ -31,7 +33,7 @@ function snowProbe() {
   if (env.testMode || process.platform !== 'win32') return 'unknown';
   const script = `$ErrorActionPreference='Stop'; $p=@(Get-CimInstance Win32_Process -Filter "Name='node.exe'" | Select-Object ExecutablePath,CommandLine); ConvertTo-Json -InputObject $p -Compress`;
   try {
-    const raw = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
+    const raw = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 10000 });
     const all = JSON.parse(raw);
     if (!Array.isArray(all) || all.some(p => !p.ExecutablePath)) return 'unknown';
     const exe = path.join(paths.root, 'snowluma', 'node.exe').toLowerCase();
@@ -40,6 +42,16 @@ function snowProbe() {
 }
 async function tick() {
   const state = { at: new Date().toISOString(), provider: qqProvider, disabled: stopping || fs.existsSync(disabledFile) };
+  if (!state.disabled && Date.now() - lastStorageCleanup > 6 * 3600000) {
+    lastStorageCleanup = Date.now();
+    try {
+      const script = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress';
+      const processes = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding: 'utf8', windowsHide: true, timeout: 10000 }));
+      if (!Array.isArray(processes) || !processes.length) throw new Error('Process inventory unavailable');
+      const report = cleanStorage(storage, { hasLiveDescendants: pid => processes.some(item => item.ParentProcessId === pid) });
+      fs.writeFileSync(path.join(storage.root, 'cleanup-state.json'), JSON.stringify(report));
+    } catch { /* Unknown ownership never triggers a cleanup or service restart. */ }
+  }
   let appProbe = 'unknown';
   try { appProbe = listOwned('server').length ? 'present' : 'absent'; } catch { /* Do not start on ambiguous ownership. */ }
   const appHealthy = await healthy(`http://127.0.0.1:${env.port}/api/health`);
@@ -71,8 +83,14 @@ async function tick() {
 export async function main() {
   if (process.platform !== 'win32' || env.testMode) throw new Error('后台守护只能由 Windows 操作者启用，隔离测试不启动真实服务');
   const release = acquireRuntimeLock(lockDir);
+  const hostPid = process.ppid;
   process.on('SIGINT', () => { stopping = true; }); process.on('SIGTERM', () => { stopping = true; });
-  try { while (!stopping && !fs.existsSync(disabledFile)) { await tick(); await sleep(15000); } } finally { release(); }
+  try { while (!stopping && !fs.existsSync(disabledFile)) {
+    if (process.env.BIZHI_WATCHDOG_MANAGED === '1') {
+      try { process.kill(hostPid, 0); } catch (error) { if (error.code === 'ESRCH') break; }
+    }
+    await tick(); await sleep(15000);
+  } } finally { release(); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(error => { console.error(error.message); process.exitCode = 1; });

@@ -1,3 +1,4 @@
+import './project-env.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -11,7 +12,7 @@ for (const dir of ['src', 'web', 'tests', 'tools']) {
     if (!entry.isFile() || !/\.(js|mjs|cjs)$/.test(entry.name)) continue;
     count += 1;
     const file = path.join(entry.parentPath, entry.name);
-    const checked = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
+    const checked = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8', windowsHide: true });
     if (checked.status !== 0) { failures += 1; console.error(checked.stderr || checked.error?.message); }
   }
 }

@@ -49,7 +49,7 @@ function windowsCommandLineForPort(port) {
     'if ($c) { [Console]::Out.WriteLine($c) }',
   ].join('\n');
   try {
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], {
       encoding: 'utf8',
       windowsHide: true,
       timeout: 8000,
@@ -92,7 +92,7 @@ export function chromeHoldingProfile(profileDir) {
   const ps = `Get-CimInstance Win32_Process -Filter "Name='chrome.exe' OR Name='msedge.exe'" | Where-Object { $_.CommandLine -match [regex]::Escape($env:BIZHI_PROFILE_MATCH) } | ForEach-Object { "$($_.ProcessId)|$($_.ParentProcessId)" }`;
   let rows;
   try {
-    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], {
+    const out = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', ps], {
       encoding: 'utf8',
       timeout: 20000,
       windowsHide: true,

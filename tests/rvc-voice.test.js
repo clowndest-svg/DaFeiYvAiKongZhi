@@ -397,9 +397,9 @@ test('真推理不许削顶：输出必须是 16 位整型，不是被钳平的�
     'sr=24000;t=np.arange(int(sr*1.2))/sr',
     'y=(0.25*np.sin(2*np.pi*220*t)).astype(np.float32)',
     'sf.write(sys.argv[1],y,sr)',
-  ].join('\n'), src], { encoding: 'utf8', timeout: 60000 });
+  ].join('\n'), src], { encoding: 'utf8', windowsHide: true, timeout: 60000 });
   assert.equal(voice.status, 0, `造输入音频失败：${voice.stderr}`);
-  const r = spawnSync(p.python, [p.worker, '--model', path.join(p.root, model.pth), '--src', src, '--dst', dst, '--f0', 'pm'], { encoding: 'utf8', timeout: 300000 });
+  const r = spawnSync(p.python, [p.worker, '--model', path.join(p.root, model.pth), '--src', src, '--dst', dst, '--f0', 'pm'], { encoding: 'utf8', windowsHide: true, timeout: 300000 });
   const out = JSON.parse(String(r.stdout).trim().split(/\r?\n/).filter(Boolean).pop() || '{}');
   assert.equal(out.ok, true, `真推理没出声音：${out.error || r.stderr}`);
   const head = fs.readFileSync(dst).slice(0, 44);

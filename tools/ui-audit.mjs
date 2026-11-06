@@ -4,6 +4,7 @@
 //
 //   node tools/ui-audit.mjs            # 只判定
 //   node tools/ui-audit.mjs --shots    # 顺便把截图写到 data/ui-audit/run
+import './project-env.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
@@ -34,6 +35,7 @@ function startDemo() {
     presence: { neuroEnabled: true, sensesEnabled: true, forgettingCurve: true, cameraEnabled: true, micEnabled: true },
   }));
   const child = spawn(process.execPath, [path.join(ROOT, 'src', 'index.js')], {
+    windowsHide: true,
     cwd: ROOT,
     env: {
       ...process.env,

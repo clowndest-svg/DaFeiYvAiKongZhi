@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { deepMerge, ensureDir, readJson, writeJsonAtomic } from './util.js';
+import { configureStorage } from './storage.js';
 
 const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
 export const ROOT = path.resolve(SRC_DIR, '..');
@@ -45,6 +46,7 @@ function testGuardedDirs() {
 const guarded = testGuardedDirs();
 process.env.BIZHI_DATA_DIR = guarded.data;
 process.env.BIZHI_SETTINGS_FILE = guarded.settings;
+export const storage = configureStorage(guarded.data);
 
 export const paths = {
   root: ROOT,

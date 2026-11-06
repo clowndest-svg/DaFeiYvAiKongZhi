@@ -5,12 +5,12 @@
   "type": "module",
   "description": "小知 —— 本地运行的 AI 女友：三层记忆、心情、主动找你、QQ 通道",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
-    "test": "node tools/test.mjs",
-    "test:local": "node tools/test.mjs --local",
-    "check": "node tools/check.mjs",
-    "test:browser": "node --test tests/browser.e2e.js tests/presence.e2e.js tests/settings-layout.e2e.js",
+    "start": "node --import ./tools/project-env.mjs src/index.js",
+    "dev": "node --import ./tools/project-env.mjs --watch src/index.js",
+    "test": "node --import ./tools/project-env.mjs tools/test.mjs",
+    "test:local": "node --import ./tools/project-env.mjs tools/test.mjs --local",
+    "check": "node --import ./tools/project-env.mjs tools/check.mjs",
+    "test:browser": "node --import ./tools/project-env.mjs --test tests/browser.e2e.js tests/presence.e2e.js tests/settings-layout.e2e.js",
     "audit:ui": "node tools/ui-audit.mjs",
     "tts:install-local": "node tools/install-local-tts.mjs",
     "smoke": "node tools/smoke-llm.js"

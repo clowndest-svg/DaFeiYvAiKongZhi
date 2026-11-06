@@ -2,6 +2,7 @@
 // 用法：node tools/fetch-rvc-models.mjs [--limit=N] [--check]
 //   --check 只列目录不下载。默认上限 40 个。
 // 全程走本机代理（直连 huggingface 在这张网上是 000 超时），产物只落 voice/rvc/，不进仓库。
+import './project-env.mjs';
 import { spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -21,7 +22,7 @@ const LIMIT = Number((argv.find((a) => a.startsWith('--limit=')) || '').split('=
 for (const dir of [MODELS, CACHE]) fs.mkdirSync(dir, { recursive: true });
 
 function curl(args, timeout = 600000) {
-  return spawnSync('curl', ['-sS', '--max-time', String(Math.round(timeout / 1000)), '-x', PROXY, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+  return spawnSync('curl', ['-sS', '--max-time', String(Math.round(timeout / 1000)), '-x', PROXY, ...args], { windowsHide: true, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 }
 
 function tree(repo) {
@@ -120,7 +121,7 @@ function pyExtract(zipFile, outDir) {
     '        open(os.path.join(out,"sample-"+os.path.basename(n)),"wb").write(zf.read(n))',
     'print("done")',
   ].join('\n');
-  const r = spawnSync(PY, ['-I', '-c', script, zipFile, outDir], { encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
+  const r = spawnSync(PY, ['-I', '-c', script, zipFile, outDir], { windowsHide: true, encoding: 'utf8', maxBuffer: 8 * 1024 * 1024 });
   return { ok: r.status === 0, out: String(r.stdout || '') + String(r.stderr || '') };
 }
 

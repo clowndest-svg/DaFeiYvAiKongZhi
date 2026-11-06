@@ -5,6 +5,7 @@ import childProcess from 'node:child_process';
 import http from 'node:http';
 import https from 'node:https';
 import { syncBuiltinESMExports } from 'node:module';
+import { configureStorage } from '../../src/storage.js';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 process.env.BIZHI_TEST_MODE = '1';
@@ -21,6 +22,7 @@ if (!process.env.BIZHI_DATA_DIR) {
 process.env.BIZHI_SETTINGS_FILE ||= path.join(process.env.BIZHI_DATA_DIR, 'settings.json');
 process.env.BIZHI_PERSONA_FILE ||= path.join(process.env.BIZHI_DATA_DIR, 'persona.md');
 process.env.BIZHI_MOM_LETTER_FILE ||= path.join(process.env.BIZHI_DATA_DIR, 'mom-letter.md');
+configureStorage(process.env.BIZHI_DATA_DIR);
 for (const [destination, source] of [[process.env.BIZHI_PERSONA_FILE, 'persona.md'], [process.env.BIZHI_MOM_LETTER_FILE, 'mom-letter.md']]) {
   if (!fs.existsSync(destination)) {
     fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -32,7 +34,7 @@ const unsafePrograms = /^(taskkill|wscript|cscript|reg|shutdown)(?:\.exe)?$/i;
 const originalSpawn = childProcess.spawn;
 childProcess.spawn = function (file, args, options) {
   if (unsafePrograms.test(path.basename(String(file)))) throw new Error(`Test attempted real process control: ${file}`);
-  return originalSpawn.call(this, file, args, options);
+  return originalSpawn.call(this, file, args, { ...options, windowsHide: true });
 };
 for (const protocol of [http, https]) {
   for (const name of ['request', 'get']) {

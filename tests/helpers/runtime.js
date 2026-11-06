@@ -38,6 +38,7 @@ export async function startTestServer(t, { settings = {}, password = '', env = {
   const dir = fs.mkdtempSync(path.join(ROOT, 'data', 'test-server-'));
   fs.writeFileSync(path.join(dir, 'settings.json'), JSON.stringify(settings));
   const child = spawn(process.execPath, [path.join(ROOT, 'src', 'index.js')], {
+    windowsHide: true,
     cwd: ROOT,
     env: {
       ...process.env,

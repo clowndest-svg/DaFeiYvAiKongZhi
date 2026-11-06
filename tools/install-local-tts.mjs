@@ -1,6 +1,7 @@
 // 把本地 matcha 中文音色装到 voice/matcha/。
 // 需要显式运行（npm run tts:install-local）：产品代码不会自动下载权重。
 // 注意 data-baker 数据集「仅供非商业使用」，所以这套权重只放本机，不进任何对外交付包。
+import './project-env.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';

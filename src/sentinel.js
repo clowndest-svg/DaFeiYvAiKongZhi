@@ -15,7 +15,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
-import { paths, loadSettings } from './config.js';
+import { paths, loadSettings, env } from './config.js';
 import { getDb, kvGetJson, kvSetJson, addEvent } from './db.js';
 import { logger } from './logger.js';
 
@@ -40,7 +40,18 @@ export function sentinelConfig() {
   // host/user 要拼进 ssh 的 user@host，只允许规矩字符——不给任何注入的机会
   if (!/^[\w.-]+$/.test(host) || !/^[A-Za-z0-9._-]+$/.test(user)) return { ok: false, enabled: true, host, user, keyFile, reason: '配置里的 host/user 不是合法字符' };
   if (!fs.existsSync(keyFile)) return { ok: false, enabled: true, host, user, keyFile, reason: '找不到哨兵密钥（data/sentinel/）' };
-  return { ok: true, enabled: true, host, user, keyFile, sshPath: String(raw.sshPath || 'ssh'), reason: '' };
+  const knownHostsFile = path.join(DIR, 'known_hosts');
+  try {
+    if (!fs.existsSync(knownHostsFile)) {
+      // Keep existing host-key pins rather than silently trusting a changed key.
+      // Tests never read the user's real trust store.
+      const previous = path.join(os.homedir(), '.ssh', 'known_hosts');
+      if (!env.testMode && fs.existsSync(previous)) fs.copyFileSync(previous, knownHostsFile, fs.constants.COPYFILE_EXCL);
+      else fs.writeFileSync(knownHostsFile, '', { flag: 'wx', mode: 0o600 });
+    }
+    if (fs.lstatSync(knownHostsFile).isSymbolicLink()) throw new Error('linked trust store');
+  } catch { return { ok: false, enabled: true, host, user, keyFile, reason: '无法准备项目内 SSH 主机校验文件' }; }
+  return { ok: true, enabled: true, host, user, keyFile, knownHostsFile, sshPath: String(raw.sshPath || 'ssh'), reason: '' };
 }
 
 // 命令一律用参数数组传，不经过 shell；command 只由我们自己拼（内容是 base64 或时间戳文件名）。
@@ -50,6 +61,7 @@ function runSsh(cfg, command, { stdinFile = '', timeoutMs = 90000 } = {}) {
     '-o', 'ConnectTimeout=12',
     '-o', 'StrictHostKeyChecking=accept-new',
     '-o', 'IdentitiesOnly=yes',
+    '-o', `UserKnownHostsFile="${cfg.knownHostsFile.replace(/\\/g, '/')}"`,
     '-i', cfg.keyFile,
     `${cfg.user}@${cfg.host}`,
     command,

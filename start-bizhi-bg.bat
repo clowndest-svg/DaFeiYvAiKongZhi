@@ -2,6 +2,9 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 set "OPEN_BROWSER=0"
+if not exist "data\runtime\bootstrap-tmp" mkdir "data\runtime\bootstrap-tmp"
+set "TEMP=%~dp0data\runtime\bootstrap-tmp"
+set "TMP=%TEMP%"
 if not exist "data\logs" mkdir "data\logs"
 if not exist "node_modules\ws" call npm ci
 if errorlevel 1 exit /b 1
