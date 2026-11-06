@@ -95,6 +95,9 @@ test('被 max_tokens 截断：下一轮自动加大预算，不是原样再撞�
 test('模型超时：说成中文超时、不白等第二轮', async () => {
   let calls = 0;
   const original = globalThis.fetch;
+  // Real HTTP has an active socket. The Promise-only mock has no referenced
+  // handle, while AbortSignal.timeout intentionally uses an unref'ed timer.
+  const keepAlive = setTimeout(() => {}, 5000);
   // 真实的 fetch 会听 signal；桩子也必须听，否则这个判据自己会永远挂着（刚踩过）。
   globalThis.fetch = (url, init) => new Promise((resolve, reject) => {
     calls += 1;
@@ -108,6 +111,7 @@ test('模型超时：说成中文超时、不白等第二轮', async () => {
     assert.equal(error.code, 'TIMEOUT');
     assert.equal(calls, 1, '同一轮已经中止的 signal 不可能重试成功，别浪费一次请求');
   } finally {
+    clearTimeout(keepAlive);
     globalThis.fetch = original;
   }
 });
