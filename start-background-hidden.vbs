@@ -1,5 +1,5 @@
 Option Explicit
-Dim fs, sh, root, nodeFile, nodePath, stream, command, result
+Dim fs, sh, root, nodeFile, nodePath, stream, command, result, attempt
 Set fs = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
 root = fs.GetParentFolderName(WScript.ScriptFullName)
@@ -11,6 +11,11 @@ stream.Close
 If Not fs.FileExists(nodePath) Then WScript.Quit 1
 sh.CurrentDirectory = root
 command = Chr(34) & nodePath & Chr(34) & " " & Chr(34) & fs.BuildPath(root, "tools\background.mjs") & Chr(34)
-' Wait keeps the scheduled task alive so IgnoreNew and crash restart take effect.
-result = sh.Run(command, 0, True)
-WScript.Quit result
+' Keep the task alive and retry the supervisor itself; Windows task failure
+' retries are a second fallback, not the only recovery mechanism.
+For attempt = 0 To 3
+  result = sh.Run(command, 0, True)
+  If result = 0 Or fs.FileExists(fs.BuildPath(root, "data\background.disabled")) Then WScript.Quit 0
+  If attempt < 3 Then WScript.Sleep 5000 * (3 ^ attempt)
+Next
+WScript.Quit 1
