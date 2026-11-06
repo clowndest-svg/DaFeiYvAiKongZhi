@@ -5,8 +5,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const ROOT = process.cwd();
-const dataDir = path.join(ROOT, 'data', 'test-qq-notify-' + process.pid);
-fs.mkdirSync(dataDir, { recursive: true });
+// Windows can reuse PIDs across runs; a reused directory retains sent stamps.
+const dataDir = fs.mkdtempSync(path.join(ROOT, 'data', 'test-qq-notify-'));
 process.env.BIZHI_DATA_DIR = dataDir;
 process.env.BIZHI_SETTINGS_FILE = path.join(dataDir, 'settings.json');
 fs.writeFileSync(process.env.BIZHI_SETTINGS_FILE, JSON.stringify({ qq: { desktopNotify: true } }), 'utf8');

@@ -1136,6 +1136,8 @@ function renderMemory() {
     if (item.reasoning) meta.appendChild(el('span', '', item.reasoning));
     main.appendChild(meta);
     card.appendChild(main);
+    const actions = el('div', 'mem-actions');
+    actions.setAttribute('aria-label', '记忆操作');
     const edit = el('button', '', '更正');
     edit.addEventListener('click', () => {
       if ($('#memoryContent textarea')) { toast('请先保存或取消正在更正的记忆'); return; }
@@ -1154,10 +1156,14 @@ function renderMemory() {
           await loadMemory();
         } catch (error) { toast(error.message, 'error'); save.disabled = false; }
       });
-      main.append(input, save, cancel);
+      const editor = el('div', 'mem-editor');
+      const editorActions = el('div', 'btn-row');
+      editorActions.append(save, cancel);
+      editor.append(input, editorActions);
+      main.append(editor);
       input.focus();
     });
-    card.appendChild(edit);
+    actions.appendChild(edit);
     const del = el('button', 'del', '删除');
     del.addEventListener('click', async () => {
       if ($('#memoryContent textarea')) { toast('请先保存或取消更正'); return; }
@@ -1171,7 +1177,8 @@ function renderMemory() {
         toast(error.message, 'error');
       }
     });
-    card.appendChild(del);
+    actions.appendChild(del);
+    card.appendChild(actions);
     box.appendChild(card);
   }
 }
@@ -1386,26 +1393,29 @@ async function copyText(text) {
 function renderPosts() {
   const box = $('#postList');
   box.innerHTML = '';
-  if (!state.posts.length) {
-    box.appendChild(el('div', 'empty', '还没有草稿。让她写一条，看看她今天想说什么。'));
-    return;
+  for (const chip of $$('#postFilters button')) {
+    const active = (state.postFilter || 'all') === chip.dataset.postFilter;
+    chip.classList.toggle('active', active);
+    chip.setAttribute('aria-pressed', String(active));
   }
-  // 小红书和 QQ 空间混在一格里翻着难受：先按平台筛。
-  const chips = el('div', 'tabs');
-  for (const [value, label] of [['all', '全部'], ['xhs', '小红书'], ['qzone', 'QQ 空间']]) {
-    const chip = el('button', '', label);
-    chip.type = 'button';
-    if ((state.postFilter || 'all') === value) chip.classList.add('active');
-    chip.addEventListener('click', () => { state.postFilter = value; renderPosts(); });
-    chips.appendChild(chip);
-  }
-  box.appendChild(chips);
-  const list = state.posts.filter((post) => (state.postFilter || 'all') === 'all' || post.kind === state.postFilter);
+  const query = ($('#postSearch').value || '').trim().toLocaleLowerCase();
+  const status = $('#postStatusFilter').value;
+  const list = state.posts.filter(post =>
+    ((state.postFilter || 'all') === 'all' || post.kind === state.postFilter)
+    && (status === 'all' || post.status === status)
+    && (!query || [post.title, post.content, ...(post.tags || [])].join(' ').toLocaleLowerCase().includes(query)));
+  const pages = Math.max(1, Math.ceil(list.length / 12));
+  state.postPage = Math.min(Math.max(1, state.postPage || 1), pages);
+  $('#postResultCount').textContent = `当前载入 ${state.posts.length} 条，筛选匹配 ${list.length} 条`;
+  $('#postPageInfo').textContent = `第 ${state.postPage} / ${pages} 页`;
+  $('#postPrevPage').disabled = state.postPage === 1;
+  $('#postNextPage').disabled = state.postPage === pages;
+  $('#postPagination').hidden = list.length <= 12;
   if (!list.length) {
-    box.appendChild(el('div', 'empty', '这一类还没有内容。'));
+    box.appendChild(el('div', 'empty', state.posts.length ? '没有匹配的动态，试试其他平台、状态或关键词。' : '还没有草稿。让她写一条，看看她今天想说什么。'));
     return;
   }
-  for (const post of list) {
+  for (const post of list.slice((state.postPage - 1) * 12, state.postPage * 12)) {
     const card = el('div', 'card post-card');
     const head = el('div', 'post-head');
     head.appendChild(el('span', `platform-chip ${post.kind}`, state.labels[post.kind] || post.kind));
@@ -1475,7 +1485,7 @@ function renderPosts() {
       const link = el('a', '', '打开');
       link.href = externalUrl;
       link.target = '_blank';
-      link.rel = 'noreferrer';
+      link.rel = 'noopener noreferrer';
       link.className = 'link-btn';
       actions.appendChild(link);
     }
@@ -3121,6 +3131,15 @@ function bindMemory() {
 }
 
 function bindSocial() {
+  $$('[data-post-filter]').forEach(button => button.addEventListener('click', () => {
+    state.postFilter = button.dataset.postFilter; state.postPage = 1; renderPosts();
+  }));
+  for (const [id, event] of [['#postSearch', 'input'], ['#postStatusFilter', 'change']]) {
+    $(id).addEventListener(event, () => { state.postPage = 1; renderPosts(); });
+  }
+  for (const [id, delta] of [['#postPrevPage', -1], ['#postNextPage', 1]]) {
+    $(id).addEventListener('click', () => { state.postPage = (state.postPage || 1) + delta; renderPosts(); $('#postFilters').scrollIntoView({ block: 'nearest' }); });
+  }
   $$('[data-post-kind]').forEach((button) => {
     button.addEventListener('click', () => withBusy(button, () => generatePost(button.dataset.postKind)));
   });

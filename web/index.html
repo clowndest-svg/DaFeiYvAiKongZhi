@@ -318,7 +318,21 @@
               <p class="muted small" id="xhsDmResult">私信状态读取中…</p>
             </div>
 
-            <div class="post-grid" id="postList"></div>
+            <section class="post-browser" aria-label="动态记录">
+              <div class="post-browser-head"><h3>动态记录</h3><p id="postResultCount" class="muted small" role="status"></p></div>
+              <div class="tabs" id="postFilters" aria-label="按平台筛选">
+                <button type="button" data-post-filter="all" aria-pressed="true">全部</button>
+                <button type="button" data-post-filter="xhs" aria-pressed="false">小红书</button>
+                <button type="button" data-post-filter="qzone" aria-pressed="false">QQ 空间</button>
+                <button type="button" data-post-filter="douyin" aria-pressed="false">抖音</button>
+              </div>
+              <div class="post-search-tools">
+                <label>搜索动态<input id="postSearch" type="search" maxlength="200" placeholder="标题、正文或标签"></label>
+                <label>发布状态<select id="postStatusFilter"><option value="all">全部状态</option><option value="draft">草稿</option><option value="approved">已批准</option><option value="posted">已发布</option></select></label>
+              </div>
+              <div class="post-grid" id="postList"></div>
+              <div class="list-pagination" id="postPagination" hidden><button type="button" id="postPrevPage">上一页</button><span id="postPageInfo" role="status"></span><button type="button" id="postNextPage">下一页</button></div>
+            </section>
 
             <div class="card xhs-note-lab">
               <div class="interaction-head">
