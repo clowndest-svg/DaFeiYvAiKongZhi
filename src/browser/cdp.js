@@ -325,6 +325,17 @@ export class CdpBrowser {
       } catch {
         return;
       }
+      // X 的回复框有未保存内容时注册了 beforeunload，我们接着导航走就会弹出
+      // "Leave site? Changes you made may not be saved."——那个原生框会冻结这个标签页：
+      // 导航不提交、后面的点击全不落地，报错看着像"选择器过期"（实测就是这么卡住的）。
+      // 自动化没人去点"Leave"，所以在这里替它答应，并留一条日志说明为什么页面被跳过。
+      if (message.method === 'Page.javascriptDialogOpening') {
+        const type = message.params?.type || '';
+        const prompt = String(message.params?.message || '').slice(0, 60);
+        logger.info('浏览器弹了原生对话框，已自动应答', { type, prompt });
+        this.send('Page.handleJavaScriptDialog', { accept: true }, 5000).catch(() => {});
+        return;
+      }
       if (!message.id) return;
       const entry = this.pending.get(message.id);
       if (!entry) return;

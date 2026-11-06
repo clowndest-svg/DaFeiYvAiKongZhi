@@ -372,28 +372,68 @@ async function readXFollowGraphLocked(limit = 12) {
 
 // ---- 写：只有这一类是不可撤回的，全部要求逐字核对 ------------------------------
 
-async function clickTweetActionLocked(href, testid, labelRegex) {
-  const found = await browser.evaluate(String.raw`(({ href, testid, labelRegex }) => {
+// 动作按钮按 testid 认，不按界面语言认：这台机器的 X 界面是中文的
+// （aria 实测是「1 喜欢次数。喜欢了」），只匹配 Like/Unlike 就读不到自己刚做成的动作。
+// 喜欢/转帖在"已做/未做"两种状态下 testid 不一样，所以每个动作给一对 id，
+// 出现"已做"那个 id 就等于 pressed=true。
+const X_ACTIONS = {
+  like: { ids: ['like', 'unlike'], active: 'unlike', aria: 'Like|Unlike|喜欢|取消喜欢', label: '点赞' },
+  retweet: { ids: ['retweet', 'unretweet'], active: 'unretweet', aria: 'Repost|Undo Repost|转帖|取消转帖', label: '转推' },
+  reply: { ids: ['reply'], active: '', aria: 'Reply|回复', label: '回复' },
+};
+
+// 找到那条卡片上的动作按钮：只标出来并回报状态，不在页面里 click()——
+// 实测 X 这套界面对合成点击完全不响应（点赞点了状态不翻、发送点了没有回复）。
+function actionProbe(spec, href) {
+  return String.raw`(() => {
+    const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+    const ids = ${JSON.stringify(spec.ids)};
+    const active = ${JSON.stringify(spec.active)};
     const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
     const card = cards.find((c) => {
       const a = c.querySelector('a[href*="/status/"]');
-      return a && a.getAttribute('href').includes(href);
+      return a && a.getAttribute('href').includes(${JSON.stringify(String(href || ''))});
     });
-    if (!card) return { ok: false, reason: '找不到那条推文' };
-    let button = card.querySelector('[data-testid=\"' + testid + '\"]');
-    if (!button) {
-      button = [...card.querySelectorAll('button')].find((b) => new RegExp(labelRegex, 'i').test(b.getAttribute('aria-label') || ''));
+    if (!card) return { found: false, reason: '找不到那条推文' };
+    let button = null;
+    for (const id of ids) {
+      button = card.querySelector('[data-testid="' + id + '"]');
+      if (button) break;
     }
-    if (!button) return { ok: false, reason: '那条推文上没有这个按钮' };
-    // 只标出来，不在页面里 click()：实测 X 这套界面对合成点击完全不响应
-    // （点赞点了状态不翻、发送点了没有回复——所有动作都是同一个原因）。
+    if (!button) {
+      button = [...card.querySelectorAll('button')].find((b) => new RegExp(${JSON.stringify(spec.aria)}, 'i').test(b.getAttribute('aria-label') || ''));
+    }
+    if (!button) return { found: false, reason: '那条推文上没有这个按钮' };
+    const testid = button.getAttribute('data-testid') || '';
+    return {
+      found: true,
+      testid,
+      pressed: Boolean(active) && testid === active,
+      label: clean(button.getAttribute('aria-label')),
+      count: Number(clean(button.innerText).replace(/[^\d]/g, '') || '0'),
+    };
+  })()`;
+}
+
+async function clickTweetActionLocked(href, kind) {
+  const spec = X_ACTIONS[kind] || { ids: [kind], active: '', aria: kind };
+  const state = await browser.evaluate(actionProbe(spec, href), { timeoutMs: 45000 });
+  if (!state.found) return { ok: false, reason: state.reason };
+  const marked = await browser.evaluate(String.raw`(() => {
+    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
+    const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(${JSON.stringify(String(href || ''))}));
+    if (!card) return false;
+    let button = null;
+    for (const id of ${JSON.stringify(spec.ids)}) { button = card.querySelector('[data-testid="' + id + '"]'); if (button) break; }
+    if (!button) button = [...card.querySelectorAll('button')].find((b) => new RegExp(${JSON.stringify(spec.aria)}, 'i').test(b.getAttribute('aria-label') || ''));
+    if (!button) return false;
     button.setAttribute('data-bizhi-target', 'action');
-    return { ok: true, label: button.getAttribute('aria-label') || '' };
-  })({ href: ${JSON.stringify(href)}, testid: ${JSON.stringify(testid)}, labelRegex: ${JSON.stringify(labelRegex)} })`, { timeoutMs: 45000 });
-  if (!found.ok) return found;
+    return true;
+  })()`);
+  if (!marked) return { ok: false, reason: '那条推文上没有这个按钮' };
   // 真鼠标事件点在标出来的那颗按钮上（合成 click() 实测不生效）。
   if (!(await browser.clickAt('[data-bizhi-target="action"]'))) return { ok: false, reason: '按钮点不到（位置或尺寸读不到）' };
-  return found;
+  return { ok: true, label: state.label, pressed: state.pressed };
 }
 
 // 动作前先站到那条推文自己的页面上：卡片一定在眼前，回复/点赞不用赌时间线还在不在。
@@ -411,20 +451,13 @@ async function openTweet(thread) {
 async function reactXLocked(href, kind = 'like') {
   assertXAction(kind);
   await requireProxy();
-  const map = { like: { testid: 'like', undo: 'unlike', aria: 'Like|Unlike', label: '点赞' }, retweet: { testid: 'retweet', undo: 'unretweet', aria: 'Repost|Undo Repost', label: '转推' } };
-  const spec = map[kind];
+  const spec = X_ACTIONS[kind];
   if (!spec) throw new Error(`不支持的动作：${kind}`);
   await openTweet(threadPath(href));
-  const before = await browser.evaluate(String.raw`(({ href }) => {
-    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
-    const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(href));
-    if (!card) return null;
-    const btn = card.querySelector('button[aria-label*="' + ${JSON.stringify(kind === 'like' ? 'Like' : 'Repost')} + '"]');
-    return { pressed: btn?.getAttribute('aria-pressed') === 'true', count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
-  })({ href: ${JSON.stringify(href)} })`);
-  if (!before) throw new Error('页面上找不到那条推文，这次没点赞/转推');
+  const before = await browser.evaluate(actionProbe(spec, href));
+  if (!before.found) throw new Error(before.reason || '页面上找不到那条推文，这次没点赞/转推');
   if (before.pressed) return { ok: true, already: true };
-  const clicked = await clickTweetActionLocked(href, spec.testid, spec.aria);
+  const clicked = await clickTweetActionLocked(href, kind);
   if (!clicked.ok) throw new Error(clicked.reason || `${spec.label}按钮没点到`);
   await sleep(1500);
   if (kind === 'retweet') {
@@ -437,17 +470,10 @@ async function reactXLocked(href, kind = 'like') {
     if (!confirmed) throw new Error('转推弹层里的确认按钮没找到，这次没转');
     await sleep(1500);
   }
-  const after = await browser.evaluate(String.raw`(({ href, kind }) => {
-    const cards = [...document.querySelectorAll('article[data-testid="tweet"]')];
-    const card = cards.find((c) => (c.querySelector('a[href*="/status/"]')?.getAttribute('href') || '').includes(href));
-    if (!card) return { found: false };
-    const want = kind === 'like' ? /Unlike/ : /Undo Repost/;
-    const btn = [...card.querySelectorAll('button')].find((b) => want.test(b.getAttribute('aria-label') || ''));
-    return { found: true, pressed: btn?.getAttribute('aria-pressed') === 'true' || Boolean(btn), count: Number((btn?.innerText || '0').replace(/[^\d]/g, '') || 0) };
-  })({ href: ${JSON.stringify(href)}, kind: ${JSON.stringify(kind)} })`);
+  const after = await browser.evaluate(actionProbe(spec, href));
   if (!after.found) throw new Error('点完之后页面状态读不到了，这次不算做成');
   assertXReactEvidence({ before: true, after: after.pressed, pressed: after.pressed, countDelta: after.count - before.count });
-  return { ok: true, already: false, kind };
+  return { ok: true, already: false, kind, label: after.label };
 }
 
 // X 的输入框是 Draft.js，里面会夹零宽占位符、软连字符、方向标记这类看不见的字符。
@@ -586,7 +612,7 @@ async function replyToTweetLocked(href, text) {
   // 下一次再回时间线找卡片就成了"找不到那条推文"（实测连着三条都是这个错）。
   const thread = threadPath(href);
   await openTweet(thread);
-  const opened = await clickTweetActionLocked(href, 'reply', 'Reply');
+  const opened = await clickTweetActionLocked(href, 'reply');
   if (!opened.ok) throw new Error(opened.reason || '回复按钮没点到');
   // 弹层里的输入框是异步挂出来的：实测点完 1.5 秒还没有，硬往下走就变成"回复没有真的填进去"。
   // 只认弹层里那个框（[role=dialog] 下面）——不带范围的那句 querySelector 抓到的是主页发帖框。

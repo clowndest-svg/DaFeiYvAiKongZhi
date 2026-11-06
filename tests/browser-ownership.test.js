@@ -55,6 +55,18 @@ test('标签页被丢弃时导航要重连再跳一次，只跳一次', () => {
   assert.ok(nav[0].includes("timeoutMs: 4000"), '读地址也要有短超时：卡死的页会让每次导航多等 20 秒');
 });
 
+test('浏览器弹原生对话框要自动应答，不然标签页被冻住、导航永远不提交', () => {
+  const cdp = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'src', 'browser', 'cdp.js'), 'utf8');
+  assert.ok(cdp.includes('Page.javascriptDialogOpening'), '没监听对话框事件：X 的 beforeunload 弹窗会把这一页卡死');
+  assert.ok(cdp.includes('Page.handleJavaScriptDialog'), '没应答对话框');
+  assert.ok(/accept:\s*true/.test(cdp), '应答时没选"离开"');
+  assert.ok(cdp.includes("logger.info('浏览器弹了原生对话框"), '自动跳过要说一声，不然页面行为变了没人知道原因');
+  // 事件必须在"没有 id 就直接 return"之前处理，否则对话框永远收不到
+  const handler = cdp.indexOf('Page.javascriptDialogOpening');
+  const bail = cdp.indexOf("if (!message.id) return;");
+  assert.ok(handler > 0 && bail > handler, '对话框处理排在了事件丢弃之后：等于没写');
+});
+
 test('接管时逐个标签页试，谁答话用谁，别一把抓第一个', () => {
   const cdp = fs.readFileSync(path.join(path.resolve(import.meta.dirname, '..'), 'src', 'browser', 'cdp.js'), 'utf8');
   const attach = /async attach\(\)[\s\S]*?\r?\n  }/.exec(cdp);

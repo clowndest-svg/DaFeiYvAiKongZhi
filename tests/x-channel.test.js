@@ -303,6 +303,22 @@ test('X 上所有动作都用可信点击；发送前必须确认这一页真的
   assert.ok(reply[0].includes('/回复|reply/i'), '没确认这一页真的在回复：/compose/post 上那颗按钮写的是「发帖」，点下去就是把心里话发成独立推文');
 });
 
+test('动作按钮按 testid 认，不按界面语言认：这台机器的 X 是中文界面', () => {
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const actions = /const X_ACTIONS = \{[\s\S]*?\r?\n\};/.exec(src);
+  assert.ok(actions, '找不到 X_ACTIONS');
+  assert.ok(actions[0].includes("ids: ['like', 'unlike']"), '点赞没把 unlike 也算进去：已经点过的赞读不出来，就会再点一次变成取消');
+  assert.ok(actions[0].includes("active: 'unlike'"), '没定义"已点赞"长什么样');
+  assert.ok(actions[0].includes('喜欢'), 'aria 只匹配英文：实测界面给的是「1 喜欢次数。喜欢了」，读完等于看不见自己做成了什么');
+  assert.ok(actions[0].includes("ids: ['retweet', 'unretweet']"), '转推同样要认两种状态');
+  const probe = /function actionProbe\(spec, href\)/.exec(src);
+  assert.ok(probe, '找不到 actionProbe：点赞/转推的状态读法又分叉了');
+  // 状态读法只有一份：before 和 after 都走 actionProbe
+  const react = /async function reactXLocked[\s\S]*?\r?\n}/.exec(src);
+  assert.equal((react[0].match(/actionProbe\(/g) || []).length, 2, '点赞的前后状态没都用同一份读法');
+  assert.ok(!/aria-pressed/.test(react[0]), '还在用 aria-pressed 判断点没点上：实测这个按钮根本不带这个属性');
+});
+
 test('该跳过的推文：敏感话题、空正文、转发；正常生活话不许误伤', () => {
   assert.equal(shouldSkipTweet({ text: '' }), '没有正文');
   assert.match(shouldSkipTweet({ text: '某地发生地震已致多人伤亡' }), /敏感/);
