@@ -1,0 +1,55 @@
+/* Shared presentation only; also installed through SnowLuma's Custom CSS setting. */
+:root, :root.dark {
+  color-scheme: dark;
+  --bg: #15131b; --surface-1: #211e29; --surface-2: #2c2638; --surface-3: #393047;
+  --panel: #211e29; --panel-strong: #2c2638;
+  --text: #f1edf7; --muted: #bdb4cc; --faint: #aaa0b9;
+  --line: #393242; --line-strong: #554762; --border-control: #665575;
+  --blue: #b79be9; --cyan: #c5a4f5; --purple: #c5a4f5; --accent-soft: #dfcafa;
+  --user1: #644982; --user2: #493260; --focus: #d0adff;
+  --ok: #82d8b1; --warn: #f2c381; --danger: #ffa9b9;
+  --bubble-her: #292331; --bubble-me: #493260;
+  --font: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-sans: "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif !important;
+  --background: #15131b !important; --foreground: #f1edf7 !important;
+  --card: #211e29 !important; --card-foreground: #f1edf7 !important;
+  --popover: #292331 !important; --popover-foreground: #f1edf7 !important;
+  --primary: #c5a4f5 !important; --primary-foreground: #21152f !important;
+  --secondary: #332a40 !important; --secondary-foreground: #e6d9f7 !important;
+  --muted-foreground: #bdb4cc !important; --accent: #392b49 !important;
+  --accent-foreground: #efdefd !important; --border: #393242 !important;
+  --input: #665575 !important; --ring: #d0adff !important;
+  --sidebar: #1b1722 !important; --sidebar-foreground: #d7cce5 !important;
+  --sidebar-accent: #392b49 !important; --sidebar-accent-foreground: #efdefd !important;
+  --sidebar-border: #393242 !important;
+  --success: #82d8b1 !important; --warning: #f2c381 !important; --destructive: #ffa9b9 !important;
+}
+/* SnowLuma uses --muted for a surface; Jingjing uses it for secondary text. */
+:root.dark { --muted: #2c2638 !important; --radius: .75rem !important; }
+body {
+  font-family: var(--font-sans);
+  background: radial-gradient(ellipse at 8% 0%, #30203e80, transparent 46%), radial-gradient(ellipse at 100% 90%, #39204438, transparent 45%), #15131b;
+}
+.bg-glow { background: radial-gradient(900px 500px at 8% 0%, #7d4aaa18, transparent 70%); }
+.card, .ui-card {
+  background: linear-gradient(135deg, #272130, #211e29 60%);
+  border-color: #393242;
+  border-radius: 16px;
+  box-shadow: inset 0 1px 0 #e5cbff08, 0 6px 22px #00000012;
+}
+.rail, .topbar { background: #1b1722ed; }
+.logo { background: linear-gradient(145deg, #77539a, #3e2b52); color: #f5eaff; }
+.logo::after { border-top-color: #d8bafa; }
+.rail-btn.active, .settings-nav button[aria-selected="true"] { background: linear-gradient(135deg, #513968, #33273f); border-color: #8d6ba8; color: #f3e7ff; }
+.mood-chip { background: #302539; border-color: #685276; color: #e6d5f4; }
+input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]), textarea, select { background-color: #19151f; }
+input:focus, textarea:focus, select:focus { box-shadow: 0 0 0 3px #c5a4f522; }
+.primary-btn { background: linear-gradient(135deg, #cfaff7, #b79be9); color: #21152f; box-shadow: 0 3px 12px #a57bd51a; }
+.primary-btn:hover { background: linear-gradient(135deg, #dfc4ff, #cbb0f7); }
+.service-link:hover { background: #392b49; border-color: #8d6ba8; }
+.settings-savebar, .toast { background: #211b2af5; }
+.settings-nav { background: #211e29; }
+button, .service-link, [data-ui-control] { font-family: inherit; }
+[data-ui-control] { border-radius: 12px; }
+.rail-btn svg, .ui-card svg { stroke-width: 1.7; }
+::selection { background: #79549d; color: #ffffff; }
