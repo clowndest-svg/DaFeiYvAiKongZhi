@@ -266,6 +266,9 @@ export function buildChatPayload({
     let content = msg.content || '';
     if (msg.role === 'assistant') {
       if (!content.trim()) return;
+      if (['pending', 'unknown', 'failed', 'not_sent'].includes(msg.meta?.qqDelivery)) {
+        content = `（这段回复保存在本机，但 QQ 投递尚未确认，不要假定他已看到，也不要自动重发）\n${content}`;
+      }
       // 分段原样喂回去：QQ 会把分段当成一条条独立消息发出去，那正是我们要的"连发"形状。
       // （上一轮为了压掉"写信式长段落"曾把空行并成一行，现在分气泡已经实现，再压反而把她逼回长句独白。）
       messages.push({ role: 'assistant', content });

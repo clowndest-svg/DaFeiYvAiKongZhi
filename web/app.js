@@ -2377,11 +2377,75 @@ function startQqQrPolling() {
   state.qqQrTimer = setInterval(refresh, 4000);
 }
 
+async function loadQqJournal() {
+  const host = $('#qqJournalReview');
+  if (!host) return;
+  const data = await api('/api/qq/journal');
+  host.replaceChildren();
+  for (const kind of ['inbox', 'outbox']) for (const item of data[kind] || []) {
+    const row = document.createElement('div');
+    const text = document.createElement('p');
+    text.className = 'muted small';
+    text.textContent = `${kind === 'inbox' ? '入站处理待核对' : '发送结果未知'}｜${new Date(item.received_at || item.created_at).toLocaleString()}｜${item.action || item.provider}｜${item.reason || ''}｜编号 ${(item.key || item.id).slice(0, 12)}`;
+    row.append(text);
+    const choices = kind === 'inbox' ? [['completed', '已核对处理完成'], ['discarded', '已核对无需处理']] : [['confirmed', 'QQ 中确认已送达'], ['not_sent', 'QQ 中确认未送达']];
+    for (const [resolution, label] of choices) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.addEventListener('click', () => withBusy(button, async () => {
+        if (!confirm('请先在 QQ 原窗口和会话记录中人工核对。此操作只记录核对结论，不会补发或重新执行消息。继续？')) return;
+        try {
+          await api('/api/qq/journal/resolve', { method: 'POST', body: { kind, id: item.key || item.id, resolution } });
+          await loadQqJournal();
+          await loadQqSetup();
+        } catch (error) { toast(error.message, 'error'); }
+      }));
+      row.append(button);
+    }
+    host.append(row);
+  }
+  for (const item of data.costs?.unknown || []) {
+    const row = document.createElement('div');
+    const text = document.createElement('p');
+    text.className = 'muted small';
+    text.textContent = `模型费用待核对｜${item.day}｜${item.model} / ${item.kind}｜预留估计 ${Number(item.estimate).toFixed(4)} 元。请从模型平台账单核对实际费用。`;
+    const amount = document.createElement('input');
+    amount.type = 'number'; amount.min = '0'; amount.max = '1000'; amount.step = '0.000001';
+    amount.placeholder = '实际费用（元，必须核对后填写）';
+    amount.setAttribute('aria-label', '核对后的实际模型费用');
+    const button = document.createElement('button'); button.type = 'button'; button.textContent = '记录费用核对';
+    button.addEventListener('click', () => withBusy(button, async () => {
+      if (!amount.value.trim()) return toast('请先填写核对后的实际费用', 'error');
+      if (!confirm('请先核对模型平台账单。此操作将结算该笔预留，不会重新调用模型。继续？')) return;
+      try {
+        await api('/api/qq/journal/resolve', { method: 'POST', body: { kind: 'cost', id: item.id, actualCostCny: Number(amount.value) } });
+        await loadQqJournal();
+      } catch (error) { toast(error.message, 'error'); }
+    }));
+    row.append(text, amount, button); host.append(row);
+  }
+  if (!host.childElementCount) host.textContent = '当前没有待核对记录。';
+}
+
 async function loadQqSetup() {
   const data = await api('/api/qq/setup');
+  const provider = data.provider || { name: 'NapCat', id: 'napcat' };
+  state.qqProvider = provider;
+  if ($('#importQzoneCookie')) $('#importQzoneCookie').textContent = `从 ${provider.name} 导入`;
+  if ($('#qqProviderHint')) $('#qqProviderHint').textContent = provider.id === 'snowluma'
+    ? provider.loginHint + ' OneBot 只配置机器人小号的反向 WebSocket，使用下方地址与令牌。'
+    : '在 NapCat 的「网络配置 → WebSocket 客户端」里填写下方地址和令牌：';
   $('#qqWs').textContent = data.wsUrl;
   $('#qqToken').textContent = data.token || '（未设置令牌）';
   const qq = data.status || {};
+  if ($('#qqMigrationStatus')) {
+    const m = qq.migration || {};
+    const inbox = m.journal?.inbox || {};
+    const outbox = m.journal?.outbox || {};
+    $('#qqMigrationStatus').textContent = `${m.maintenance ? '正在维护' : '正常接收'}｜待处理 ${(inbox.received || 0) + (inbox.buffered || 0)}｜回复中 ${m.activeReplies || 0}｜入站待核对 ${inbox.review || 0}｜发送未知 ${outbox.unknown || 0}｜${m.idle && !m.appBusy ? '当前在途任务已排空' : '仍有聊天、后台业务任务或语音会话'}`;
+  }
+  if ($('#qqCapabilities')) $('#qqCapabilities').textContent = (qq.capabilities || []).map(item => `${item.label}：${({ available: '接口已应答', unsupported: '不支持', error: '调用异常', unverified: '未验证', degraded: '能力受限' })[item.state] || item.state}`).join('；') + '。接口应答不代表真实媒体收发已验收。';
   const lines = [];
   const selfLabel = qq.identityOk === false ? '（不是小号）' : qq.identityOk ? '（机器人）' : '';
   lines.push(qq.connected ? `已连接${qq.selfId ? ` · ${qq.selfId}${selfLabel}` : ''}` : '未连接');
@@ -2395,7 +2459,9 @@ async function loadQqSetup() {
   lines.push(qq.lastInboundMessageAt
     ? `最后收到你的消息：${new Date(qq.lastInboundMessageAt).toLocaleString('zh-CN', { hour12: false })}`
     : '最后收到你的消息：这次启动后还没收到过');
-  lines.push(data.installed ? `NapCat 目录：${data.dir}` : 'NapCat 还没下载到 napcat/ 目录');
+  lines.push(`当前 QQ 接入：${provider.name}`);
+  lines.push(data.installed ? `${provider.name} 目录：${data.dir}` : `${provider.name} 尚未准备好`);
+  if (provider.id === 'snowluma') lines.push(provider.loginHint);
   const ver = data.versions || null;
   if (ver) {
     lines.push(ver.napcatInstalled
@@ -2409,7 +2475,7 @@ async function loadQqSetup() {
       : `QQ 版本：未读到（${ver.qqVersionsError || '没查到安装目录'}）`);
     lines.push('QQ 换装排期（versions/config.json 的 readyVersion）：' + (typeof ver.qqReadyVersion === 'string' ? (ver.qqReadyVersion || '空（下次启动本来就没排期）') : '未读到'));
     lines.push(`版本对账：${new Date(ver.at).toLocaleString('zh-CN', { hour12: false })}`);
-  } else {
+  } else if (provider.id !== 'snowluma') {
     lines.push('QQ/NapCat 版本对账：还没跑过（她每 12 小时自动查一次）');
   }
   lines.push(`已学会 ${data.learnedImages || 0} 张图片表情 / ${data.learnedMfaces || 0} 个QQ表情包`);
@@ -2475,7 +2541,7 @@ async function loadQqSetup() {
         : '自己接话：已关闭',
     );
   }
-  $('#qqStatusText').textContent = lines.join('\n');
+  $('#qqStatusText').textContent = lines.join('\n').replaceAll('NapCat', provider.name);
   const warn = $('#qqAccountWarn');
   if (warn) {
     const selfId = String(qq.selfId || '');
@@ -2728,7 +2794,7 @@ async function verifyQzone() {
 async function importQzoneFromNapcat() {
   try {
     const data = await api('/api/qzone/import-napcat', { method: 'POST' });
-    toast(`已从 NapCat 导入 QQ ${data.uin} 的空间 Cookie。`);
+    toast(`已从 ${state.qqProvider?.name || 'QQ 协议端'} 导入 QQ ${data.uin} 的空间 Cookie。`);
     await loadQzoneStatus();
     const verify = await api('/api/qzone/verify');
     toast(verify.ok ? '验证通过：空间已登录。' : `验证没通过：${verify.reason}`, verify.ok ? '' : 'error');
@@ -3171,11 +3237,27 @@ function bindSettings() {
   $('#refreshBalance').addEventListener('click', () => loadBalance(true));
   $('#balanceBtn').addEventListener('click', () => loadBalance(true));
   $('#copyWs').addEventListener('click', () => copyText($('#qqWs').textContent));
+  for (const [id, enabled] of [['qqMaintenanceOn', true], ['qqMaintenanceOff', false]]) {
+    $(`#${id}`)?.addEventListener('click', () => withBusy($(`#${id}`), async () => {
+      try {
+        await api('/api/qq/maintenance', { method: 'POST', body: { enabled } });
+        await loadQqSetup();
+        await loadQqJournal();
+      } catch (error) { toast(error.message, 'error'); }
+    }));
+  }
+  $('#qqJournalRefresh')?.addEventListener('click', () => withBusy($('#qqJournalRefresh'), async () => {
+    try { await loadQqJournal(); } catch (error) { toast(error.message, 'error'); }
+  }));
+  $('#qqCapabilitiesCheck')?.addEventListener('click', () => withBusy($('#qqCapabilitiesCheck'), async () => {
+    try { await api('/api/qq/capabilities/check', { method: 'POST' }); await loadQqSetup(); }
+    catch (error) { toast(error.message, 'error'); }
+  }));
   $('#qqStopChannel')?.addEventListener('click', () => withBusy($('#qqStopChannel'), async () => {
-    if (!confirm('停用会断开并退出 NapCat 当前挂着的 QQ。如果它误占了你的主号，主号窗口也会跟着退出，之后可以单独重新打开主号。继续？')) return;
+    if (!confirm('停用会断开 QQ 通道并停止本项目管理的协议端进程。桌面 QQ 可能继续运行，请到原窗口确认。继续？')) return;
     try {
       const data = await api('/api/qq/stop', { method: 'POST' });
-      toast(data.ok ? 'QQ 通道已停用，NapCat 挂着的 QQ 已退出；如果它占的是主号，主号窗口也会关闭，稍后重新打开主号即可。' : '没停成。', data.ok ? '' : 'error');
+      toast(data.ok ? 'QQ 通道已停用，已停止本项目管理的协议端进程；桌面 QQ 状态请查看原窗口。' : '没停成。', data.ok ? '' : 'error');
       await loadSettings().catch(() => {});
       loadQqSetup().catch(() => {});
     } catch (error) {
@@ -3212,6 +3294,14 @@ function bindSettings() {
     }
   }));
   $('#qqReloginBot')?.addEventListener('click', () => withBusy($('#qqReloginBot'), async () => {
+    if (state.qqProvider?.id === 'snowluma') {
+      try {
+        const data = await api('/api/qq/qr/restart', { method: 'POST' });
+        toast(data.reason || state.qqProvider.loginHint, data.ok ? '' : 'error');
+        loadQqSetup().catch(() => {});
+      } catch (error) { toast(error.message, 'error'); }
+      return;
+    }
     if (!confirm('重新登录会先退出 NapCat 当前挂着的 QQ（可能是你的主号），再用设置中的机器人小号启动。继续？')) return;
     try {
       const data = await api('/api/qq/qr/restart', { method: 'POST' });

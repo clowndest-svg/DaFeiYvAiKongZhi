@@ -3,6 +3,8 @@ import path from 'node:path';
 import { execFile, execFileSync, spawn } from 'node:child_process';
 import { env, paths } from './config.js';
 import { logger } from './logger.js';
+import { qqProvider, providerInfo } from './qq-provider.js';
+import { verifySnowLumaFiles, validateSnowLumaConfig } from './snowluma-package.js';
 
 function windowsQuery(script) {
   return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, stdio:['ignore','pipe','ignore'] });
@@ -45,6 +47,8 @@ export function isOwnedProcess(process, kind) {
   if (kind === 'napcat') return normalize(process.ExecutablePath) === normalize(path.join(paths.root,'napcat','NapCatWinBootMain.exe'));
   const words = String(process.CommandLine || '').match(/"[^"]*"|[^\s]+/g) || [];
   const entry = words.slice(1).find(word => !word.startsWith('-'))?.replace(/^"|"$/g, '');
+  if (kind === 'snowluma') return normalize(process.ExecutablePath) === normalize(path.join(paths.root, 'snowluma', 'node.exe')) && entry && normalize(entry) === normalize(path.join(paths.root, 'snowluma', 'index.mjs'));
+  if (kind !== 'server') return false;
   return normalize(process.ExecutablePath) === normalize(globalThis.process.execPath) && entry && normalize(entry) === normalize(path.join(paths.src, 'index.js'));
 }
 export function listOwned(kind) {
@@ -127,8 +131,69 @@ export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown',
 // QQ 装在哪：注册表卸载项的 UninstallString 指向卸载程序，它和 QQ.exe 同一个目录。
 // 读不到就返回空串——调用方必须当成"不知道"，不许拿默认路径猜（猜错会去扫别处的 versions/，报个假版本）。
 // 用异步版：同步 spawn 会卡住事件循环，正在回的消息都被拖慢。
+
+let providerStarting = null;
+export async function startQqProvider() {
+  if (providerStarting) return providerStarting;
+  const lock = path.join(paths.data, 'qq-provider-start.lock');
+  let lockFd;
+  if (!env.testMode) {
+    try { lockFd = fs.openSync(lock, 'wx'); }
+    catch (error) {
+      if (error.code === 'EEXIST') throw new Error('另一个 QQ 启动操作尚未结束；若上次进程异常退出，请核实进程后再移除 data/qq-provider-start.lock，不重复启动');
+      throw error;
+    }
+    fs.writeFileSync(lockFd, JSON.stringify({ pid: process.pid, provider: qqProvider, at: new Date().toISOString() }));
+  }
+  providerStarting = (async () => {
+    if (qqProvider === 'napcat') return startNapCat();
+    if (env.testMode) return { simulated: true, provider: qqProvider };
+    if (process.platform !== 'win32') throw new Error('当前 SnowLuma 启动入口仅支持 Windows');
+    const info = providerInfo();
+    const exe = path.join(info.dir, 'node.exe');
+    if (!info.installed || !fs.existsSync(exe)) throw new Error('SnowLuma 完整版未准备好，请先按迁移文档完成准备');
+    if (listOwned('napcat').length) throw new Error('NapCat 启动器仍在运行，不能同时启动两套协议端');
+    if (listOwned('snowluma').length) return { already: true, provider: qqProvider };
+    const qq = countQqProcesses();
+    if (qq.state !== 'absent') throw new Error('首次启动 SnowLuma 前必须确认 QQ 均已退出；现有 QQ 可能仍载有 NapCat，程序不会代你关闭主号');
+    // Explicitly manual: never inject every QQ process, never touch the main account.
+    const runtime = JSON.parse(fs.readFileSync(path.join(info.dir, 'config', 'runtime.json'), 'utf8'));
+    if (runtime.hookAutoLoad !== false) throw new Error('SnowLuma 必须关闭自动注入，避免接入主号');
+    const { loadSettings } = await import('./config.js');
+    verifySnowLumaFiles(info.dir);
+    validateSnowLumaConfig({ dir: info.dir, botAccount: loadSettings().qq.botAccount, token: env.onebotToken, wsUrl: info.wsUrl });
+    const log = fs.openSync(path.join(paths.logs, 'snowluma.out'), 'a');
+    try {
+      await new Promise((resolve, reject) => {
+        const child = spawn(exe, [path.join(info.dir, 'index.mjs')], {
+          cwd: info.dir, windowsHide: true, detached: false,
+          stdio: ['ignore', log, log],
+          env: { ...process.env, SNOWLUMA_HOOK_AUTOLOAD: '0', SNOWLUMA_WEBUI_HOST: '127.0.0.1', SNOWLUMA_TELEMETRY: '0' },
+        });
+        child.once('error', reject);
+        // Keep the launcher alive for this long-running runtime. Unlike the
+        // NapCat injector, SnowLuma does not exit after attaching to QQ.
+        child.once('exit', code => reject(new Error(`SnowLuma 启动期间退出（${code}），未确认运行`)));
+        child.once('spawn', () => { setTimeout(() => {
+          if (child.exitCode !== null || child.signalCode !== null) reject(new Error('SnowLuma 启动后没有保持运行'));
+          else resolve();
+        }, 1000); });
+      });
+    } finally { fs.closeSync(log); }
+    return { started: true, provider: qqProvider, loginHint: info.loginHint };
+  })();
+  try { return await providerStarting; } finally {
+    providerStarting = null;
+    if (lockFd !== undefined) { fs.closeSync(lockFd); fs.unlinkSync(lock); }
+  }
+}
+
+export function stopQqProvider() { return stopOwned(qqProvider); }
+
 export async function startNapCat() {
+  if (qqProvider !== 'napcat') throw new Error('当前协议端为 SnowLuma，已阻止启动 NapCat');
   if (env.testMode) return {simulated:true};
+  if (listOwned('snowluma').length) throw new Error('SnowLuma 仍在运行，不能同时启动 NapCat');
   if (process.platform!=='win32') throw new Error('当前 NapCat 启动入口仅支持 Windows');
   const exe=path.join(paths.root,'napcat','NapCatWinBootMain.exe');
   if(!fs.existsSync(exe))throw new Error('NapCat 未安装，请按 README 安装');

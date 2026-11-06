@@ -117,6 +117,18 @@ test('他一回话，之前的账就清掉，她又能主动找他', async () =>
   assert.equal(db.kvGet('proactive_unanswered'), '1', '计数要重新从这次开始');
 });
 
+test('主动消息生成期间改绑主人，旧内容不能发给新主人或写成已发送', async () => {
+  kvSet('qq_owner_id', '10000001');
+  let sent = 0;
+  const guarded = new Scheduler({
+    llm: { chat: async () => { kvSet('qq_owner_id', '10000002'); return { content: '旧主人的私密上下文' }; } },
+    companion: { saveProactiveMessage: () => { throw new Error('改绑后不应保存这条主动消息'); } },
+    sendToOwner: async () => { sent += 1; return true; },
+  });
+  assert.equal(await guarded.triggerProactive(), null);
+  assert.equal(sent, 0);
+});
+
 process.on('exit', () => {
   try { closeDb(); } catch { /* ignore */ }
   fs.rmSync(dataDir, { recursive: true, force: true });

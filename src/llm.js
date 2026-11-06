@@ -2,6 +2,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { readSse } from './sse.js';
 import { env, loadSettings } from './config.js';
 import { addCost } from './db.js';
+import { reserveCost, settleCost, uncertainCost } from './cost-reservations.js';
 import { logger } from './logger.js';
 import { estimateMessagesTokens, estimateTokens, sleep } from './util.js';
 
@@ -153,6 +154,7 @@ export class DeepSeek {
     const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
     // 上游 503/空正文经常一缓就好：给两次重试，间隔递增，别让一次抖动直接哑掉。
     for (let attempt = 0; attempt < 3; attempt += 1) {
+      const reservationId = reserveCost({ model: body.model, kind: opts.kind, estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model) });
       try {
         const res = await fetch(this.baseUrl + '/chat/completions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
@@ -167,7 +169,7 @@ export class DeepSeek {
         const content = message.content || '';
         const reasoning = message.reasoning_content || '';
         const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model) };
-        this.recordCost(result, opts);
+        this.recordCost(result, { ...opts, reservationId });
         if (!result.content) {
           // 上游过载时实测两种形状：503，或者 200 但正文空、只有推理。第二种以前被报成"没有产出有效回复"，
           // 既没说清是上游的问题，也不会重试——她就这样一声不吭。
@@ -181,6 +183,7 @@ export class DeepSeek {
         this.lastCallAt = new Date().toISOString(); this.lastError = null;
         return result;
       } catch (error) {
+        uncertainCost(reservationId, error.code === 'HTTP' && error.status >= 400 && error.status < 500);
         // 超时被中止时，原始的 reason 是一句英文的 DOMException，不管日志还是界面都看不出是"模型慢"。
         const normalized = signal.aborted
           ? new LlmError('模型响应超时（' + Math.round((opts.timeoutMs || 120000) / 1000) + ' 秒没返回）', { code: 'TIMEOUT', retryable: true })
@@ -248,6 +251,7 @@ export class DeepSeek {
     const body = this.buildBody(messages, { ...opts, stream: true });
     let content = '', reasoning = '', usageRaw = null, model = body.model;
     let done = false;
+    const reservationId = reserveCost({ model: body.model, kind: opts.kind, estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model) });
     try {
       const res = await fetch(this.baseUrl + '/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey }, body: JSON.stringify(body), signal,
@@ -268,11 +272,11 @@ export class DeepSeek {
       const result = streamResult(messages, content, reasoning, usageRaw, model);
       this.lastCallAt = new Date().toISOString(); this.lastError = null;
       yield { type: 'done', content, reasoning, ...result };
-    } catch (error) { this.lastError = logger.redact(error.message); throw error; }
+    } catch (error) { uncertainCost(reservationId, error.code === 'HTTP' && error.status >= 400 && error.status < 500); this.lastError = logger.redact(error.message); throw error; }
     finally {
       if (usageRaw || content || reasoning) {
         const result = streamResult(messages, content, reasoning, usageRaw, model);
-        this.recordCost(result, { ...opts, kind: done ? opts.kind : (opts.kind || 'chat') + ':partial' });
+        this.recordCost(result, { ...opts, reservationId, kind: done ? opts.kind : (opts.kind || 'chat') + ':partial' });
         opts.onUsage?.(result);
       }
     }
@@ -280,7 +284,7 @@ export class DeepSeek {
 
   recordCost(result, opts = {}) {
     try {
-      addCost({
+      const cost = {
         model: result.model,
         kind: (opts.kind || 'chat') + (result.usageEstimated ? ':estimated' : '') + (result.priceVersion ? `:rate-${result.priceVersion}` : ''),
         promptTokens: result.usage.prompt,
@@ -288,7 +292,9 @@ export class DeepSeek {
         cacheHitTokens: result.usage.hit,
         costCny: result.costCny,
         sessionId: opts.sessionId || null,
-      });
+      };
+      if (opts.reservationId) settleCost(opts.reservationId, cost);
+      else addCost(cost);
     } catch (error) {
       logger.warn('写入成本记录失败', { error: error.message });
     }

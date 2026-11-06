@@ -2,6 +2,7 @@ import { addEvent, costSummary, kvGetJson, kvSetJson } from './db.js';
 import { loadSettings } from './config.js';
 import { logger } from './logger.js';
 import { nowIso, shanghaiDayKey } from './util.js';
+import { costReservationStatus } from './cost-reservations.js';
 
 export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'qzoneAuto', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
 
@@ -42,8 +43,11 @@ export function writeCostState(state) {
 export function readCostState() {
   const raw = kvGetJson('cost_state', null);
   const stored = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
-  const current = evaluateBudget({ balanceCny: stored.balanceCny ?? null, todayCostCny: costSummary(1).todayCostCny, settings: loadSettings() });
-  return { ...current, checkedAt: stored.checkedAt || stored.at || null, balanceStale: !stored.at || Date.now() - Date.parse(stored.at) > 20 * 60000 };
+  const reservations = costReservationStatus();
+  const settled = costSummary(1).todayCostCny;
+  const current = evaluateBudget({ balanceCny: stored.balanceCny ?? null, todayCostCny: settled + reservations.pendingEstimateCny, settings: loadSettings() });
+  if (reservations.pendingCount) current.reasons.push(`含 ${reservations.pendingCount} 笔未结算费用预留，估计 ${reservations.pendingEstimateCny.toFixed(4)} 元；需对账后结算，不会自动归零`);
+  return { ...current, todaySettledCostCny: settled, pendingEstimateCny: reservations.pendingEstimateCny, pendingCount: reservations.pendingCount, checkedAt: stored.checkedAt || stored.at || null, balanceStale: !stored.at || Date.now() - Date.parse(stored.at) > 20 * 60000 };
 }
 
 export function costBlocked(feature, state = readCostState()) {

@@ -34,6 +34,7 @@ import { generatePost, PLATFORM_LABELS, tryAutoPublish } from './social.js';
 import { isWithinWindow, localHour, nextShanghaiClock, nowIso, parseJsonLoose, pickMomentInWindow, randInt, shanghaiDayKey, sleep } from './util.js';
 import { processXhsExplore, processXhsOwnComments } from './channels/xhs-actions.js';
 import { checkNapcatVersions, lastVersionReport, versionCheckDue } from './napcat-versions.js';
+import { qqProvider } from './qq-provider.js';
 
 function localDayKey(date = new Date()) {
   return shanghaiDayKey(date);
@@ -163,6 +164,7 @@ export class Scheduler {
   }
 
   async pollQzone() {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     if (this.costGate('qzoneAuto', '空间自动回复')) return null;
     if (!qzoneStatus().configured || this.qzoneBusy) return null;
     this.qzoneBusy = true;
@@ -195,6 +197,7 @@ export class Scheduler {
   }
 
   async pollX() {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     const { withXBrowser } = await import('./channels/x.js');
     return withXBrowser(() => this.pollXLocked());
   }
@@ -256,6 +259,7 @@ export class Scheduler {
   }
 
   async pollXhs() {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     const { withXhsBrowser } = await import('./channels/xhs.js');
     return withXhsBrowser(() => this.pollXhsLocked());
   }
@@ -913,6 +917,7 @@ export class Scheduler {
   // QQ 会自己升级，NapCat 得跟着版本走。这一步只做"发现"：查官方最新版 + 扫 QQ 的 versions/，
   // 结果落 kv 给界面读。装不装由人点头（tools/upgrade-napcat.mjs），所以这里绝不下载执行任何东西。
   async maybeVersionCheck({ run = checkNapcatVersions, now = Date.now() } = {}) {
+    if (qqProvider !== 'napcat') return null;
     if (env.testMode) return null;
     const lastAttempt = Number(kvGet('napcat_version_attempt_at', '0') || 0);
     const decision = versionCheckDue({ now, lastAttemptAt: lastAttempt, report: lastVersionReport() });
@@ -932,6 +937,7 @@ export class Scheduler {
   }
 
   async tickStep(name, run, { risky = false } = {}) {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     this.stepMetrics ||= new Map();
     const metric = this.stepMetrics.get(name) || { runs: 0, failures: 0, consecutiveFailures: 0 };
     metric.runs += 1;
@@ -1045,6 +1051,7 @@ export class Scheduler {
   }
 
   async tick() {
+    if (kvGetJson('qq_maintenance', false) === true) return;
     if (this.busy || this.manualBusy) return;
     this.busy = true;
     try {
@@ -1081,6 +1088,7 @@ export class Scheduler {
   }
 
   async maybeProactive() {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     const settings = loadSettings();
     if (!settings.proactive.enabled) return null;
     if (this.costGate('proactive', '主动找你')) {
@@ -1145,6 +1153,8 @@ export class Scheduler {
   async triggerProactive({ reason = 'manual', unanswered = 0 } = {}) {
     const startedAt = Date.now();
     const settings = loadSettings();
+    const deliveryOwner = kvGet('qq_owner_id', '');
+    const deliveryBot = settings.qq.botAccount;
     const block = getMemoryBlock({ query: '他最近怎么样 现在在做什么 心情', settings });
     block.xhsActivity = getRecentXhsActivity({ hours: 48, limit: 6 });
     block.intentions = listIntentions({ limit: 4, forPrompt: true });
@@ -1195,7 +1205,7 @@ export class Scheduler {
       const lastUser = lastUserMessageAt();
       const current = loadSettings();
       const blocked = !current.proactive.enabled || readCount(`proactive_count:${localDayKey()}`) >= Number(current.proactive.maxPerDay ?? 3) || costBlocked('proactive') || reason === 'idle' && isWithinWindow(current.proactive.quietStart, current.proactive.quietEnd);
-      if (blocked || lastUser && new Date(lastUser).getTime() > startedAt) {
+      if (blocked || deliveryOwner !== kvGet('qq_owner_id', '') || deliveryBot !== current.qq.botAccount || kvGetJson('qq_maintenance', false) === true || lastUser && new Date(lastUser).getTime() > startedAt) {
         kvSet('next_proactive_at', hoursFromNow(1));
         addEvent('proactive_skipped', '他刚回话了，这条已经想好的主动消息就不发了');
         return null;
@@ -1237,6 +1247,7 @@ export class Scheduler {
   }
 
   async maybePost() {
+    if (kvGetJson('qq_maintenance', false) === true) return null;
     const settings = loadSettings();
     if (!settings.social.enabled) return null;
     if (this.costGate('qzoneAuto', '自动发说说')) return null;
@@ -1445,6 +1456,7 @@ export class Scheduler {
       qzoneFeedAt: getQzoneFeedCache()?.fetchedAt || null,
       qzonePollError: this.lastQzonePollError,
       xhsBusy: this.xhsBusy,
+      xBusy: this.xBusy,
       nextXhsAt: kvGet('next_xhs_at'),
       lastXhsError: this.lastXhsError,
       todayProactive: readCount(`proactive_count:${localDayKey()}`),

@@ -10,6 +10,7 @@ config/mom-letter.local.md
 data/
 audit/
 napcat/
+snowluma/
 *.db
 *.db-shm
 *.db-wal

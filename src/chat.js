@@ -1,6 +1,6 @@
 import { loadSettings } from './config.js';
 import { conversationQueue, LatestTaskQueue } from './serial.js';
-import { addEvent, addMessage, getActiveSession, getMessagesForPrompt, getSession, updateMessageMeta } from './db.js';
+import { addEvent, addMessage, getActiveSession, getMessagesForPrompt, getSession, getMessage, updateMessageMeta } from './db.js';
 import { DeepSeek, LlmError } from './llm.js';
 import { logger } from './logger.js';
 import { compactIfNeeded, getMemoryBlock, handoverIfNeeded } from './memory.js';
@@ -10,11 +10,14 @@ import { getMood } from './mood.js';
 import { applyNeuroEvent, neuroStatus, noteHisMessage } from './neuro.js';
 import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
-import { scheduleReflection } from './reflect.js';
+import { scheduleReflection, reflectionBusy } from './reflect.js';
 import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
+export function chatActivity() {
+  return { conversationBusy: conversationQueue.busy, backgroundBusy: maintenanceQueue.running || maintenanceQueue.pending.size > 0 || reflectionBusy() };
+}
 
 export function generationProfile(settings, mood = getMood()) {
   const baseTemp = Number(settings.model.temperature) || 0.95;
@@ -52,9 +55,10 @@ export class Companion {
   constructor({ llm = new DeepSeek(), onTurnComplete = null } = {}) {
     this.llm = llm;
     this.onTurnComplete = onTurnComplete;
+    this.completedDeferredTurns = new WeakSet();
   }
 
-  prepare({ text = '', images = [], channel = 'web', sessionId = null, displayName = '', extraContext = '' }) {
+  prepare({ text = '', images = [], channel = 'web', sessionId = null, displayName = '', extraContext = '', deliveryMeta = {} }) {
     const settings = loadSettings();
     if (!this.llm.configured && process.env.LLM_MOCK !== '1') {
       throw new LlmError('还没有配置 DeepSeek API Key，请先编辑 .env 里的 DEEPSEEK_API_KEY。', { code: 'NO_KEY' });
@@ -77,12 +81,14 @@ export class Companion {
     const active = session || getActiveSession();
     if (!active || active.status !== 'active') throw new Error('当前会话不可用');
 
+    const inputDeliveryMeta = { ...deliveryMeta };
+    delete inputDeliveryMeta.qqDelivery;
     const userMessage = addMessage({
       sessionId: active.id,
       role: 'user',
       content: cleanText || '（发来了一张图片）',
       channel,
-      meta: { hasImage: cleanImages.length > 0, displayName },
+      meta: { ...inputDeliveryMeta, hasImage: cleanImages.length > 0, displayName },
       tokens: estimateTokens(cleanText) + cleanImages.length * 900,
     });
 
@@ -329,6 +335,7 @@ export class Companion {
       channel: opts.channel || 'web',
       meta: {
         model: result.model,
+        ...opts.deliveryMeta,
         usage: result.usage,
         costCny: result.costCny,
         latencyMs: Date.now() - startedAt,
@@ -339,8 +346,10 @@ export class Companion {
       tokens: result.usage?.completion || estimateTokens(text),
       contextTokens: result.usage ? Number(result.usage.prompt || 0) + Number(result.usage.completion || 0) : 0,
     });
-    this.afterTurn(prep, message);
-    if (this.onTurnComplete) this.onTurnComplete({ prep, message });
+    if (!opts.deferAfterTurn) {
+      this.afterTurn(prep, message);
+      if (this.onTurnComplete) this.onTurnComplete({ prep, message });
+    }
     return {
       prep,
       message,
@@ -351,6 +360,15 @@ export class Companion {
       costCny: result.costCny,
       model: result.model,
     };
+  }
+
+  completeDeferredTurn(result) {
+    if (this.completedDeferredTurns.has(result)) return;
+    const message = getMessage(result.message?.id);
+    if (message?.meta?.qqDelivery !== 'sent') return;
+    this.completedDeferredTurns.add(result);
+    this.afterTurn(result.prep, message);
+    if (this.onTurnComplete) this.onTurnComplete({ prep: result.prep, message });
   }
 
   afterTurn(prep, message) {

@@ -577,10 +577,23 @@
                 <h3>QQ 连接与登录</h3>
                 <label class="check"><input type="checkbox" id="setQqEnabled"> 启用 QQ 通道</label>
                 <div class="qq-setup" id="qq-setup">
-                  <p>在 NapCat 的「网络配置 → WebSocket 客户端」里填：</p>
+                  <p id="qqProviderHint">在 QQ 协议端的「网络配置 → WebSocket 客户端」里填写下方地址和令牌：</p>
                   <div class="copy-row"><code id="qqWs">ws://127.0.0.1:7788/onebot</code><button type="button" id="copyWs">复制地址</button></div>
                   <div class="copy-row"><code id="qqToken">…</code><button type="button" id="copyToken">复制令牌</button></div>
                   <p class="muted small" id="qqStatusText">正在读取状态…</p>
+                  <details class="settings-group">
+                    <summary>维护与投递核对</summary>
+                    <p class="muted small">维护期间新 QQ 消息会持久排队，文字回复继续排空，语音会话结束，新自动任务暂停。发送结果未知的消息不会自动补发，请先在 QQ 原窗口核对。切换接入端需要停止旧端并冷重启。</p>
+                    <div class="btn-row">
+                      <button type="button" id="qqMaintenanceOn">进入维护</button>
+                      <button type="button" id="qqMaintenanceOff">结束维护</button>
+                      <button type="button" id="qqJournalRefresh">刷新待核对记录</button>
+                      <button type="button" id="qqCapabilitiesCheck">检查基础能力（只读）</button>
+                    </div>
+                    <p class="muted small" id="qqMigrationStatus"></p>
+                    <p class="muted small" id="qqCapabilities"></p>
+                    <div id="qqJournalReview"></div>
+                  </details>
                   <p class="alert-warn hidden" id="qqAccountWarn"></p>
                   <label>机器人 QQ 号（她自己的小号，快速登录用）<input id="setQqBotAccount" inputmode="numeric" maxlength="12"></label>
                   <div class="btn-row">

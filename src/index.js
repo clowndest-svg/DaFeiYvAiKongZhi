@@ -4,7 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { assertCsrf, readJsonBody as readRequestBody } from './http-security.js';
-import { startNapCat, stopOwned } from './processes.js';
+import { startQqProvider, stopQqProvider } from './processes.js';
+import { providerInfo, qqProvider } from './qq-provider.js';
+import { journalReview, resolveJournal } from './onebot-receipts.js';
+import { cookieExtensionsUnavailable } from './qq-capabilities.js';
+import { acquireRuntimeLock } from './runtime-lock.js';
+import { recoverCostReservations, costReservationStatus, resolveCostReservation } from './cost-reservations.js';
 import {
   appInfo,
   env,
@@ -47,7 +52,7 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 import { DeepSeek } from './llm.js';
-import { Companion } from './chat.js';
+import { Companion, chatActivity } from './chat.js';
 import { Scheduler } from './scheduler.js';
 import { checkNapcatVersions, lastVersionReport, versionAlerts, versionHintForOutage } from './napcat-versions.js';
 import { desktopNotifyEnabled, desktopNotifyState, notifyDesktop } from './notify.js';
@@ -117,17 +122,20 @@ import {
 } from './channels/xhs-actions.js';
 import { buildXhsDmReplyPrompt, buildXhsProfilePrompt, buildXhsWeeklyPrompt } from './prompt.js';
 import { parseJsonLoose, safeEqual, shanghaiDayKey } from './util.js';
-export async function importQzoneCookieFromNapCat() {
-  let result = await onebot.sendAction('get_cookies', { domain: 'qzone.qq.com' });
+const releaseRuntimeLock = acquireRuntimeLock(paths.data);
+process.once('exit', releaseRuntimeLock);
+export async function importQzoneCookieFromNapCat({ automatic = false } = {}) {
+  if (automatic && cookieExtensionsUnavailable()) return null;
+  let result = await onebot.sendAction('get_cookies', { domain: 'qzone.qq.com' }, 8000).catch(() => null);
   let cookies = result?.data?.cookies || result?.data?.cookie || result?.data?.data?.cookies || '';
   if (!cookies) {
-    result = await onebot.sendAction('get_credentials', { domain: 'qzone.qq.com' });
+    result = await onebot.sendAction('get_credentials', { domain: 'qzone.qq.com' }, 8000);
     cookies = result?.data?.cookies || result?.data?.cookie || result?.data?.data?.cookies || '';
   }
   if (Array.isArray(cookies)) cookies = cookies.join('; ');
-  if (!cookies || typeof cookies !== 'string') throw new Error('NapCat 没返回 Cookie（小号 QQ 可能不在线）');
+  if (!cookies || typeof cookies !== 'string') throw new Error('QQ 协议端没返回 Cookie；请核对能力状态或使用本机手动 Cookie 配置');
   const status = saveQzoneCookie(cookies);
-  addEvent('qzone_cookie', '从 NapCat 导入了空间 Cookie（不用手抄了）', { uin: status.uin });
+  addEvent('qzone_cookie', `从 ${providerInfo().name} 导入了空间 Cookie`, { uin: status.uin });
   kvSet('qzone_cookie_bad', '');
   return status;
 }
@@ -147,7 +155,7 @@ function healthAlerts() {
   }
   let versionHint = '';
   try {
-    versionHint = versionHintForOutage(lastVersionReport());
+    versionHint = qqProvider === 'napcat' ? versionHintForOutage(lastVersionReport()) : '';
   } catch {
     // 版本没读到不影响断连提示
   }
@@ -180,7 +188,7 @@ function healthAlerts() {
   }
   // 版本这条只在"真查到有东西要跟进"时才占顶栏；单纯没查到不报警（那是未测，进 QQ 面板看）。
   try {
-    out.push(...versionAlerts(lastVersionReport()));
+    if (qqProvider === 'napcat') out.push(...versionAlerts(lastVersionReport()));
   } catch {
     // 版本对账读不到不影响状态接口
   }
@@ -217,7 +225,7 @@ function healthAlerts() {
   }
   const cooldown = kvGet('xhs_cooldown_until');
   if (cooldown && new Date(cooldown).getTime() > Date.now()) out.push({ key: 'xhs', level: 'warn', text: `小红书风控冷却中，到 ${cooldown.slice(11, 16)} 才继续` });
-  return out;
+  return qqProvider === 'napcat' ? out : out.map((item) => ({ ...item, text: item.text.replaceAll('NapCat', providerInfo().name) }));
 }
 
 function balanceText() {
@@ -584,6 +592,9 @@ const EXPENSIVE_API = new Set([
   '/api/voice/speak',
   '/api/qq/versions/check',
   '/api/qq/notify/test',
+  '/api/qq/maintenance',
+  '/api/qq/journal/resolve',
+  '/api/qq/capabilities/check',
 ]);
 
 // 只锁"人点一下才跑"的只读重接口；/api/xhs/status 和 /api/xhs/qr 是前端定时轮询的，
@@ -671,6 +682,10 @@ function maskQq(value) {
 
 async function handleApi(req, res, pathname, url) {
   const method = req.method || 'GET';
+  if (onebot?.maintenance && !['GET', 'HEAD'].includes(method)
+      && !['/api/qq/maintenance', '/api/qq/journal/resolve', '/api/qq/stop', '/api/qq/capabilities/check'].includes(pathname)) {
+    return sendJson(res, 503, { error: '正在维护，新的写入和外部动作已暂停；请结束维护后重试' });
+  }
 
   if (pathname === '/api/health') return sendJson(res, 200, { ok: true, version: appInfo.version });
 
@@ -931,7 +946,7 @@ async function handleApi(req, res, pathname, url) {
         mock: env.mock,
         dataDir: paths.data,
         version: appInfo.version,
-        wsUrl: `ws://127.0.0.1:${env.port}/onebot`,
+        wsUrl: providerInfo().wsUrl,
       },
     });
   }
@@ -1957,25 +1972,34 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/qq/setup' && method === 'GET') {
-    const napcatDir = path.join(paths.root, 'napcat');
-    const installed = fs.existsSync(napcatDir) && fs.readdirSync(napcatDir).length > 0;
+    const provider = providerInfo();
+    const napcatDir = provider.dir;
+    const installed = provider.installed;
+    const qqStatus = onebot?.status() || null;
+    const activity = chatActivity();
+    const schedulerState = scheduler?.status() || {};
+    if (qqStatus) {
+      qqStatus.migration.appBusy = Boolean(activity.conversationBusy || activity.backgroundBusy || ['busy', 'manualBusy', 'qzoneBusy', 'xhsBusy', 'xBusy'].some(key => schedulerState[key]));
+      qqStatus.migration.drained = qqStatus.migration.maintenance && qqStatus.migration.idle && !qqStatus.migration.appBusy;
+    }
     const candidate = kvGetJson('qq_owner_candidate', null);
     const qrFile = path.join(paths.root, 'napcat', 'cache', 'qrcode.png');
     let qrStat = null;
     try {
-      qrStat = fs.statSync(qrFile);
+      qrStat = qqProvider === 'napcat' ? fs.statSync(qrFile) : null;
     } catch {
       qrStat = null;
     }
     return sendJson(res, 200, {
-      wsUrl: `ws://127.0.0.1:${env.port}/onebot`,
+      provider,
+      wsUrl: provider.wsUrl,
       token: maskKey(env.onebotToken),
       tokenConfigured: Boolean(env.onebotToken),
       installed,
       dir: napcatDir,
-      versions: lastVersionReport(),
+      versions: qqProvider === 'napcat' ? lastVersionReport() : null,
       notify: { enabled: desktopNotifyEnabled(), last: desktopNotifyState() },
-      status: onebot?.status() || null,
+      status: qqStatus,
       ownerId: kvGet('qq_owner_id') || '',
       candidate,
       qrAvailable: Boolean(qrStat),
@@ -1986,7 +2010,27 @@ async function handleApi(req, res, pathname, url) {
     });
   }
 
+  if (pathname === '/api/qq/maintenance' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (typeof body.enabled !== 'boolean') return sendJson(res, 400, { error: 'enabled 必须是布尔值' });
+    const migration = onebot.setMaintenance(body.enabled);
+    addEvent('qq_maintenance', body.enabled ? 'QQ 进入维护：新消息持久排队，等待已有回复排空' : 'QQ 结束维护：恢复可安全处理的消息');
+    return sendJson(res, 200, { ok: true, migration });
+  }
+  if (pathname === '/api/qq/journal' && method === 'GET') return sendJson(res, 200, { ...journalReview(), costs: costReservationStatus() });
+  if (pathname === '/api/qq/capabilities/check' && method === 'POST') return sendJson(res, 200, { capabilities: await onebot.checkCapabilities() });
+  if (pathname === '/api/qq/journal/resolve' && method === 'POST') {
+    const body = await readJsonBody(req);
+    try {
+      if (body.kind === 'cost') resolveCostReservation(body.id, body.actualCostCny);
+      else resolveJournal(body);
+    } catch (error) { return sendJson(res, 409, { error: error.message }); }
+    addEvent('qq_journal_resolved', '已人工核对 QQ 记录，未自动补发', { kind: body.kind, id: body.id, resolution: body.resolution });
+    return sendJson(res, 200, { ok: true });
+  }
+
   if (pathname === '/api/qq/versions/check' && method === 'POST') {
+    if (qqProvider !== 'napcat') return sendJson(res, 200, { ok: false, error: '当前使用 SnowLuma，请按兼容性验证记录核对版本' });
     const report = env.testMode ? null : await checkNapcatVersions();
     return sendJson(res, 200, { ok: true, report, command: report ? report.upgradeCommand : '' });
   }
@@ -2013,11 +2057,11 @@ async function handleApi(req, res, pathname, url) {
     saveSettings({ qq: { enabled: false } });
     writeBotAccountFile(loadSettings().qq?.botAccount);
     onebot?.disconnectAll();
-    await killNapCatTree();
-    addEvent('qq_channel_stopped', `她停用了 QQ 通道并退出了 NapCat 挂着的 QQ（${selfId || '未知号'}）；主号如果被它占用过，需要你重新打开主号`, {
+    const stopped = await killNapCatTree();
+    addEvent('qq_channel_stopped', `已停用 QQ 通道并停止本项目 ${providerInfo().name} 进程；桌面 QQ 是否退出需查看原窗口`, {
       selfId,
     });
-    return sendJson(res, 200, { ok: true, exited: !env.testMode, simulated: env.testMode, selfId });
+    return sendJson(res, 200, { ok: true, stopped, exited: false, simulated: env.testMode, selfId });
   }
 
   if (pathname === '/api/qq/token/reveal' && method === 'POST') {
@@ -2068,6 +2112,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/qq/qr' && method === 'GET') {
+    if (qqProvider !== 'napcat') return sendJson(res, 404, { error: providerInfo().loginHint });
     const qrFile = path.join(paths.root, 'napcat', 'cache', 'qrcode.png');
     if (!fs.existsSync(qrFile)) return sendJson(res, 404, { error: '还没有生成 QQ 登录二维码' });
     res.writeHead(200, {
@@ -2088,7 +2133,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/qq/health' && method === 'GET') {
-    if (!onebot?.status()?.connected) return sendJson(res, 200, { ok: false, error: 'NapCat 反向 WebSocket 没连上' });
+    if (!onebot?.status()?.connected) return sendJson(res, 200, { ok: false, error: 'QQ 协议端反向 WebSocket 没连上' });
     try {
       const info = await onebot.sendAction('get_login_info', {}, 8000);
       return sendJson(res, 200, {
@@ -2315,10 +2360,15 @@ export function writeBotAccountFile(account) {
   }
 }
 
-async function killNapCatTree() { return stopOwned('napcat'); }
+async function killNapCatTree() { return stopQqProvider(); }
 
 export async function restartQqLogin(note = '重新启动了 QQ 登录') {
   if (env.testMode) return { ok: true, simulated: true, reason: '隔离测试：未控制真实 QQ 进程' };
+  if (qqProvider === 'snowluma') {
+    saveSettings({ qq: { enabled: true } });
+    const result = await startQqProvider();
+    return { ok: true, enabled: true, ...result, reason: providerInfo().loginHint };
+  }
   const settings = loadSettings();
   if (!settings.qq?.enabled) {
     saveSettings({ qq: { enabled: true } });
@@ -2326,7 +2376,7 @@ export async function restartQqLogin(note = '重新启动了 QQ 登录') {
   }
   await killNapCatTree();
   writeBotAccountFile(loadSettings().qq?.botAccount);
-  await startNapCat();
+  await startQqProvider();
   addEvent('qq_login_restart', note);
   // 人（或我们）刚重启过登录 → 接下来 15 分钟是"等扫码"时间，界面按这个承诺显示。
   onebot?.noteScanLock?.(15, note);
@@ -2449,9 +2499,11 @@ function openBrowser(url) {
 // 只在进程刚起来的 3 分钟里判一次，条件全满足才启动（判据写在 shouldBootStartNapCat 里，可单测）。
 let bootSelfHealDone = false;
 async function bootSelfHeal() {
+  if (qqProvider !== 'napcat') return; // SnowLuma requires an explicitly chosen bot QQ process.
   if (env.testMode || bootSelfHealDone || !onebot) return;
   bootSelfHealDone = true;
   await new Promise((resolve) => { setTimeout(resolve, 45000); });   // 先给 NapCat 自己重连的机会（它每 3 秒试一次）
+  if (onebot.maintenance) return;
   const { countQqProcesses, listOwned } = await import('./processes.js');
   const { shouldBootStartNapCat } = await import('./channels/onebot.js');
   const qq = countQqProcesses();
@@ -2469,7 +2521,7 @@ async function bootSelfHeal() {
     return;
   }
   try {
-    const result = await startNapCat();
+    const result = await startQqProvider();
     onebot.recovery.bootStart = { at: new Date().toISOString(), started: true, reason: decision.reason, result };
     addEvent('qq_boot_start', '她开机后发现 NapCat 没起来，自己把它拉起来了；要登录就扫控制台里的码', { result });
   } catch (error) {
@@ -2556,7 +2608,7 @@ async function main() {
     llm,
     companion,
     sendToOwner: (text) => onebot.sendToOwner(text),
-    refreshQzoneCookie: () => importQzoneCookieFromNapCat(),
+    refreshQzoneCookie: () => importQzoneCookieFromNapCat({ automatic: true }),
   });
 
   server.on('error', (error) => {
@@ -2574,13 +2626,15 @@ async function main() {
   writeBotAccountFile(loadSettings().qq?.botAccount);
   closeStaleOutages();
   server.listen(env.port, '127.0.0.1', () => {
+    onebot.initializeJournal();
+    recoverCostReservations();
     env.port = server.address().port;
     const url = `http://127.0.0.1:${env.port}`;
     if (!env.testMode) scheduler.start();
     if (env.testMode) console.log(`BIZHI_READY:${env.port}`);
     logger.info(`小知已启动：${url}`);
     logger.info(`模型：${loadSettings().model.name} | Key：${maskKey() || '未配置'} | 模拟模式：${env.mock ? '开' : '关'}`);
-    logger.info(`QQ 通道：ws://127.0.0.1:${env.port}/onebot（NapCat 反向 WS）`);
+    logger.info(`QQ 通道：${providerInfo().wsUrl}（${providerInfo().name} 反向 WS）`);
     bootSelfHeal().catch((error) => logger.warn('开机自愈没跑成', { error: error.message }));
     if (env.openBrowser) openBrowser(url);
     if (llm.configured && !env.mock) {

@@ -19,6 +19,7 @@ import { clamp, parseJsonLoose, truncate, keywordSet, overlapScore } from './uti
 import { LatestTaskQueue } from './serial.js';
 
 const reflectionQueue = new LatestTaskQueue({ onError: error => logger.warn('事后反思失败', { error: error.message }) });
+export function reflectionBusy() { return reflectionQueue.running || reflectionQueue.pending.size > 0; }
 
 function squash(text) {
   return String(text || '').replace(/[\s，。！？、,.!?~～：:；;“”"'‘’（）()【】\[\]]/g, '');
@@ -43,7 +44,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
   if (last && Date.now() - new Date(last).getTime() < 2500) return null;
   kvSet(throttleKey, new Date().toISOString());
 
-  const recent = (messages || getRecentMessages(sessionId, 8)).slice(-8).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.meta?.aborted && ['web', 'qq'].includes(m.channel || 'web'));
+  const recent = (messages || getRecentMessages(sessionId, 8)).slice(-8).filter((m) => (m.role === 'user' || m.role === 'assistant') && !m.meta?.aborted && (m.role !== 'assistant' || !['pending', 'unknown', 'failed', 'not_sent'].includes(m.meta?.qqDelivery)) && ['web', 'qq'].includes(m.channel || 'web'));
   if (recent.length < 2) return null;
   const name = settings.companion?.name || '小知';
   const transcript = recent

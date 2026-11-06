@@ -138,5 +138,18 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  assert.equal(await page.locator('#setName').inputValue(),'发生冲突时保留的草稿');
  const afterConflict=await (await context.request.get(app.base+'/api/settings')).json();
  assert.equal(afterConflict.settings.companion.intro,'另一个页面的新配置');
+ await page.locator('.settings-jump summary').filter({hasText:'账号与社交'}).click();
+ await page.getByRole('link',{name:'QQ 登录',exact:true}).click();
+ await page.locator('#set-card-qq-login summary').filter({hasText:'维护与投递核对'}).click();
+ await page.locator('#qqMaintenanceOn').click();
+ await page.waitForFunction(()=>document.querySelector('#qqMigrationStatus').textContent.includes('正在维护'));
+ const paused=await context.request.put(app.base+'/api/settings',{headers:{origin:app.base,'x-bizhi-request':'1'},data:{companion:{name:'维护中不应写入'}}});
+ assert.equal(paused.status(),503,'维护时不能接收新的写入任务');
+ await page.locator('#qqJournalRefresh').click();
+ await page.locator('#qqJournalReview').getByText('当前没有待核对记录。',{exact:true}).waitFor();
+ await page.screenshot({path:path.join(shots,'qq-maintenance-mobile.png')});
+ await page.locator('#qqMaintenanceOff').click();
+ await page.waitForFunction(()=>document.querySelector('#qqMigrationStatus').textContent.includes('正常接收'));
+ assert.deepEqual(errors,[],'维护界面不得有未处理的 JS 错误');
  console.log(JSON.stringify({browser:'installed Chromium',viewports:[1440,768,390,337,320],screenshots:path.relative(process.cwd(),shots),pageErrors:errors.length}));
 });

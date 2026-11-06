@@ -48,6 +48,8 @@ Windows 可双击 `run.bat`。隐藏运行使用 `start-bizhi-hidden.vbs`；同�
 
 ## QQ / NapCat
 
+SnowLuma 迁移的功能依赖、准备状态、验收与回退步骤见 [QQ 接入端迁移方案](docs/qq-provider-migration.md)。默认仍为 NapCat；设置 `BIZHI_QQ_PROVIDER=snowluma` 需要完成实机验收并冷重启，不能仅改地址就视为迁移成功。
+
 1. 从 [NapCatQQ 官方发布页](https://github.com/NapNeko/NapCatQQ/releases) 安装匹配你 QQ 版本的 NapCat，程序放在本地 `napcat/`（不提交）。
 2. 在 NapCat 配置 OneBot v11 反向 WebSocket：`ws://127.0.0.1:7788/onebot`，令牌与 `.env` 的 `ONEBOT_TOKEN` 一致。
 3. 网页设置机器人小号并扫码；不要用主人号扫码。首次私聊需在设置页确认主人，或手动绑定。

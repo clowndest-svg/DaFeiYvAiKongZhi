@@ -4,7 +4,10 @@ import { WebSocketServer } from 'ws';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { env, loadSettings, paths } from '../config.js';
 import { DeliveryUnknownError } from '../effects.js';
-import { addEvent, createSession, getSession, kvGet, kvGetJson, kvSet, kvSetJson, lastUserMessageAt } from '../db.js';
+import { providerInfo, qqProvider } from '../qq-provider.js';
+import { noteQqCapability, qqCapabilities } from '../qq-capabilities.js';
+import { normalizeOneBotEvent, claimMessageReceipt, inboxState, bindInboxOwner, beginOutbound, finishOutbound, recoverJournal, pendingInbox, journalStatus } from '../onebot-receipts.js';
+import { addEvent, createSession, getSession, kvGet, kvGetJson, kvSet, kvSetJson, lastUserMessageAt, updateMessageMeta } from '../db.js';
 import { costBlocked, noteCostSkip } from '../budget.js';
 import { getLearnedImageBase64, lastLearnedImage, learnImage, listLearnedImages, randomLearnedImage } from '../learned-images.js';
 import { logger } from '../logger.js';
@@ -208,6 +211,10 @@ export class OneBotChannel {
     // NapCat 只在"要扫码"时写这张图；测试用注入路径，不去碰真 NapCat 的缓存目录。
     this.qrPath = qrPath || path.join(paths.root, 'napcat', 'cache', 'qrcode.png');
     this.outboundScope = new AsyncLocalStorage();
+    this.outboundSequences = new WeakMap();
+    this.maintenance = kvGetJson('qq_maintenance', false) === true;
+    this.dispatches = new Set();
+    this.recoveringInbox = false;
     this.generation = 0;
     this.onCommand = onCommand;
     this.downSince = null;
@@ -237,7 +244,7 @@ export class OneBotChannel {
     // 主动探活（真的去 QQ 服务端走一圈）的结果；只用于报警，不触发任何进程操作。
     this.livenessAt = 0;
     this.liveness = { checking: false, fails: 0, lastOkAt: null, lastCheckedAt: null, suspectSince: null, error: '' };
-    this.wss = new WebSocketServer({ server, path: '/onebot', maxPayload: 8 * 1024 * 1024 });
+    this.wss = new WebSocketServer({ server, path: providerInfo().wsPath, maxPayload: 8 * 1024 * 1024 });
     this.clients = new Set();
     this.pending = new Map();
     this.seenMessages = new Map();
@@ -336,6 +343,7 @@ export class OneBotChannel {
   }
 
   refreshQrSignal() {
+    if (qqProvider !== 'napcat') return;
     const file = this.qrPath;
     let mtime = null;
     try {
@@ -386,6 +394,7 @@ export class OneBotChannel {
   // NapCat 的登录失败只写在它的 stdout 里（data/logs/napcat.out），以前没人看。
   // 断线时把它最后一条 Login Error 捞出来，界面才能说"这次不是断网，是登录被拒"。
   napcatLoginHealth() {
+    if (qqProvider !== 'napcat') return null;
     const now = Date.now();
     if (this.loginLogAt && now - this.loginLogAt < 30000) return this.loginLogState;
     this.loginLogAt = now;
@@ -643,6 +652,7 @@ export class OneBotChannel {
   }
 
   handleConnection(ws, req) {
+    ws.onebotAdmitted = false;
     const settings = loadSettings();
     if (!settings.qq.enabled) {
       this.noteRejected('qq disabled');
@@ -675,6 +685,13 @@ export class OneBotChannel {
         return;
       }
     }
+    // Never consume two simultaneous event streams, even for the same QQ ID.
+    if ([...this.clients].some((client) => client.readyState === 1)) {
+      this.noteRejected('duplicate connection');
+      ws.close(1008, 'one active OneBot connection only');
+      return;
+    }
+    ws.onebotAdmitted = true;
     ws.isAlive = true;
     ws.selfId = '';
     ws.lastPongAt = Date.now();
@@ -684,21 +701,22 @@ export class OneBotChannel {
     });
     this.clients.add(ws);
     this.lastError = null;
-    logger.info('NapCat 已连接到控制台');
-    addEvent('qq_connected', 'NapCat 已连接到小知');
+    logger.info(`${providerInfo().name} 已连接到控制台`);
+    addEvent('qq_connected', `${providerInfo().name} 已连接到小知`);
     ws.on('message', (data) => this.handleRaw(ws, data));
     ws.on('close', () => {
+      ws.onebotAdmitted = false;
       this.clients.delete(ws);
       if (this.voiceCall.active && this.clients.size === 0) this.voiceCall.end('channel_down');
       for (const [echo, entry] of this.pending) {
         if (entry.ws === ws) {
           clearTimeout(entry.timer);
           this.pending.delete(echo);
-          entry.reject(String(entry.action || '').startsWith('send_') ? new DeliveryUnknownError('连接中断，QQ 发送结果未知，未自动重发') : new Error('NapCat 连接已断开'));
+          entry.reject(String(entry.action || '').startsWith('send_') ? new DeliveryUnknownError('连接中断，QQ 发送结果未知，未自动重发') : new Error('QQ 协议端连接已断开'));
         }
       }
-      logger.info('NapCat 连接已断开');
-      addEvent('qq_disconnected', 'NapCat 连接断开');
+      logger.info(`${providerInfo().name} 连接已断开`);
+      addEvent('qq_disconnected', `${providerInfo().name} 连接断开`);
     });
     ws.on('error', (error) => {
       this.lastError = error.message;
@@ -707,11 +725,17 @@ export class OneBotChannel {
   }
 
   handleRaw(ws, data) {
+    if (ws.onebotAdmitted === false) return;
     let payload;
     try {
       payload = JSON.parse(data.toString());
     } catch {
       return;
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return;
+    if (payload.post_type) {
+      payload = normalizeOneBotEvent(payload);
+      if (!payload) return;
     }
     this.lastEventAt = new Date().toISOString();
     // 心跳也会刷新 lastEventAt；真正要盯的是"有没有人给我发消息"，所以单独记这一笔。
@@ -726,7 +750,7 @@ export class OneBotChannel {
       clearTimeout(entry.timer);
       const isSend = String(entry.action || '').startsWith('send_');
       const ok = payload.status === 'ok' && Number(payload.retcode) === 0;
-      if (ok && (!isSend || payload.data?.message_id)) {
+      if (ok && (!isSend || payload.data?.message_id != null && payload.data.message_id !== '')) {
         if (isSend) this.lastError = null;
         entry.resolve(payload);
       } else {
@@ -736,7 +760,7 @@ export class OneBotChannel {
           const last = Number(kvGet('qq_send_error_at', '0') || 0);
           if (Date.now() - last > 5 * 60000) {
             kvSet('qq_send_error_at', String(Date.now()));
-            addEvent('qq_send_error', 'QQ 协议层发送失败（NapCat 连上了，但 QQ 账号发不出去）', {
+            addEvent('qq_send_error', 'QQ 协议层发送失败（连接还在，但 QQ 账号发不出去）', {
               action: entry.action,
               error: String(message).slice(0, 160),
             });
@@ -746,7 +770,23 @@ export class OneBotChannel {
       }
       return;
     }
-    if (payload.self_id) ws.selfId = String(payload.self_id);
+    if (payload.self_id) {
+      const identity = this.identityCheck(payload.self_id);
+      if (!identity.ok) {
+        this.noteIdentityMismatch(identity.reason);
+        ws.onebotAdmitted = false;
+        this.clients.delete(ws);
+        ws.close?.(1008, 'bot identity mismatch');
+        return;
+      }
+      if (ws.selfId && ws.selfId !== String(payload.self_id)) {
+        ws.onebotAdmitted = false;
+        this.clients.delete(ws);
+        ws.close?.(1008, 'connection identity changed');
+        return;
+      }
+      ws.selfId = String(payload.self_id);
+    }
     if (payload.post_type === 'meta_event') {
       if (payload.self_id) {
         this.selfId = String(payload.self_id);
@@ -754,26 +794,81 @@ export class OneBotChannel {
         const identity = this.identityCheck();
         if (!identity.ok) this.noteIdentityMismatch(identity.reason);
         else this.identityError = '';
+        if (identity.ok) this.resumeInbox().catch(error => logger.warn('QQ 队列恢复失败', { error: error.message }));
       }
       return;
     }
     if (payload.post_type !== 'message') return;
-    const eventKey = payload.message_id
-      ? `id:${payload.message_id}`
-      : `sig:${payload.self_id || ''}:${payload.message_type || ''}:${payload.group_id || ''}:${payload.user_id || ''}:${payload.time || ''}:${payload.raw_message || ''}`;
+    if (!payload.self_id || !this.identityCheck(payload.self_id).ok || !Array.isArray(payload.message)) return;
+    let receipt;
+    try { receipt = claimMessageReceipt(payload, Date.now(), { provider: qqProvider, owner: kvGet('qq_owner_id', '') }); }
+    catch (error) {
+      this.lastError = 'QQ 消息未能持久入队：' + error.message;
+      logger.error(this.lastError);
+      ws.close?.(1013, 'inbox unavailable');
+      return;
+    }
+    const eventKey = receipt.key;
+    if (!receipt.claimed) return;
     if (this.seenMessages.has(eventKey)) {
       logger.debug('忽略重复的 OneBot 消息', { eventKey });
       return;
     }
     this.seenMessages.set(eventKey, Date.now());
     if (this.seenMessages.size > 800) this.pruneSeenMessages();
-    this.handleMessage(payload).catch((error) => {
+    if (this.maintenance) return;
+    this.dispatchReceipt(receipt.key, payload).catch((error) => {
       this.lastError = error.message;
       logger.warn('处理 QQ 消息失败', { error: error.message });
     });
   }
 
-  async handleMessage(event) {
+  async dispatchReceipt(key, event) {
+    if (this.dispatches.has(key) || this.destroyed || this.maintenance) return;
+    this.dispatches.add(key);
+    inboxState([key], 'dispatching');
+    try {
+      const result = await this.handleMessage(event, key);
+      if (!result?.buffered) inboxState([key], 'completed');
+    } catch (error) { inboxState([key], 'review', error.message); throw error; }
+    finally { this.dispatches.delete(key); }
+  }
+
+  initializeJournal() { recoverJournal(); }
+
+  async resumeInbox() {
+    if (this.recoveringInbox || this.maintenance || this.destroyed || !this.clients.size) return;
+    this.recoveringInbox = true;
+    try {
+      const excludeKeys = [...this.buffers.values()].flatMap(buffer => buffer.receiptKeys || []);
+      const work = pendingInbox({ provider: qqProvider, bot: loadSettings().qq.botAccount, owner: kvGet('qq_owner_id', ''), excludeKeys });
+      for (const item of work) {
+        // Buffered work already owned by this live process must not be replayed.
+        if ([...this.buffers.values()].some(buffer => buffer.receiptKeys?.includes(item.key))) continue;
+        if (this.maintenance || this.destroyed) break;
+        await this.dispatchReceipt(item.key, item.event).catch(error => logger.warn('QQ 队列恢复需核对', { error: error.message }));
+      }
+    } finally { this.recoveringInbox = false; }
+  }
+
+  setMaintenance(enabled) {
+    this.maintenance = enabled === true;
+    kvSetJson('qq_maintenance', this.maintenance);
+    if (this.maintenance) {
+      this.voiceCall.end('maintenance');
+      for (const key of [...this.followUpTimers.keys()]) this.cancelFollowUp(key);
+    } else this.resumeInbox().catch(error => logger.warn('QQ 队列恢复失败', { error: error.message }));
+    return this.status().migration;
+  }
+
+  async checkCapabilities() {
+    for (const action of ['get_login_info', 'get_status', 'can_send_image', 'can_send_record', 'get_version_info']) {
+      await this.sendAction(action, {}, 5000).catch(() => {});
+    }
+    return qqCapabilities();
+  }
+
+  async handleMessage(event, receiptKey = null) {
     const settings = loadSettings();
     if (!settings.qq.enabled) return;
     const identity = this.identityCheck(event.self_id);
@@ -855,6 +950,7 @@ export class OneBotChannel {
     }
 
     const isOwnerPrivate = event.message_type === 'private' && !guest;
+    if (receiptKey && isOwnerPrivate) bindInboxOwner(receiptKey, kvGet('qq_owner_id', ''));
     target.generation = this.generation || 0;
     target.ownerId = isOwnerPrivate ? String(kvGet('qq_owner_id') || '') : '';
     const { text, images, mfaces, hasUnsupported } = extracted;
@@ -873,8 +969,9 @@ export class OneBotChannel {
     if (command) {
       this.lastInboundAt.set(conversationKey, Date.now());
       this.cancelFollowUp(conversationKey);
-      await this.outboundScope.run(target, () => this.runOwnerCommand(command, target)).catch((error) => {
+      await this.outboundScope.run({ ...target, draining: true, receiptKeys: receiptKey ? [receiptKey] : [] }, () => this.runOwnerCommand(command, target)).catch((error) => {
         logger.warn('QQ 口令执行失败', { command, error: error.message });
+        throw error;
       });
       return;
     }
@@ -886,6 +983,11 @@ export class OneBotChannel {
     if (!buffer) {
       buffer = { texts: [], images: [], voices: [], target, nickname, timer: null, groupContext: '', guest, sessionId, firstAt: Date.now() };
       this.buffers.set(conversationKey, buffer);
+    }
+    if (receiptKey) {
+      buffer.receiptKeys ||= [];
+      buffer.receiptKeys.push(receiptKey);
+      inboxState([receiptKey], 'buffered');
     }
     if (target.type === 'group') {
       const previous = (this.groupHistory.get(target.groupId) || []).slice(0, -1).slice(-6);
@@ -908,6 +1010,7 @@ export class OneBotChannel {
         logger.warn('QQ 回复失败', { error: error.message, conversationKey });
       });
     }, Math.min(2200, ageCap));
+    return { buffered: true };
   }
 
   rememberGroupMessage(groupId, nickname, text) {
@@ -1030,9 +1133,15 @@ ${history}
       return;
     }
     this.flushing.add(conversationKey);
+    const receiptKeys = this.buffers.get(conversationKey)?.receiptKeys || [];
     try {
+      inboxState(receiptKeys, 'processing');
       const target = this.buffers.get(conversationKey)?.target || {};
-      await this.outboundScope.run({ generation: target.generation ?? this.generation, ownerId: target.ownerId || '' }, () => this.drainBuffer(conversationKey));
+      await this.outboundScope.run({ generation: target.generation ?? this.generation, ownerId: target.ownerId || '', draining: true, receiptKeys }, () => this.drainBuffer(conversationKey));
+      inboxState(receiptKeys, 'completed');
+    } catch (error) {
+      inboxState(receiptKeys, 'review', error.message);
+      throw error;
     } finally {
       this.flushing.delete(conversationKey);
       if (this.deferredFlush.delete(conversationKey) && this.buffers.has(conversationKey)) {
@@ -1174,13 +1283,15 @@ ${history}
 
     // 语音会话：这一轮的回复要更短、更口语，并且带一个回合身份往下传。
     const callScope = isOwnerPrivate && this.voiceCall.active
-      ? this.voiceCall.openTurn({ accountGeneration: this.generation, ownerId: String(buffer.target.userId || ''), batchFirstAt: buffer.firstAt })
+      ? { ...this.voiceCall.openTurn({ accountGeneration: this.generation, ownerId: String(buffer.target.userId || ''), batchFirstAt: buffer.firstAt }), draining: true, receiptKeys: buffer.receiptKeys || [] }
       : null;
     if (callScope) {
       this.voiceCall.armAck(callScope);
       extraContext = `${extraContext ? `${extraContext}\n` : ''}他正在用语音跟你通话，你也用语音回他：只说一到两句、25～45 个汉字，像打电话那样口语，别列点、别用书面词、别念数字。`;
     }
 
+    let replyMessageId = null;
+    let bodySent = false;
     try {
       const replyArgs = {
         text: messageText,
@@ -1189,10 +1300,13 @@ ${history}
         sessionId: buffer.sessionId || undefined,
         displayName: buffer.nickname,
         extraContext,
+        deliveryMeta: { qqReceiptKeys: buffer.receiptKeys || [], qqDelivery: 'pending' },
+        deferAfterTurn: true,
       };
       const result = callScope
         ? await this.outboundScope.run(callScope, () => this.companion.reply(replyArgs))
         : await this.companion.reply(replyArgs);
+      replyMessageId = result.message?.id || null;
       this.assertCurrentWork();
       const allowExtras = !sleepy && loadSettings().qq.sendStickers !== false && !/别|不要|不想|不许/.test(messageText);
       const stickerCooling = Date.now() - Number(this.stickerTimes.get(this.stickerKey(buffer.target)) || 0) < 5 * 60000;
@@ -1217,6 +1331,9 @@ ${history}
           }
         }
       }
+      bodySent = true;
+      if (replyMessageId) updateMessageMeta(replyMessageId, { qqDelivery: 'sent' });
+      this.companion.completeDeferredTurn?.(result);
       if (buffer.target.type === 'group') {
         this.rememberGroupMessage(buffer.target.groupId, settings.companion?.name || '小知', result.text);
       }
@@ -1308,6 +1425,9 @@ ${history}
         });
       }
     } catch (error) {
+      if (replyMessageId) updateMessageMeta(replyMessageId, bodySent
+        ? { qqExtras: error.code === 'DELIVERY_UNKNOWN' ? 'unknown' : 'failed' }
+        : { qqDelivery: error.code === 'DELIVERY_UNKNOWN' ? 'unknown' : 'failed' });
       this.lastError = error.message;
       // 分清"模型那一步没给出话"和"通道/投递出问题"：界面照着这个分类说人话。
       // 不然一次上游 503 会被写成"你电脑上还开着主号 QQ"，把人指去重扫码。
@@ -1349,6 +1469,7 @@ ${history}
   }
 
   scheduleSelfFollowUp({ conversationKey, target, guest, hisText, replyText }) {
+    if (this.maintenance) return;
     const budget = this.followUpBudget();
     const qq = budget.settings.qq || {};
     if (!qq.selfFollowUp || guest || target?.type !== 'private') return;
@@ -1770,14 +1891,19 @@ ${history}
   }
 
   async sendToOwner(text) {
+    if (this.maintenance) return false;
     const owner = kvGet('qq_owner_id');
     if (!owner || !this.clients.size) return false;
-    const chunks = splitForQQ(text);
-    for (const chunk of chunks) {
-      await this.sendToTarget({ type: 'private', userId: owner }, chunk);
-      await sleep(350);
-    }
-    return true;
+    const scope = this.outboundScope.getStore() || { generation: this.generation, ownerId: String(owner) };
+    return this.outboundScope.run(scope, async () => {
+      const chunks = splitForQQ(text);
+      for (const chunk of chunks) {
+        this.assertCurrentWork();
+        await this.sendToTarget({ type: 'private', userId: owner }, chunk);
+        await sleep(350);
+      }
+      return true;
+    });
   }
 
   stickerKey(target) { return target.type === 'private' ? 'private:' + target.userId : 'group:' + target.groupId; }
@@ -1925,6 +2051,7 @@ ${history}
     try { this.assertCurrentWork(); } catch (error) { return Promise.reject(error); }
     const settings = loadSettings();
     if (!settings.qq.enabled || this.destroyed) return Promise.reject(new Error('QQ 通道已停用'));
+    if (this.maintenance && String(action).startsWith('send_') && !this.outboundScope.getStore()?.draining) return Promise.reject(new Error('QQ 正在维护，新发送已暂停'));
     const guarded = !['get_login_info', 'get_status'].includes(action);
     const ready = [...this.clients].filter((client) => client.readyState === 1 && (client.isAlive !== false || Date.now() - (client.lastPongAt || 0) < 30000));
     const ownerId = kvGet('qq_owner_id');
@@ -1937,25 +2064,47 @@ ${history}
         this.noteIdentityMismatch(reason);
         return Promise.reject(new Error(reason));
       }
-      return Promise.reject(new Error('NapCat 还没连上'));
+      return Promise.reject(new Error('QQ 协议端还没连上'));
     }
     if (this.pending.size >= 40) return Promise.reject(new Error('QQ 请求排队太满，先等一下再试'));
     const echo = `bz_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    let outboundId;
+    try {
+      if (String(action).startsWith('send_')) {
+        const scope = this.outboundScope.getStore();
+        const sequence = scope ? this.outboundSequences.get(scope) || 0 : null;
+        if (scope) this.outboundSequences.set(scope, sequence + 1);
+        const attempt = beginOutbound({ provider: qqProvider, bot: ws.selfId, action, params, receiptKeys: scope?.receiptKeys || [], sequence });
+        if (attempt.receipt) return Promise.resolve(attempt.receipt);
+        outboundId = attempt.id;
+      }
+    } catch (error) { return Promise.reject(error); }
     return new Promise((resolve, reject) => {
+      const resolveDelivery = (payload) => {
+        try { finishOutbound(outboundId, 'sent', { messageId: payload.data?.message_id }); noteQqCapability(action, payload.data?.yes === false ? 'degraded' : 'available'); resolve(payload); }
+        catch (error) { reject(new DeliveryUnknownError('发送回执未能落盘，请核对 QQ 原窗口', error)); }
+      };
+      const rejectDelivery = (error) => {
+        noteQqCapability(action, /unsupported|not supported|unknown action|不支持|未实现|未知.*(?:接口|动作)/i.test(error.message) ? 'unsupported' : 'error', error.message);
+        try { finishOutbound(outboundId, error.code === 'DELIVERY_UNKNOWN' ? 'unknown' : 'failed', { reason: error.message }); }
+        catch (journalError) { error = new DeliveryUnknownError('发送状态未能落盘，请核对 QQ 原窗口', journalError); }
+        reject(error);
+      };
       const timer = setTimeout(() => {
         this.pending.delete(echo);
         const error = String(action).startsWith('send_') ? new DeliveryUnknownError('QQ 发送结果未知，请先核实，未自动重发') : new Error('OneBot 调用超时');
         this.lastError = error.message;
-        reject(error);
+        rejectDelivery(error);
       }, timeoutMs);
-      this.pending.set(echo, { resolve, reject, timer, ws, action });
-      ws.send(JSON.stringify({ action, params, echo }), (error) => {
+      this.pending.set(echo, { resolve: resolveDelivery, reject: rejectDelivery, timer, ws, action });
+      const writeFailed = (error) => {
         if (error) {
           clearTimeout(timer);
           this.pending.delete(echo);
-          reject(error);
+          rejectDelivery(String(action).startsWith('send_') ? new DeliveryUnknownError('QQ 写入连接失败，发送结果未知，未自动重发', error) : error);
         }
-      });
+      };
+      try { ws.send(JSON.stringify({ action, params, echo }), writeFailed); } catch (error) { writeFailed(error); }
     });
   }
 
@@ -1965,6 +2114,20 @@ ${history}
     const budget = this.followUpBudget();
     const identity = this.identityCheck();
     return {
+      provider: providerInfo(),
+      capabilities: qqCapabilities(),
+      migration: {
+        maintenance: this.maintenance,
+        activeDispatches: this.dispatches.size,
+        journal: journalStatus(),
+        pendingActions: this.pending.size,
+        bufferedChats: this.buffers.size,
+        activeReplies: this.flushing.size,
+        voiceActive: this.voiceCall.active,
+        idle: !this.pending.size && !this.buffers.size && !this.flushing.size && !this.dispatches.size && !this.recoveringInbox && !this.voiceCall.active,
+        // This is an observation, not a lock or a zero-loss cutover guarantee.
+        requiresColdRestart: true,
+      },
       connected: this.clients.size > 0,
       clients: this.clients.size,
       selfId: this.selfId || kvGet('qq_self_id') || '',
@@ -1999,7 +2162,7 @@ ${history}
       recoverError: this.recoverError ? logger.redact(this.recoverError) : null,
       lastError: this.lastError ? logger.redact(this.lastError) : null,
       lastErrorKind: this.lastErrorKind || null,
-      wsUrl: `ws://127.0.0.1:${env.port}/onebot`,
+      wsUrl: providerInfo().wsUrl,
     };
   }
 
@@ -2027,7 +2190,7 @@ ${history}
     for (const [echo, entry] of this.pending) {
       clearTimeout(entry.timer);
       this.pending.delete(echo);
-      entry.reject(new Error('QQ 通道已关闭'));
+      entry.reject(String(entry.action || '').startsWith('send_') ? new DeliveryUnknownError('QQ 通道已关闭，发送结果未知，未自动重发') : new Error('QQ 通道已关闭'));
     }
   }
 
@@ -2040,7 +2203,7 @@ ${history}
     this.buffers.clear();
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
-      entry.reject(new Error('服务关闭'));
+      entry.reject(String(entry.action || '').startsWith('send_') ? new DeliveryUnknownError('服务关闭，QQ 发送结果未知，未自动重发') : new Error('服务关闭'));
     }
     this.pending.clear();
     for (const ws of this.clients) {
