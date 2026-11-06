@@ -19,7 +19,7 @@ import { assertPublicContent } from '../privacy.js';
 import { hashText, nowIso, sleep } from '../util.js';
 import { CdpBrowser } from '../browser/cdp.js';
 import { SerialQueue } from '../serial.js';
-import { beginEffect, failEffect, finishEffect } from '../effects.js';
+import { beginEffect, DeliveryUnknownError, failEffect, finishEffect } from '../effects.js';
 import { assertXAction, assertXDeliveryEvidence, assertXPage, assertXReactEvidence, assertXReplyEvidence, isXLoginPage, triggerXCooldown, xCooldownUntil } from './x-safety.js';
 
 const BASE = 'https://x.com';
@@ -649,6 +649,25 @@ async function replyToTweetLocked(href, text) {
   for (let i = 0; i < 6 && !after.found; i += 1) {
     after = await browser.evaluate(replyProof(content, handle));
     if (!after.found) await sleep(1500);
+  }
+  if (!after.found) {
+    // 核不到就把"那一下到底点在哪"一起报出来：现在只知道粘贴成功、按钮不灰、标签是"回复"，
+    // 但原推文下面还是 0 回复——下一步要分清是点到了别的弹层，还是根本没提交。
+    const where = await browser.evaluate(String.raw`(() => {
+      const clean = (s) => (s || '').replace(/\s+/g, ' ').trim();
+      const btn = document.querySelector('[data-bizhi-target="send"]');
+      const r = btn ? btn.getBoundingClientRect() : null;
+      const spot = btn ? (btn.getAttribute('data-testid') || '无名') + ' ' + Math.round(r.width) + 'x' + Math.round(r.height) + ' @' + Math.round(r.x) + ',' + Math.round(r.y) : '（没了）';
+      return {
+        url: location.href,
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+        button: spot,
+        hint: clean(document.body.innerText).slice(0, 60),
+      };
+    })()`).catch(() => ({ url: '', dialogs: -1, button: '读不到', hint: '' }));
+    // 框里还剩什么，用同一份挑框逻辑读，不再自己写一遍选择器（写过一次，挑到的是主页发帖框）
+    const left = await browser.evaluate(composerRead()).catch(() => ({ text: '' }));
+    throw new DeliveryUnknownError(`回到那条推文下面没读到她的回复（现在在 ${String(where.url).slice(0, 44)}；弹层 ${where.dialogs} 个；框里还剩「${normalizeTyped(left.text).slice(0, 24)}」；发送按钮 ${where.button}；页面开头「${where.hint}」）：这条状态未知，别重复点`);
   }
   assertXReplyEvidence({ ...after, content, handle });
   return { ok: true, verified: true, chars: content.length };
