@@ -254,7 +254,7 @@ async function loadStatus() {
   renderStatus();
   if (previous && previous.qq?.connected !== status.qq?.connected) {
     if (status.qq?.connected) toast('QQ 已连接，她可以在 QQ 里说话了。');
-    else toast('QQ 断开了：她不会去重启 NapCat（那会踢掉登录），详情看「设置 → QQ」。', 'error');
+    else toast('QQ 暂时断开，正在等待协议端回连；详情见「设置 → QQ 连接与行为」。', 'error');
     loadQqSetup().catch(() => {});
   }
   if (previous?.qq?.identityOk !== status.qq?.identityOk && status.qq?.connected && status.qq?.identityOk === false) {
@@ -2500,6 +2500,23 @@ async function loadQqSetup() {
   const data = await api('/api/qq/setup');
   const provider = data.provider || { name: 'NapCat', id: 'napcat' };
   state.qqProvider = provider;
+  const localPage = ['127.0.0.1', 'localhost', '[::1]', '::1'].includes(location.hostname);
+  const snow = provider.id === 'snowluma';
+  const base = provider.webUiUrl || 'http://127.0.0.1:5099/';
+  for (const [id, url] of [['#qqConsoleLink', base], ['#qqConsoleOverview', base], ['#qqConsoleProcesses', provider.processesUrl || base + 'processes']]) {
+    const link = $(id);
+    link.hidden = !snow || !localPage;
+    link.href = url;
+  }
+  $('#qqConsoleLinks').hidden = !snow || !localPage;
+  $('#qqConsoleHint').hidden = !snow;
+  $('#qqConsoleHint').textContent = localPage
+    ? 'SnowLuma 管理 QQ 登录与进程接入，鲸鲸管理聊天、记忆和任务。两个页面可同时打开。'
+    : 'SnowLuma 管理页只在机器人电脑本机开放，请在该电脑打开；手机上的 127.0.0.1 不是机器人电脑。';
+  const background = data.background || {};
+  $('#backgroundLifecycleStatus').textContent = background.installed
+    ? `登录自启：已配置｜解锁检查：${background.unlock ? '已配置' : '未配置'}｜唤醒检查：${background.resume ? '已配置' : '未配置'}｜兜底检查：每 ${background.periodicMinutes || '—'} 分钟。${!background.enabled ? '后台已手动停止。' : background.resumeWaiting ? '正在等待唤醒后的网络恢复。' : background.fresh ? '后台检查正常。' : '后台状态尚未更新，请检查计划任务。'}`
+    : '尚未核实新版后台配置；请先启用项目的后台启动任务。';
   if ($('#importQzoneCookie')) $('#importQzoneCookie').textContent = `从 ${provider.name} 导入`;
   if ($('#qqProviderHint')) $('#qqProviderHint').textContent = provider.id === 'snowluma'
     ? provider.loginHint + ' OneBot 只配置机器人小号的反向 WebSocket，使用下方地址与令牌。'

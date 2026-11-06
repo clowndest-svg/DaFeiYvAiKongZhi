@@ -4,10 +4,10 @@ import { spawn, execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { env, paths, storage } from '../src/config.js';
 import { cleanStorage } from '../src/storage.js';
-import { qqProvider } from '../src/qq-provider.js';
+import { qqProvider, providerInfo } from '../src/qq-provider.js';
 import { listOwned, startQqProvider } from '../src/processes.js';
 import { acquireRuntimeLock } from '../src/runtime-lock.js';
-import { restartDecision } from '../src/background-policy.js';
+import { restartDecision, resumeGrace } from '../src/background-policy.js';
 
 const disabledFile = path.join(paths.data, 'background.disabled');
 const stateFile = path.join(paths.data, 'background-state.json');
@@ -19,6 +19,9 @@ try {
 } catch { /* A first run has no retry history. */ }
 let stopping = false;
 let lastStorageCleanup = 0;
+let previousTick = Date.now();
+let resumeDeadline = 0;
+let lastGapAt = null;
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 function save(state) {
   state.attempts = attempts;
@@ -41,8 +44,13 @@ function snowProbe() {
   } catch { return 'unknown'; }
 }
 async function tick() {
+  const now = Date.now();
+  const grace = resumeGrace(previousTick, now, resumeDeadline);
+  previousTick = now; resumeDeadline = grace.until;
+  if (grace.detected) lastGapAt = new Date(now).toISOString();
   const state = { at: new Date().toISOString(), provider: qqProvider, disabled: stopping || fs.existsSync(disabledFile) };
-  if (!state.disabled && Date.now() - lastStorageCleanup > 6 * 3600000) {
+  state.resume = { lastGapAt, waiting: now < resumeDeadline, graceUntil: resumeDeadline || null };
+  if (!state.disabled && now >= resumeDeadline && Date.now() - lastStorageCleanup > 6 * 3600000) {
     lastStorageCleanup = Date.now();
     try {
       const script = 'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId | ConvertTo-Json -Compress';
@@ -56,7 +64,7 @@ async function tick() {
   try { appProbe = listOwned('server').length ? 'present' : 'absent'; } catch { /* Do not start on ambiguous ownership. */ }
   const appHealthy = await healthy(`http://127.0.0.1:${env.port}/api/health`);
   // An unknown occupant of the business port must never get a second writer.
-  const app = restartDecision({ probe: appHealthy ? 'present' : appProbe, healthy: appHealthy, attempts: attempts.app, disabled: state.disabled });
+  const app = restartDecision({ probe: appHealthy ? 'present' : appProbe, healthy: appHealthy, attempts: attempts.app, disabled: state.disabled, notBefore: resumeDeadline });
   attempts.app = app.attempts;
   save(state); // Reserve a restart attempt before spawning, including crash recovery.
   if (app.start) {
@@ -67,11 +75,11 @@ async function tick() {
     } finally { fs.closeSync(log); }
   }
   state.app = { state: app.state, retriesInWindow: attempts.app.length };
-  const qqHealthy = qqProvider === 'snowluma' && await healthy('http://127.0.0.1:5099/');
+  const qqHealthy = qqProvider === 'snowluma' && await healthy(providerInfo().webUiUrl);
   let probe = 'unknown';
   if (qqProvider === 'snowluma') probe = snowProbe();
   else { try { probe = listOwned('napcat').length ? 'present' : 'unknown'; } catch {} }
-  const qq = restartDecision({ probe: qqHealthy ? 'present' : probe, healthy: qqHealthy, attempts: attempts.qq, disabled: state.disabled });
+  const qq = restartDecision({ probe: qqHealthy ? 'present' : probe, healthy: qqHealthy, attempts: attempts.qq, disabled: state.disabled, notBefore: resumeDeadline });
   attempts.qq = qq.attempts;
   save(state);
   if (qq.start) {

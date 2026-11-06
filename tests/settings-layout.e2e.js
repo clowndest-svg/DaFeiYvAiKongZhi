@@ -15,6 +15,11 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   const errors = []; page.on('pageerror', error => errors.push(error.message));
   const headers = { origin: app.base, 'x-bizhi-request': '1' };
   const current = async () => (await context.request.get(app.base + '/api/settings')).json();
+  await page.route('**/api/qq/setup', async route => {
+    const response = await route.fetch(); const data = await response.json();
+    await route.fulfill({ json: { ...data, provider: { ...data.provider, id: 'snowluma', name: 'SnowLuma', qrMode: 'desktop', webUiUrl: 'http://127.0.0.1:5099/', processesUrl: 'http://127.0.0.1:5099/processes' }, background: { installed: true, enabled: true, logon: true, unlock: true, resume: true, periodicMinutes: 5, fresh: true } } });
+  });
+  await context.route('http://127.0.0.1:5099/**', route => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<h1>模拟 SnowLuma 控制台</h1>' }));
   const models = Array.from({ length: 36 }, (_, i) => ({ id: `fixture-${i}`, title: `测试音色 ${i}`, family: i % 2 ? '男声' : '女声', available: true, bytes: 55000000 }));
   await page.route('**/api/voice/setup', async route => {
     const snapshot = await current();
@@ -29,6 +34,15 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   });
   await page.goto(app.base + '/?view=settings');
   await page.waitForFunction(() => document.querySelector('#setName').value.length > 0);
+  await page.locator('#qqConsoleLink').waitFor({ state: 'visible' });
+  const popupReady = context.waitForEvent('page');
+  await page.locator('#qqConsoleLink').click();
+  const popup = await popupReady; await popup.getByRole('heading', { name: '模拟 SnowLuma 控制台' }).waitFor();
+  assert.equal(popup.url(), 'http://127.0.0.1:5099/');
+  assert.equal(await popup.evaluate(() => window.opener === null), true);
+  await popup.close();
+  assert.match(await page.locator('#qqConsoleProcesses').getAttribute('href'), /\/processes$/);
+  assert.equal(await page.locator('#qqConsoleOverview').getAttribute('target'), '_blank');
   await page.locator('#setName').fill('分区切换保留草稿');
   await page.getByRole('tab', { name: '聊天与记忆', exact: true }).click();
   await page.locator('#setSearchDailyMax').fill('13');

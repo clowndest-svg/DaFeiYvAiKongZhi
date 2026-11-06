@@ -65,6 +65,7 @@
         <button class="mood-chip" id="moodChip" title="看看她现在的状态">正在感受…</button>
         <div class="top-right">
           <button class="ghost-btn" id="balanceBtn" title="查看 DeepSeek 余额">余额 --</button>
+          <a class="ghost-btn service-link qq-console-shortcut" id="qqConsoleLink" href="http://127.0.0.1:5099/" target="_blank" rel="noopener noreferrer" aria-label="SnowLuma 控制台（新标签页）" hidden><span class="console-full-label">SnowLuma ↗</span><span class="console-short-label">协议端 ↗</span></a>
           <button class="ghost-btn mobile-only" id="openChatSide" aria-controls="chatSide" aria-expanded="false">详情</button>
           <button class="ghost-btn" id="openSettings">设置</button>
         </div>
@@ -570,6 +571,8 @@
 
               <section class="card" id="set-card-qq-login">
                 <h3>QQ 连接与登录</h3>
+                <div class="btn-row qq-console-links" id="qqConsoleLinks" hidden><a id="qqConsoleOverview" class="service-link" href="http://127.0.0.1:5099/" target="_blank" rel="noopener noreferrer">打开 SnowLuma 控制台 ↗</a><a id="qqConsoleProcesses" class="service-link" href="http://127.0.0.1:5099/processes" target="_blank" rel="noopener noreferrer">QQ 进程接入 ↗</a></div>
+                <p class="muted small" id="qqConsoleHint" hidden>SnowLuma 管理 QQ 登录与进程接入，鲸鲸管理聊天、记忆和任务。两个页面可同时打开。</p>
                 <label class="check"><input type="checkbox" id="setQqEnabled"> 启用 QQ 通道</label>
                 <div class="qq-setup" id="qq-setup">
                   <p id="qqProviderHint">在 QQ 协议端的「网络配置 → WebSocket 客户端」里填写下方地址和令牌：</p>
@@ -771,6 +774,12 @@
                 <label class="check"><input type="checkbox" id="setShowThought"> 显示“她的心里话”</label>
                 <p class="muted small">朗读使用服务端 TTS，与陪伴页共用控制台语音额度；实际音色与回退情况会提示。</p>
                 <button type="button" id="logoutBtn" class="icon-btn">退出控制台登录</button>
+              </section>
+              <section class="card" id="set-card-background">
+                <h3>后台与睡眠恢复</h3>
+                <p id="backgroundLifecycleStatus" class="muted small">正在读取后台配置…</p>
+                <p class="muted small">重启电脑后，登录 Windows 桌面才会自动启动。睡眠期间无法回复；唤醒后等待网络恢复并检查连接。已有进程不会因为短暂掉线被强行结束。</p>
+                <p class="muted small">QQ 登录失效或需要重新接入进程时，仍需你在 SnowLuma 中核对机器人小号。手动停止后台后，唤醒检查不会擅自重新启用。</p>
               </section>
 
               <section class="card wide" id="set-card-persona">

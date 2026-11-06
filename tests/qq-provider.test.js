@@ -24,6 +24,7 @@ test('SnowLuma 配置仅机器人账号启用反向连接，不打开额外监�
   assert.equal(config.runtime.hookAutoLoad, false);
   assert.throws(() => snowLumaConfig({ account: '../other', token: 'x' }));
   assert.equal(providerInfo().id, 'napcat');
+  assert.equal(providerInfo().webUiUrl, 'http://127.0.0.1:6099/');
 });
 
 test('消息回执跨数据库重开去重；同 ID 不同账号/群/发送者不误去重；ID 0 合法', () => {

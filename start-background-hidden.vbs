@@ -5,6 +5,7 @@ Set fs = CreateObject("Scripting.FileSystemObject")
 Set sh = CreateObject("WScript.Shell")
 If Err.Number <> 0 Then WScript.Quit 1
 root = fs.GetParentFolderName(WScript.ScriptFullName)
+If fs.FileExists(fs.BuildPath(root, "data\background.disabled")) Then WScript.Quit 0
 nodeFile = fs.BuildPath(root, "data\background-node.txt")
 If Not fs.FileExists(nodeFile) Then WScript.Quit 1
 Set stream = fs.OpenTextFile(nodeFile, 1)

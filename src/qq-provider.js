@@ -9,9 +9,18 @@ if (!['napcat', 'snowluma'].includes(qqProvider)) throw new Error('BIZHI_QQ_PROV
 export function providerInfo() {
   const snow = qqProvider === 'snowluma';
   const dir = path.join(paths.root, qqProvider);
+  let webuiPort = snow ? 5099 : 6099;
+  if (snow) {
+    try {
+      const value = JSON.parse(fs.readFileSync(path.join(dir, 'config', 'runtime.json'), 'utf8')).webuiPort;
+      if (Number.isInteger(value) && value > 0 && value <= 65535) webuiPort = value;
+    } catch { /* The documented default remains usable before installation. */ }
+  }
   return {
     id: qqProvider,
     name: snow ? 'SnowLuma' : 'NapCat',
+    webUiUrl: `http://127.0.0.1:${webuiPort}/`,
+    processesUrl: snow ? `http://127.0.0.1:${webuiPort}/processes` : null,
     dir,
     installed: fs.existsSync(path.join(dir, snow ? 'index.mjs' : 'napcat.mjs')),
     wsPath: snow ? '/onebot/snowluma' : '/onebot',

@@ -1,6 +1,7 @@
 import http from 'node:http';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import { backgroundStatus } from './background-status.js';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { assertCsrf, readJsonBody as readRequestBody } from './http-security.js';
@@ -1994,6 +1995,7 @@ async function handleApi(req, res, pathname, url) {
     }
     return sendJson(res, 200, {
       provider,
+      background: backgroundStatus(),
       wsUrl: provider.wsUrl,
       token: maskKey(env.onebotToken),
       tokenConfigured: Boolean(env.onebotToken),
