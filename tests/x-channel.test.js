@@ -266,6 +266,9 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   assert.ok(reply[0].includes('readComposerUntil()'), '没等到框里真的出现字就往下走：Draft.js 下一帧才挂字');
   assert.ok(reply[0].includes('data-bizhi-target') || true, '挑框逻辑挪走了');
   assert.ok(reply[0].includes('data-bizhi-target="send"'), '发送没走可信鼠标点击：实测合成 click() 在这页上点了没反应，粘贴成功、按钮不灰、回复却不存在');
+  assert.ok(reply[0].includes('waitForComposerGone('), '点完发送没等弹层关掉：实测原来 sleep 3 秒就导航，页面还在拦 beforeunload——说明根本没提交，草稿是我们自己丢的');
+  assert.ok(reply[0].includes('modifiers: 2'), '没有 Ctrl+Enter 兜底：键盘和鼠标是两条通道，一条不通还有另一条');
+  assert.ok(!/await sleep\(3000\);\r?\n  \/\/ 弹层一关/.test(reply[0]), '又回到"睡 3 秒然后自己去导航"');
   assert.ok(!reply[0].includes('data-bizhi-target="composer"'), '又想用真鼠标点击去聚焦输入框：字只能靠粘贴事件进去');
   assert.ok(reply[0].includes('openTweet(thread'), '回复前没站到那条推文自己的页面上：上一步把标签页带去别处后，下一次就成了"找不到那条推文"');
   assert.ok(src.includes("new ClipboardEvent('paste'"), '粘贴事件没派发：这是四种试过的方法里唯一能落字的');

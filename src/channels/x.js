@@ -536,6 +536,7 @@ function composerState(action, text = '') {
       dt.setData('text/plain', ${JSON.stringify(String(text || ''))});
       box.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
     }
+    if (did === 'focus' && box) box.focus();
     return {
       text: clean(box?.innerText),
       found: Boolean(box),
@@ -549,7 +550,20 @@ function composerState(action, text = '') {
 
 const composerRead = () => composerState('read');
 const composerPaste = (text) => composerState('paste', text);
+const composerFocus = () => composerState('focus');
 const composerSend = () => composerState('send');
+
+// 提交成功的信号是"那个框没了或者空了"：X 关弹层就是这样。等不到就当作没提交，
+// 绝不自己再点第二下——第二下要么发重复，要么把已经发出去的那条撤掉。
+async function waitForComposerGone(timeoutMs = 9000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const state = await browser.evaluate(composerRead()).catch(() => ({ found: false, text: '' }));
+    if (!state.found || !normalizeTyped(state.text)) return true;
+    if (Date.now() >= deadline) return false;
+    await sleep(600);
+  }
+}
 
 // 私信的输入框是另一个 testid，但同样只认粘贴（同一个 Slate 编辑器）。
 const composerPasteDm = (text) => String.raw`(() => {
@@ -641,7 +655,19 @@ async function replyToTweetLocked(href, text) {
   // 发送要用可信鼠标事件：合成 click() 在这页上点了没反应（实测粘贴成功、按钮不灰、点完没有回复）。
   if (!(await browser.evaluate(composerSend()))) throw new Error('没找到回复的发送按钮，这次没发');
   if (!(await browser.clickAt('[data-bizhi-target="send"]'))) throw new Error('发送按钮点不到（可能已被页面挪走了），这次没发');
-  await sleep(3000);
+  // 点完先等弹层自己关掉。原来这里直接 sleep 3 秒然后导航，结果页面还在拦
+  // "Leave site?（beforeunload）"——说明那一下根本没提交，草稿是我们自己丢掉的。
+  let sent = await waitForComposerGone(9000);
+  if (!sent) {
+    // 兜底：X 的编辑器支持 Ctrl+Enter 提交，键盘通道和鼠标点击是两条路
+    await browser.evaluate(composerFocus());
+    for (const type of ['keyDown', 'keyUp']) {
+      await browser.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13, modifiers: 2 }).catch(() => {});
+    }
+    sent = await waitForComposerGone(9000);
+  }
+  if (!sent) throw new Error('点完发送，回复框还开着、内容也还在——这条没提交成功，没有重复点');
+  await sleep(1500);
   // 弹层一关，新回复不会留在她刚才刷的时间线上——原地数卡片证明不了发出去了
   // （实测今天两次"没核实成功"就是这么来的）。回到那条推文下面，按她的账号逐字核对。
   await browser.navigate(thread);
