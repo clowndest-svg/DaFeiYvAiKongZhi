@@ -12,7 +12,8 @@ function windowCoveringNow() {
   const now = new Date();
   const shift = (hours) => {
     const d = new Date(now.getTime() + hours * 3600000);
-    return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+    // Business windows use Shanghai time even when the CI host runs in UTC.
+    return new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(d);
   };
   return { start: shift(-2), end: shift(2) };
 }

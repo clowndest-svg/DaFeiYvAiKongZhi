@@ -1,0 +1,26 @@
+[Unit]
+Description=BiZhi bounded host health snapshot (no business changes)
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=bizhi-host-health
+StateDirectoryMode=0700
+ExecStart=/usr/bin/python3 /opt/bizhi-ops/server-health.py
+TimeoutStartSec=30
+MemoryMax=48M
+CPUQuota=5%
+Nice=19
+IOSchedulingClass=idle
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX
+RestrictSUIDSGID=yes
+LockPersonality=yes
+UMask=0077

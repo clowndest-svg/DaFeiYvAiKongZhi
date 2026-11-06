@@ -133,7 +133,7 @@ export function shouldStartNapCat({ launcherCount = 0, qqProbeState = 'unknown',
 // 用异步版：同步 spawn 会卡住事件循环，正在回的消息都被拖慢。
 
 let providerStarting = null;
-export async function startQqProvider() {
+export async function startQqProvider({ runtimeOnly = false, keepLauncherAlive = true } = {}) {
   if (providerStarting) return providerStarting;
   const lock = path.join(paths.data, 'qq-provider-start.lock');
   let lockFd;
@@ -155,7 +155,10 @@ export async function startQqProvider() {
     if (listOwned('napcat').length) throw new Error('NapCat 启动器仍在运行，不能同时启动两套协议端');
     if (listOwned('snowluma').length) return { already: true, provider: qqProvider };
     const qq = countQqProcesses();
-    if (qq.state !== 'absent') throw new Error('首次启动 SnowLuma 前必须确认 QQ 均已退出；现有 QQ 可能仍载有 NapCat，程序不会代你关闭主号');
+    if (qq.state !== 'absent' && !runtimeOnly) throw new Error('首次启动 SnowLuma 前必须确认 QQ 均已退出；现有 QQ 可能仍载有 NapCat，程序不会代你关闭主号');
+    // Runtime recovery never injects QQ. Existing QQ can remain untouched only
+    // when the caller explicitly requests runtime-only recovery and the full
+    // config verification below proves automatic loading is disabled.
     // Explicitly manual: never inject every QQ process, never touch the main account.
     const runtime = JSON.parse(fs.readFileSync(path.join(info.dir, 'config', 'runtime.json'), 'utf8'));
     if (runtime.hookAutoLoad !== false) throw new Error('SnowLuma 必须关闭自动注入，避免接入主号');
@@ -176,7 +179,7 @@ export async function startQqProvider() {
         child.once('exit', code => reject(new Error(`SnowLuma 启动期间退出（${code}），未确认运行`)));
         child.once('spawn', () => { setTimeout(() => {
           if (child.exitCode !== null || child.signalCode !== null) reject(new Error('SnowLuma 启动后没有保持运行'));
-          else resolve();
+          else { if (!keepLauncherAlive) child.unref(); resolve(); }
         }, 1000); });
       });
     } finally { fs.closeSync(log); }

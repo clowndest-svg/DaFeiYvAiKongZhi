@@ -1,0 +1,12 @@
+[Unit]
+Description=BiZhi host health every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+RandomizedDelaySec=30
+AccuracySec=15s
+Unit=bizhi-host-health.service
+
+[Install]
+WantedBy=timers.target
