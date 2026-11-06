@@ -1,3 +1,4 @@
+import { SETTINGS_CARDS, settingsScopePatch, catalogPage } from './settings-model.js';
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -1734,6 +1735,49 @@ async function loadLatestXhsDraft() {
 
 /* ---------------- settings ---------------- */
 
+let settingsSection = 'identity';
+let rvcLibraryPage = 0;
+function selectSettingsSection(section, resetScroll = true) {
+  if (!SETTINGS_CARDS[section]) return;
+  settingsSection = section;
+  for (const [group, cards] of Object.entries(SETTINGS_CARDS)) for (const name of cards) {
+    const card = $(`#set-card-${name}`);
+    if (card) { card.dataset.settingsGroup = group; card.hidden = group !== section; }
+  }
+  for (const button of $$('[data-settings-tab]')) {
+    button.setAttribute('aria-selected', String(button.dataset.settingsTab === section));
+    button.tabIndex = button.dataset.settingsTab === section ? 0 : -1;
+  }
+  for (const name of SETTINGS_CARDS[section]) $('#settingsCards').appendChild($(`#set-card-${name}`));
+  $('#settingsCards').setAttribute('aria-labelledby', `settings-tab-${section}`);
+  $('#saveSectionBtn').dataset.saveScope = section;
+  if (resetScroll) $('#view-settings').scrollTop = 0;
+}
+
+function bindSettingsNavigation() {
+  selectSettingsSection(settingsSection, false);
+  const tabs = $$('[data-settings-tab]');
+  tabs.forEach((button, index) => {
+    button.addEventListener('click', () => selectSettingsSection(button.dataset.settingsTab));
+    button.addEventListener('keydown', event => {
+      const movement = { ArrowDown: 1, ArrowRight: 1, ArrowUp: -1, ArrowLeft: -1 }[event.key];
+      if (!movement && !['Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + movement + tabs.length) % tabs.length;
+      tabs[next].click(); tabs[next].focus();
+    });
+  });
+  for (const dialog of $$('.settings-dialog')) {
+    $('[data-close-settings-dialog]', dialog).addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => { for (const audio of $$('audio', dialog)) audio.pause(); });
+  }
+  $('#rvcLibraryBtn').addEventListener('click', () => { renderRvcCatalog(); $('#rvcLibraryDialog').showModal(); });
+  for (const id of ['#rvcLibrarySearch', '#rvcLibraryFilter']) $(id).addEventListener('input', () => { rvcLibraryPage = 0; renderRvcCatalog(); });
+  $('#rvcLibraryPrev').addEventListener('click', () => { rvcLibraryPage--; renderRvcCatalog(); });
+  $('#rvcLibraryNext').addEventListener('click', () => { rvcLibraryPage++; renderRvcCatalog(); });
+  $('#settingsEventsBtn').addEventListener('click', () => { $('#settingsEventsDialog').showModal(); loadEvents().catch(error => toast(error.message, 'error')); });
+}
+
 function fillVoiceSelect(selected) {
   const sel = $('#setVoiceName');
   if (!sel) return;
@@ -1770,6 +1814,7 @@ function renderRvc() {
   const listBox = $('#rvcModelList');
   if (!line || !listBox) return;
   const r = state.voiceSetup?.rvc;
+  $('#rvcSelectedLine').textContent = r?.modelTitle || r?.model ? `当前音色：${r.modelTitle || r.model}${r.enabled ? ' · 已启用' : ' · 未启用'}` : '尚未选择音色';
   if (!r) {
     line.textContent = '正在读取变声引擎状态…';
     listBox.textContent = '';
@@ -1777,41 +1822,54 @@ function renderRvc() {
   }
   $('#rvcEnabled').checked = r.enabled === true;
   $('#rvcTranspose').value = r.transpose ?? 0;
-  $('#rvcF0').value = r.f0 || 'harvest';
+  $('#rvcF0').value = r.f0 || 'pm';
   $('#rvcTimeout').value = r.timeoutSeconds || 180;
   if (!r.installed || !r.baseWeights) {
     line.textContent = `变声引擎${r.installed ? '缺基座权重' : '还没装'}：装好才能试听，命令是 ${r.installHint}`;
-    listBox.textContent = '';
+    renderRvcCatalog();
     return;
   }
   const m = r.runner || {};
   const timing = m.calls ? ` · 已转 ${m.calls} 条，第一条 ${Math.round((m.firstMs || 0) / 1000)} 秒，最近一条 ${Math.round((m.lastMs || 0) / 1000)} 秒${m.alive ? '（进程还留着）' : '（下次要重新载入）'}` : ' · 还没在这台机器上真转过';
   line.textContent = `引擎已装 · 清单 ${r.modelCount} 个 · 可用 ${r.readyCount} 个 · 现在${r.enabled ? `开着，发语音用「${r.modelTitle || r.model || '没选'}」` : '关着，发语音用原来的声音'}${timing}`;
+  renderRvcCatalog();
+}
+
+function renderRvcCatalog() {
+  const listBox = $('#rvcModelList');
+  const r = state.voiceSetup?.rvc || {};
+  const page = catalogPage(r.models || [], { query: $('#rvcLibrarySearch').value, filter: $('#rvcLibraryFilter').value, selected: r.model, page: rvcLibraryPage });
+  rvcLibraryPage = page.page;
   listBox.textContent = '';
-  for (const model of r.models) {
+  for (const model of page.items) {
     const row = el('div', 'compare-row');
+    row.classList.toggle('selected', model.id === r.model);
     row.appendChild(el('strong', '', model.title));
     row.appendChild(el('span', 'muted small', `${model.family} · ${(model.bytes / 1e6).toFixed(0)}MB${model.id === r.model ? ' · 当前选中' : ''}${model.available ? '' : ' · 文件不在'}`));
     const audition = el('button', 'icon-btn', '试听这个');
     audition.type = 'button';
-    audition.disabled = !model.available;
+    audition.disabled = !model.available || !r.installed || !r.baseWeights;
     audition.addEventListener('click', () => rvcAudition(model.id, audition));
-    const pick = el('button', 'icon-btn', model.id === r.model && r.enabled ? '正在用这个' : '用这个声音');
+    const pick = el('button', model.id === r.model && r.enabled ? 'icon-btn' : 'primary-btn', model.id === r.model && r.enabled ? '正在用这个' : '用这个声音');
     pick.type = 'button';
-    pick.disabled = !model.available;
+    pick.disabled = !model.available || !r.installed || !r.baseWeights || model.id === r.model && r.enabled;
     pick.addEventListener('click', () => rvcSelect(model.id, pick));
-    row.appendChild(audition);
-    row.appendChild(pick);
+    const actions = el('div', 'btn-row');
+    actions.append(audition, pick); row.appendChild(actions);
     listBox.appendChild(row);
   }
-  if (!r.models.length) listBox.appendChild(el('p', 'muted small', '清单里一个模型都没有：跑 node tools/fetch-rvc-models.mjs 下载音色库。'));
+  if (!page.total) listBox.appendChild(el('p', 'muted small', '没有匹配的音色，请调整搜索或筛选。'));
+  $('#rvcLibraryPage').textContent = `共 ${page.total} 个 · ${page.page + 1} / ${page.pages} 页`;
+  $('#rvcLibraryPrev').disabled = page.page === 0;
+  $('#rvcLibraryNext').disabled = page.page === page.pages - 1;
 }
 
 async function rvcAudition(modelId, btn) {
   await withBusy(btn, async () => {
-    const player = $('#voicePreviewPlayer');
+    const player = $('#rvcPreviewPlayer');
     try {
       const data = await api('/api/voice/rvc/preview', { method: 'POST', body: { model: modelId } });
+      if (!$('#rvcLibraryDialog').open) return;
       if (!data.ok) {
         toast(`这个音色没变出声音：${data.reason || '未知原因'}`, 'error');
         return;
@@ -1830,19 +1888,24 @@ async function rvcAudition(modelId, btn) {
 
 // 一次调用只写一份口径：模型、开关、参数都走 /api/voice/rvc/select，写完重新读引擎状态。
 async function rvcSelect(modelId, btn) {
+  if (state.savingRvc || state.savingSettings) return;
+  state.savingRvc = true;
+  const controls = $$('#set-card-rvc input, #set-card-rvc select, #rvcModelList button, #saveSettingsBtn, #saveSectionBtn');
+  const disabled = controls.map(node => node.disabled);
+  controls.forEach(node => node.disabled = true);
   const run = async () => {
     const body = {
       transpose: Number($('#rvcTranspose').value) || 0,
       f0: $('#rvcF0').value,
       timeoutSeconds: Number($('#rvcTimeout').value) || 180,
     };
-    if (modelId) body.model = modelId;
+    if (modelId) { body.model = modelId; body.enabled = true; }
     else {
       // 开关单独打开时如果还没挑音色，别把 400 抛给用户看——直接说下一步点哪。
       if (!$('#rvcEnabled').checked) {
         body.enabled = false;
       } else if (!(state.voiceSetup?.rvc?.model || '')) {
-        toast('先在下面挑一个音色：点那一行的「用这个声音」，开关会自动打开。', 'error');
+        toast('请先打开音色库选择一个声音，选择后会自动启用。', 'error');
         await loadVoiceSetup();
         return;
       } else {
@@ -1850,18 +1913,20 @@ async function rvcSelect(modelId, btn) {
       }
     }
     try {
-      const data = await api('/api/voice/rvc/select', { method: 'POST', body });
+      const data = await api('/api/voice/rvc/select', { method: 'POST', body, headers: state.settingsRevision ? { 'If-Match': state.settingsRevision } : {} });
+      const snapshot = data.settings && data.revision ? data : await api('/api/settings');
+      state.settings = snapshot.settings;
+      state.settingsRevision = snapshot.revision;
       toast(modelId ? `以后发语音用「${data.selected?.title || modelId}」` : data.rvc?.enabled ? '变声已打开' : '变声已关掉，发语音用原来的声音');
     } catch (error) {
       toast(error.message, 'error');
     }
     await loadVoiceSetup();
   };
-  if (btn) {
-    await withBusy(btn, run);
-    return;
+  try { await run(); } finally {
+    state.savingRvc = false;
+    controls.forEach((node, index) => node.disabled = disabled[index]);
   }
-  await run();
 }
 
 function renderVoiceLine() {
@@ -1922,6 +1987,8 @@ function compareRow(item) {
     use.addEventListener('click', () => {
       const actual = item.actualVoice || item.voice;
       fillVoiceSelect(actual);
+      $('#setVoiceName').dispatchEvent(new Event('change', { bubbles: true }));
+      $('#voiceCompareDialog').close();
       toast(`已选中 ${actual}，记得点保存才生效。`);
     });
     row.appendChild(use);
@@ -2296,12 +2363,12 @@ function settingsDraftValues() {
 
 async function saveSettings(scope = 'all') {
   if (state.savingSettings) return;
-  const domains = { identity: ['companion'], chat: ['model','memory'], proactive: ['proactive'], voice: ['presence','tts'], channels: ['qq','social'], system: ['ui','cost'] };
   const collected = collectSettings();
-  const body = scope === 'all' ? collected : Object.fromEntries((domains[scope] || []).map(key => [key, collected[key]]));
+  const body = settingsScopePatch(collected, scope);
   const submitted = settingsDraftValues();
   state.savingSettings = true;
-  const buttons = $$('#saveSettingsBtn, [data-save-scope]');
+  const buttons = $$('#saveSettingsBtn, [data-save-scope], #set-card-rvc input, #set-card-rvc select, #rvcModelList button');
+  const previouslyDisabled = buttons.map(button => button.disabled);
   buttons.forEach(button => button.disabled = true);
   try {
     const data = await api('/api/settings', { method: 'PUT', body, headers: state.settingsRevision ? { 'If-Match': state.settingsRevision } : {} });
@@ -2318,7 +2385,8 @@ async function saveSettings(scope = 'all') {
       const value = current.get(id);
       const normalized = node.type === 'checkbox' ? node.checked : node.value;
       const editedDuringRequest = value !== submitted.get(id);
-      if (value !== normalized && (scope !== 'all' || editedDuringRequest || id === 'setPersona')) {
+      const belongsToScope = scope === 'all' || node.closest('[data-settings-group]')?.dataset.settingsGroup === scope;
+      if (value !== normalized && (!belongsToScope || editedDuringRequest || id === 'setPersona')) {
         if (node.type === 'checkbox') node.checked = value; else node.value = value;
         remaining.add(id);
       }
@@ -2338,7 +2406,7 @@ async function saveSettings(scope = 'all') {
     toast(error.message, 'error');
   } finally {
     state.savingSettings = false;
-    buttons.forEach(button => button.disabled = false);
+    buttons.forEach((button, index) => button.disabled = previouslyDisabled[index]);
   }
 }
 
@@ -3000,8 +3068,8 @@ function bindChat() {
     updateVoiceButton();
     if (state.settings?.ui) state.settings.ui.autoSpeak = state.ttsAuto;
     const checkbox = $('#setAutoSpeak');
-    if (checkbox) checkbox.checked = state.ttsAuto;
-    toast(state.ttsAuto ? '收到回复会自动朗读。' : '不自动朗读了。');
+    if (checkbox) { checkbox.checked = state.ttsAuto; checkbox.dispatchEvent(new Event('change', { bubbles: true })); }
+    toast(state.ttsAuto ? '收到回复会自动朗读，设置页保存后保留。' : '不自动朗读了，设置页保存后保留。');
   });
 
   $('#messages').addEventListener('click', (event) => {
@@ -3117,6 +3185,7 @@ async function loadSentinelStatus() {
 }
 
 function bindSettings() {
+  bindSettingsNavigation();
   $('#reloadSettingsBtn').addEventListener('click', async () => {
     if (state.settingsDirty && !confirm('重新载入会放弃当前未保存修改。请先复制需要保留的内容。继续？')) return;
     const wasDirty = state.settingsDirty;
@@ -3197,6 +3266,7 @@ function bindSettings() {
     }
   }));
   $('#voiceCompareBtn').addEventListener('click', () => withBusy($('#voiceCompareBtn'), async () => {
+    $('#voiceCompareDialog').showModal();
     const box = $('#voiceCompareList');
     box.textContent = '';
     const done = el('p', 'muted small', '同一句话正在发给各个引擎，本地那个要先加载模型，稍慢…');

@@ -72,10 +72,10 @@ test('toast 挪到顶部通知轨，不再压在输入区、保存栏和底部�
   assert.match(toast, /pointer-events: none/, '提示不能挡住点击');
 });
 
-test('设置页分区跳转是换行而不是横向滚动，窄屏每个都点得到', () => {
-  const jump = rule('.settings-jump');
-  assert.match(jump, /flex-wrap: wrap/);
+test('设置分区导航不依赖横向滚动，窄屏完整呈现', () => {
+  const jump = rule('.settings-nav');
   assert.doesNotMatch(jump, /overflow-x: auto/, '横向滚动会把链接推到看不见的地方');
+  assert.match(CSS, /\.settings-nav \{ display: grid; grid-template-columns: repeat\(3,minmax\(0,1fr\)\)/);
 });
 
 test('控件有统一最小可点尺寸，勾选框整行都能点', () => {

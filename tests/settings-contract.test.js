@@ -106,7 +106,7 @@ test('collectSettings 顶层键必须和 settings.json 顶层键一一对应（�
 test('每个 set 开头的控件都要既被填上也被收走（防控件 id 打错/漏收集）', () => {
   const html = read(INDEX_HTML);
   const app = read(APP_JS);
-  const ids = [...html.matchAll(/id="(set[A-Za-z0-9]+)"/g)].map((m) => m[1]);
+  const ids = [...html.matchAll(/<(?:input|select|textarea)\b[^>]*\bid="(set[A-Za-z0-9]+)"/g)].map((m) => m[1]);
   assert.ok(ids.length > 40, `控件太少，像是正则没匹配上：${ids.length}`);
   const missing = [];
   for (const id of ids) {

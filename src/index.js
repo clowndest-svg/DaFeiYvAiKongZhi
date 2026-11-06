@@ -1427,6 +1427,8 @@ async function handleApi(req, res, pathname, url) {
     // 选定音色/开关/参数：开开关之前先确认引擎和这个模型真的在，别让他以为换了声音其实没换。
     const body = await readJsonBody(req);
     const settings = loadSettings();
+    const revision = crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex');
+    if (req.headers['if-match'] && req.headers['if-match'] !== revision) return sendJson(res, 409, { error: '设置已被其他页面更新，请先保存或重新载入后再调整变声。' });
     const rvc = { ...(settings.tts.rvc || {}) };
     if (body.model !== undefined) rvc.model = String(body.model || '').trim();
     if (typeof body.enabled === 'boolean') rvc.enabled = body.enabled;
@@ -1445,7 +1447,7 @@ async function handleApi(req, res, pathname, url) {
       model: rvc.model,
       enabled: rvc.enabled,
     });
-    return sendJson(res, 200, { ok: true, rvc: saved.tts.rvc, selected: chosen ? { id: chosen.id, title: chosen.title } : null, models: listRvcModels().length });
+    return sendJson(res, 200, { ok: true, settings: saved, revision: crypto.createHash('sha256').update(JSON.stringify(saved)).digest('hex'), rvc: saved.tts.rvc, selected: chosen ? { id: chosen.id, title: chosen.title } : null, models: listRvcModels().length });
   }
 
   if (pathname === '/api/voice/compare' && method === 'POST') {

@@ -335,8 +335,8 @@ test('开关报的错要指着真正缺的那一步：没挑音色不能推给�
 
 test('界面：没挑音色时点开关不该把 400 抛给用户', () => {
   const app = fs.readFileSync(path.join(process.cwd(), 'web', 'app.js'), 'utf8').replace(/\r/g, '');
-  assert.match(app, /先在下面挑一个音色/, '开关那条路没给人下一步');
-  const hint = app.indexOf('先在下面挑一个音色');
+  assert.match(app, /先打开音色库选择一个声音/, '开关那条路没给人下一步');
+  const hint = app.indexOf('先打开音色库选择一个声音');
   const sent = app.indexOf("api('/api/voice/rvc/select'");
   assert.ok(hint > 0 && sent > hint, '提示应当出现在发请求之前');
   assert.ok(app.slice(hint, sent).includes('return;'), '没挑音色时没提前返回，还是会把请求发出去');

@@ -42,6 +42,7 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
  // 快捷朗读开关不得提交其它陪伴草稿，也不得覆盖跨页面的姓名草稿。
  const beforePresence=await page.locator('#setCameraDailyMax').inputValue();
+ await page.getByRole('tab',{name:'语音与感官',exact:true}).click();
  await page.locator('#setCameraDailyMax').fill('7');
  await page.locator('.rail-btn[data-view="presence"]').click();
  const toggleSaved=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
@@ -54,7 +55,7 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
  assert.equal(await page.locator('#setCameraDailyMax').inputValue(),'7');
  assert.equal(await page.locator('#setSpeakReplies').isChecked(),true,'未编辑的朗读复选框应同步，避免下次保存撤销快捷动作');
- await page.locator('.settings-jump summary').filter({hasText:'语音与感官'}).click();
+ await page.getByRole('tab',{name:'语音与感官',exact:true}).click();
  const groupSaved=page.waitForResponse(r=>r.url().endsWith('/api/settings')&&r.request().method()==='PUT');
  await page.locator('[data-save-scope="voice"]').click();
  const grouped=await (await groupSaved).json();
@@ -62,9 +63,11 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  assert.equal(grouped.settings.companion.name,'测试鲸鲸','保存语音组不能提交姓名草稿');
  assert.equal(await page.locator('#setName').inputValue(),'保留未保存内容');
  assert.equal(await page.locator('#setCameraDailyMax').inputValue(),'7');
+ await page.getByRole('tab',{name:'主动陪伴',exact:true}).click();
  await page.locator('#setMaxPerDay').fill('0');await page.locator('#saveSettingsBtn').click();
  await page.waitForFunction(()=>document.querySelector('#saveHint').textContent==='已保存');
  assert.equal(await page.locator('#setMaxPerDay').inputValue(),'0');
+ await page.getByRole('tab',{name:'角色与称呼',exact:true}).click();
  // 保存请求在路上时继续输入，响应不能把这段新草稿覆盖掉。
  let releaseSave,markCaptured,pauseNext=true;
  const saveGate=new Promise(resolve=>releaseSave=resolve),capturedSave=new Promise(resolve=>markCaptured=resolve);
@@ -138,8 +141,7 @@ test('真实浏览器：登录、聊天/停止、设置回环、记忆、动态�
  assert.equal(await page.locator('#setName').inputValue(),'发生冲突时保留的草稿');
  const afterConflict=await (await context.request.get(app.base+'/api/settings')).json();
  assert.equal(afterConflict.settings.companion.intro,'另一个页面的新配置');
- await page.locator('.settings-jump summary').filter({hasText:'账号与社交'}).click();
- await page.getByRole('link',{name:'QQ 登录',exact:true}).click();
+ await page.getByRole('tab',{name:'QQ 连接与行为',exact:true}).click();
  await page.locator('#set-card-qq-login summary').filter({hasText:'维护与投递核对'}).click();
  await page.locator('#qqMaintenanceOn').click();
  await page.waitForFunction(()=>document.querySelector('#qqMigrationStatus').textContent.includes('正在维护'));

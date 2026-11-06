@@ -366,35 +366,23 @@
             <div class="page-head">
               <div>
                 <h2>设置</h2>
-                <p>改完点最下面的保存。API Key 在 .env 里改，改完重启。</p>
+                <p>分区切换会保留草稿，调整后可保存当前分区或全部设置。</p>
               </div>
               <button type="button" id="reloadSettingsBtn">重新载入设置</button>
             </div>
-            <nav class="settings-jump" aria-label="设置分区">
-              <details><summary>角色与称呼</summary><a href="#set-card-identity">称呼</a><a href="#set-card-persona">人设（单独保存）</a><button type="button" data-save-scope="identity">保存称呼</button></details>
-              <details><summary>聊天与记忆</summary>
-              <a href="#set-card-model">模型</a>
-              <a href="#set-card-memory">记忆</a>
-              <button type="button" data-save-scope="chat">保存模型与记忆</button>
-              </details><details><summary>主动陪伴</summary>
-              <a href="#set-card-proactive">主动</a>
-              <button type="button" data-save-scope="proactive">保存主动陪伴</button>
-              </details><details><summary>语音与感官</summary>
-              <a href="#set-card-presence">陪伴</a>
-              <a href="#set-card-qq">QQ语音</a><button type="button" data-save-scope="voice">保存语音与感官</button></details><details><summary>账号与社交</summary>
-              <a href="#set-card-qq">QQ</a>
-              <a href="#set-card-qq-login">QQ 登录</a>
-              <a href="#set-card-social">社交</a>
-              <a href="#set-card-xhs">小红书</a>
-              <a href="#set-card-x">X/推特</a>
-              <button type="button" data-save-scope="channels">保存账号与社交</button>
-              </details><details><summary>界面与系统</summary>
-              <a href="#set-card-ui">界面</a>
-              <a href="#set-card-data">数据</a>
-              <button type="button" data-save-scope="system">保存界面与费用</button>
-              </details>
+            <div class="settings-workspace">
+            <nav class="settings-nav" role="tablist" aria-label="设置分区" aria-orientation="vertical">
+              <button type="button" role="tab" id="settings-tab-identity" aria-controls="settingsCards" data-settings-tab="identity">角色与称呼</button>
+              <button type="button" role="tab" id="settings-tab-chat" aria-controls="settingsCards" data-settings-tab="chat">聊天与记忆</button>
+              <button type="button" role="tab" id="settings-tab-proactive" aria-controls="settingsCards" data-settings-tab="proactive">主动陪伴</button>
+              <button type="button" role="tab" id="settings-tab-voice" aria-controls="settingsCards" data-settings-tab="voice">语音与感官</button>
+              <button type="button" role="tab" id="settings-tab-qq" aria-controls="settingsCards" data-settings-tab="qq">QQ 连接与行为</button>
+              <button type="button" role="tab" id="settings-tab-social" aria-controls="settingsCards" data-settings-tab="social">动态与空间</button>
+              <button type="button" role="tab" id="settings-tab-xhs" aria-controls="settingsCards" data-settings-tab="xhs">小红书</button>
+              <button type="button" role="tab" id="settings-tab-x" aria-controls="settingsCards" data-settings-tab="x">X / 推特</button>
+              <button type="button" role="tab" id="settings-tab-system" aria-controls="settingsCards" data-settings-tab="system">界面与系统</button>
             </nav>
-            <div class="settings-grid">
+            <div class="settings-grid" id="settingsCards" role="tabpanel" aria-labelledby="settings-tab-identity">
               <section class="card" id="set-card-identity">
                 <h3>称呼</h3>
                 <label>她的名字<input id="setName" maxlength="20"></label>
@@ -504,14 +492,14 @@
                 <p class="muted small">摄像头和麦克风只在 <code>127.0.0.1</code> 或 HTTPS 下能用；外网用 HTTP 打开时这两个按钮会直接说明用不了，不会点了没反应。</p>
               </section>
 
-              <section class="card" id="set-card-qq">
-                <h3>QQ 聊天行为</h3>
-                <label class="check"><input type="checkbox" id="setAllowAllPrivate"> 允许陌生人私聊（不建议）</label>
+              <section class="card" id="set-card-voice">
+                <h3>QQ 语音</h3>
                 <label class="check"><input type="checkbox" id="setVoiceEnabled"> 允许她发 QQ 语音（她自己的判断，不是每条都发）</label>
                 <label class="check"><input type="checkbox" id="setVoiceListen"> 听你发的语音（本地 SenseVoice 识别，不上传）</label>
                 <label>每天最多几条语音 <input id="setVoiceMax" type="number" min="0" max="30"></label>
                 <label>主动想发的概率（0–1，另外她也可以自己打标记要求用说的）<input id="setVoiceChance" type="number" min="0" max="1" step="0.02"></label>
-                <label>音色 <select id="setVoiceName"></select></label>
+                <label class="full-field">音色 <select id="setVoiceName"></select></label>
+                <details class="settings-group"><summary>语速、音调与语音会话参数</summary><div class="settings-fields">
                 <label>语速 <input id="setVoiceRate" maxlength="6" placeholder="+8%"></label>
                 <label>音调 <input id="setVoicePitch" maxlength="6" placeholder="+2Hz"></label>
                 <label>一条语音最多几个字（20–200）<input id="setVoiceMaxChars" type="number" min="20" max="200"></label>
@@ -519,6 +507,7 @@
                 <label class="check"><input type="checkbox" id="setVoiceCall"> 语音对话模式（默认关）：你发「/语音聊天」后她用语音连着回，发「/挂断」停</label>
                 <label>对话模式当天语音总量上限（0–80，普通散发仍受上面那个 8 条约束）<input id="setVoiceCallMax" type="number" min="0" max="80"></label>
                 <label>两条语音之间至少隔几秒（0–120）<input id="setVoiceCallGap" type="number" min="0" max="120"></label>
+                </div></details>
                 <div class="btn-row">
                   <button type="button" class="icon-btn" id="voicePreviewBtn">试听这个音色</button>
                   <button type="button" class="icon-btn" id="voiceCompareBtn">同一句话 · 多音色对比试听</button>
@@ -526,20 +515,26 @@
                   <button type="button" class="icon-btn" id="voiceEchoBtn">自检：发出去再听回来</button>
                 </div>
                 <audio id="voicePreviewPlayer" controls class="voice-preview hidden"></audio>
-                <div id="voiceCompareList" class="compare-list"></div>
                 <p class="muted small" id="voiceStatusLine">正在读取音色与识别状态…</p>
-                <div class="settings-group rvc-box" id="set-card-rvc">
-                  <h4>二次变声（RVC 音色模型）</h4>
-                  <p class="muted small">先按上面的音色合成，再过一遍 RVC 模型换成你选的那个声音。没装引擎、或没选模型时这一条完全不介入——她发的还是原来的声音，不会假装换过了。</p>
+              </section>
+                <section class="card rvc-box" id="set-card-rvc">
+                  <h3>二次变声 · RVC</h3>
+                  <p class="muted small">在基础音色上变声。未启用或引擎不可用时使用基础音色；选择音色和调整参数会立即保存。</p>
                   <label class="check"><input type="checkbox" id="rvcEnabled"> 发语音时用变声后的声音</label>
+                  <p id="rvcSelectedLine" class="muted small">尚未选择音色</p>
+                  <details class="settings-group"><summary>变声参数与引擎状态</summary>
                   <label>音高偏移（半音，−24～24）<input id="rvcTranspose" type="number" min="-24" max="24" step="1"></label>
                   <label>取音高算法 <select id="rvcF0"><option value="pm">pm（默认，省内存）</option><option value="harvest">harvest（更细，更吃内存）</option><option value="crepe">crepe（细但慢）</option><option value="rmvpe">rmvpe（吃内存）</option><option value="mfcc">mfcc</option></select></label>
                   <label>单次最多等几秒（15–600）<input id="rvcTimeout" type="number" min="15" max="600"></label>
                   <p class="muted small" id="rvcStatusLine">正在读取变声引擎状态…</p>
-                  <div id="rvcModelList" class="compare-list"></div>
-                </div>
+                  </details>
+                  <div class="btn-row"><button type="button" id="rvcLibraryBtn">浏览音色库</button><span class="muted small">搜索、分页试听和选择；调整立即生效</span></div>
+                </section>
+              <section class="card" id="set-card-qq">
+                <h3>回复、白名单与表情</h3>
+                <label class="check"><input type="checkbox" id="setAllowAllPrivate"> 允许陌生人私聊（不建议）</label>
                 <label class="check"><input type="checkbox" id="setQqAutoBind"> 白名单里的 QQ 第一次私聊就直接当主人（关掉则都要在控制台确认）</label>
-                <p class="muted small">QQ 断了之后她只等 NapCat 自己回连（它每 3 秒试一次），不再自动重启登录进程——那会踢掉登录、还要重新扫码。断够久会在下面提示需要你扫码；只有开机后一直没连上且确认 QQ 没在跑时，她才会自己拉一次。</p>
+                <p class="muted small">QQ 断线后等待当前协议端回连，不自动切换账号或重新扫码。已启用的后台守护只在确认进程退出时限次恢复；登录失效时，请在连接页核对机器人小号。</p>
                 <label class="check"><input type="checkbox" id="setSleepyMode"> 深夜（00:30–08:30）她回得慢一点、短一点，不发语音和表情</label>
                 <details class="settings-group">
                   <summary>群聊与白名单（高级）</summary>
@@ -774,7 +769,7 @@
                 <h3>界面</h3>
                 <label class="check"><input type="checkbox" id="setAutoSpeak"> 收到回复自动朗读</label>
                 <label class="check"><input type="checkbox" id="setShowThought"> 显示“她的心里话”</label>
-                <p class="muted small">朗读使用系统自带中文语音，不额外花钱。</p>
+                <p class="muted small">朗读使用服务端 TTS，与陪伴页共用控制台语音额度；实际音色与回退情况会提示。</p>
                 <button type="button" id="logoutBtn" class="icon-btn">退出控制台登录</button>
               </section>
 
@@ -806,11 +801,13 @@
                   <button type="button" id="actionResetSchedule">重置主动日程</button>
                 </div>
                 <h4>最近事件</h4>
-                <div class="event-list" id="eventList"></div>
+                <button type="button" id="settingsEventsBtn">查看最近事件</button>
               </section>
             </div>
+            </div>
             <div class="save-bar">
-              <button id="saveSettingsBtn" class="primary-btn">保存设置</button>
+              <button type="button" id="saveSectionBtn" data-save-scope="identity">保存本分区</button>
+              <button id="saveSettingsBtn" class="primary-btn">保存全部设置</button>
               <span class="muted" id="saveHint">改完点保存</span>
             </div>
             <p class="disclaimer">API Key 只保存在本机 .env；聊天内容会发送给 DeepSeek API 用于生成回复。QQ 自动化有账号风险，请优先使用小号。</p>
@@ -820,6 +817,15 @@
     </main>
   </div>
 
+  <dialog id="rvcLibraryDialog" class="settings-dialog" aria-labelledby="rvcLibraryTitle">
+    <div class="settings-dialog-head"><div><h2 id="rvcLibraryTitle">RVC 音色库</h2><p class="muted small">试听不会更改音色，选择后立即生效。</p></div><button type="button" data-close-settings-dialog>关闭音色库</button></div>
+    <div class="library-tools"><label>搜索音色<input id="rvcLibrarySearch" type="search" placeholder="名称或类别"></label><label>显示<select id="rvcLibraryFilter"><option value="all">全部音色</option><option value="ready">仅可用</option><option value="selected">当前选中</option></select></label></div>
+    <audio id="rvcPreviewPlayer" controls class="voice-preview hidden"></audio>
+    <div id="rvcModelList" class="library-list"></div>
+    <div class="library-pagination"><button type="button" id="rvcLibraryPrev">上一页</button><span id="rvcLibraryPage" role="status" aria-live="polite"></span><button type="button" id="rvcLibraryNext">下一页</button></div>
+  </dialog>
+  <dialog id="voiceCompareDialog" class="settings-dialog" aria-labelledby="voiceCompareTitle"><div class="settings-dialog-head"><h2 id="voiceCompareTitle">多音色对比试听</h2><button type="button" data-close-settings-dialog>关闭对比试听</button></div><div id="voiceCompareList" class="compare-list"></div></dialog>
+  <dialog id="settingsEventsDialog" class="settings-dialog" aria-labelledby="settingsEventsTitle"><div class="settings-dialog-head"><h2 id="settingsEventsTitle">最近事件</h2><button type="button" data-close-settings-dialog>关闭最近事件</button></div><div id="eventList" class="event-list"></div></dialog>
   <div class="modal" id="letterModal" hidden>
     <div class="modal-card">
       <div class="modal-head">
