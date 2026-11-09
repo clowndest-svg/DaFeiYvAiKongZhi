@@ -22,8 +22,9 @@ fs.writeFileSync(settingsFile, JSON.stringify({
 }), 'utf8');
 
 const { COST_FEATURES, LOW_BALANCE_PAUSE, evaluateBudget, readCostState } = await import('../src/budget.js');
-const { kvSetJson, closeDb } = await import('../src/db.js');
+const { kvSetJson, kvGet, closeDb } = await import('../src/db.js');
 const { searchWeb } = await import('../src/search.js');
+const { Scheduler } = await import('../src/scheduler.js');
 
 test.after(closeDb);
 
@@ -95,4 +96,17 @@ test('到线后联网搜索直接返回花费熔断，不会先发一次请求�
   assert.equal(result.ok, false);
   assert.equal(result.costBlocked, true);
   assert.ok(!result.items?.length, '被熔断就不该带任何结果回来');
+});
+
+test('读余额失败不能记成"刚核查过"：否则旧读数会再压住一个窗口', async () => {
+  kvSetJson('cost_state', { balanceCny: 0.5, at: new Date().toISOString() });
+  const { kvSet } = await import('../src/db.js');
+  kvSet('cost_state_checked_at', new Date(Date.now() - 30 * 60000).toISOString());
+  const scheduler = new Scheduler({
+    llm: { balance: async () => { throw new Error('upstream down'); } },
+    companion: {},
+  });
+  await scheduler.refreshCostState();
+  const elapsed = Date.now() - new Date(kvGet('cost_state_checked_at')).getTime();
+  assert.ok(elapsed >= 2 * 60000, `失败后把"上次核查"记成了现在（${Math.round(elapsed / 60000)} 分钟前）：下一轮会被节流挡住，继续拿旧读数做决定`);
 });

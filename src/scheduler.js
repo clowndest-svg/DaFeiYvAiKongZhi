@@ -1016,14 +1016,18 @@ export class Scheduler {
 
   async refreshCostState() {
     const settings = loadSettings();
+    // 正常时 20 分钟核一次就够了；正在省钱或熔断时 5 分钟核一次——他充满值不该干等 20 分钟才恢复。
+    const windowMs = (readCostState().level === 'normal' ? 20 : 5) * 60000;
     const lastChecked = kvGet('cost_state_checked_at');
-    if (lastChecked && Date.now() - new Date(lastChecked).getTime() < 20 * 60000) return readCostState();
-    kvSet('cost_state_checked_at', nowIso());
+    if (lastChecked && Date.now() - new Date(lastChecked).getTime() < windowMs) return readCostState();
     let balance = null;
     try {
       const info = await this.llm.balance();
       balance = info?.total ?? null;
     } catch (error) {
+      // 读失败不能记成"刚核查过"：一次网络抖动会让上一轮读数再压住一整个窗口，
+      // 界面还写着余额是多少，其实那已经是几十分钟前的数了。
+      kvSet('cost_state_checked_at', new Date(Date.now() - windowMs + 2 * 60000).toISOString());
       logger.warn('读余额失败，这一轮熔断判断跳过', { error: error.message });
       return readCostState();
     }
