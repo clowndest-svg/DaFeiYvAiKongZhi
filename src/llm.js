@@ -5,20 +5,23 @@ import { addCost } from './db.js';
 import { reserveCost, settleCost, uncertainCost } from './cost-reservations.js';
 import { logger } from './logger.js';
 import { estimateMessagesTokens, estimateTokens, sleep } from './util.js';
+import crypto from 'node:crypto';
+import { boundedBackground } from './llm-policy.js';
+import { officialRate } from './pricing.js';
 
 const USD_TO_CNY = 7.15;
 
 // DeepSeek 公开价（美元 / 百万 tokens，flash）。v4-pro 没有可靠公开价，统一按 flash 价估算。
 const FLASH_PRICE = { cacheHit: 0.003, cacheMiss: 0.15, output: 0.6 };
 
-export function pricingFor(model, input = process.env.BIZHI_PRICING_JSON || '') {
+export function pricingFor(model, input = process.env.BIZHI_PRICING_JSON || '', at = new Date()) {
   let table;
   try { table = typeof input === 'string' ? JSON.parse(input) : input; } catch { table = null; }
   const rate = table?.models?.[model];
   const valid = rate && ['cacheHit', 'cacheMiss', 'output'].every(key => Number.isFinite(rate[key]) && rate[key] >= 0 && rate[key] < 1e6)
     && Number.isFinite(table.usdToCny) && table.usdToCny > 0 && table.usdToCny < 10000;
   return valid ? { ...rate, usdToCny: table.usdToCny, version: String(table.version || 'custom').replace(/[^a-zA-Z0-9_.-]/g, '').slice(0, 32) || 'custom' }
-    : { ...FLASH_PRICE, usdToCny: USD_TO_CNY, version: 'legacy-flash-estimate' };
+    : officialRate(model, at) || { ...FLASH_PRICE, usdToCny: USD_TO_CNY, version: 'legacy-flash-estimate' };
 }
 
 export class LlmError extends Error {
@@ -47,17 +50,18 @@ function normalizeUsage(usage) {
   return { prompt, completion, hit, miss, reasoning, total: prompt + completion };
 }
 
-function usageCostCny(usage, model) {
+function usageCostCny(usage, model, at) {
   const u = normalizeUsage(usage);
-  const rate = pricingFor(model);
+  const rate = pricingFor(model, undefined, at);
   const usd = (u.hit / 1e6) * rate.cacheHit + (u.miss / 1e6) * rate.cacheMiss + (u.completion / 1e6) * rate.output;
   return Math.round(usd * rate.usdToCny * 1e6) / 1e6;
 }
 
-function streamResult(messages, content, reasoning, raw, model) {
+function streamResult(messages, content, reasoning, raw, model, at) {
   const usageEstimated = !raw;
   const usageRaw = raw || { prompt_tokens: estimateMessagesTokens(messages), completion_tokens: estimateTokens(content + reasoning), prompt_cache_hit_tokens: 0 };
-  return { usage: normalizeUsage(usageRaw), model, costCny: usageCostCny(usageRaw, model), usageEstimated, priceVersion: pricingFor(model).version };
+  return { usage: normalizeUsage(usageRaw), model, costCny: usageCostCny(usageRaw, model, at), usageEstimated,
+    requestedAt: new Date(at || Date.now()).toISOString(), priceVersion: pricingFor(model, undefined, at).version };
 }
 
 function mockJson(mockKind) {
@@ -141,7 +145,9 @@ export class DeepSeek {
       max_tokens: Math.max(256, Number(opts.maxTokens || 1400)),
       stream: Boolean(opts.stream),
     };
-    if (opts.reasoningEffort) body.reasoning_effort = opts.reasoningEffort;
+    const thinking = opts.thinking ?? (boundedBackground(opts.kind) ? false : undefined);
+    if (thinking !== undefined) body.thinking = { type: thinking ? 'enabled' : 'disabled' };
+    if (opts.reasoningEffort && thinking !== false) body.reasoning_effort = opts.reasoningEffort;
     if (opts.responseFormat) body.response_format = opts.responseFormat;
     if (opts.stream) body.stream_options = { include_usage: true };
     return body;
@@ -150,11 +156,16 @@ export class DeepSeek {
   async request(messages, opts = {}) {
     this.assertConfigured();
     const body = this.buildBody(messages, { ...opts, stream: false });
+    const requestId = opts.requestId || crypto.randomUUID();
+    const bounded = boundedBackground(opts.kind);
+    const maxAttempts = bounded ? 2 : 3;
     const deadline = AbortSignal.timeout(opts.timeoutMs || 120000);
     const signal = opts.signal ? AbortSignal.any([opts.signal, deadline]) : deadline;
     // 上游 503/空正文经常一缓就好：给两次重试，间隔递增，别让一次抖动直接哑掉。
-    for (let attempt = 0; attempt < 3; attempt += 1) {
-      const reservationId = reserveCost({ model: body.model, kind: opts.kind, estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model) });
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      const requestedAt = new Date();
+      const reservationId = reserveCost({ model: body.model, kind: opts.kind, requestId, attempt: attempt + 1, sessionId: opts.sessionId,
+        estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
       try {
         const res = await fetch(this.baseUrl + '/chat/completions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
@@ -168,17 +179,29 @@ export class DeepSeek {
         const message = data.choices?.[0]?.message || {};
         const content = message.content || '';
         const reasoning = message.reasoning_content || '';
-        const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model) };
-        this.recordCost(result, { ...opts, reservationId });
+        const finish = String(data.choices?.[0]?.finish_reason || 'unknown');
+        const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model, requestedAt) };
+        let invalidJson = false;
+        if (bounded && opts.responseFormat?.type === 'json_object' && content && finish !== 'length') {
+          try {
+            const parsed = JSON.parse(content);
+            invalidJson = !parsed || typeof parsed !== 'object' || Array.isArray(parsed);
+          } catch { invalidJson = true; }
+        }
+        this.recordCost(result, { ...opts, reservationId, requestId, attempt: attempt + 1,
+          outcome: finish === 'length' ? 'truncated' : invalidJson ? 'invalid_json' : content ? 'completed' : 'empty' });
+        if (bounded && finish === 'length') {
+          throw new LlmError('后台任务输出达到上限，已保留费用记录和来源', { code: 'BACKGROUND_OUTPUT_LIMIT' });
+        }
+        if (invalidJson) throw new LlmError('后台任务的 JSON 未通过校验，来源已保留', { code: 'BACKGROUND_INVALID_JSON' });
         if (!result.content) {
           // 上游过载时实测两种形状：503，或者 200 但正文空、只有推理。第二种以前被报成"没有产出有效回复"，
           // 既没说清是上游的问题，也不会重试——她就这样一声不吭。
-          const finish = String(data.choices?.[0]?.finish_reason || 'unknown');
           const reasoningTokens = Number(data.usage?.completion_tokens_details?.reasoning_tokens || 0);
           const why = finish === 'length'
             ? '被 max_tokens 截断（finish_reason=length）'
             : '上游返回了 200 但正文是空的（finish_reason=' + finish + (reasoningTokens ? '，推理占了 ' + reasoningTokens + ' tokens' : '') + '）';
-          throw new LlmError('模型没给出正文：' + why, { code: 'EMPTY_REPLY', retryable: true });
+          throw new LlmError('模型没给出正文：' + why, { code: 'EMPTY_REPLY', retryable: !bounded });
         }
         this.lastCallAt = new Date().toISOString(); this.lastError = null;
         return result;
@@ -192,7 +215,7 @@ export class DeepSeek {
         // 这条 signal 带着一次性的截止时间，已经中止就不可能重试成功——直接报，别白等第二轮。
         if (signal.aborted) throw normalized;
         const retry = !(normalized instanceof LlmError) || normalized.retryable === true || isRetryableStatus(normalized.status);
-        if (!retry || attempt === 2) throw normalized;
+        if (!retry || attempt === maxAttempts - 1) throw normalized;
         // 被 max_tokens 截断时原样重试没用：推理那部分把预算吃光了，下一轮得给更多。
         if (normalized.code === 'EMPTY_REPLY' && /max_tokens|length/.test(normalized.message)) {
           body.max_tokens = Math.min(4096, Math.round(Number(body.max_tokens || 1400) * 2));
@@ -249,9 +272,13 @@ export class DeepSeek {
     const deadline = AbortSignal.timeout(opts.timeoutMs || 180000);
     const signal = opts.signal ? AbortSignal.any([deadline, opts.signal]) : deadline;
     const body = this.buildBody(messages, { ...opts, stream: true });
+    const requestedAt = new Date();
+    const requestId = opts.requestId || crypto.randomUUID();
     let content = '', reasoning = '', usageRaw = null, model = body.model;
     let done = false;
-    const reservationId = reserveCost({ model: body.model, kind: opts.kind, estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model) });
+    let finishReason = '';
+    const reservationId = reserveCost({ model: body.model, kind: opts.kind, requestId, sessionId: opts.sessionId,
+      estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
     try {
       const res = await fetch(this.baseUrl + '/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey }, body: JSON.stringify(body), signal,
@@ -264,19 +291,20 @@ export class DeepSeek {
         if (chunk.error) throw new LlmError(String(chunk.error.message || '上游流式错误'), { code: 'STREAM_ERROR' });
         if (chunk.model) model = chunk.model;
         if (chunk.usage) usageRaw = chunk.usage;
+        if (chunk.choices?.[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
         const delta = chunk.choices?.[0]?.delta || {};
         if (delta.reasoning_content) { reasoning += delta.reasoning_content; yield { type: 'reasoning', delta: delta.reasoning_content }; }
         if (delta.content) { content += delta.content; yield { type: 'content', delta: delta.content }; }
       }
       if (!done) throw new LlmError('上游流式回复没有正常结束', { code: 'STREAM_INCOMPLETE' });
-      const result = streamResult(messages, content, reasoning, usageRaw, model);
+      const result = streamResult(messages, content, reasoning, usageRaw, model, requestedAt);
       this.lastCallAt = new Date().toISOString(); this.lastError = null;
       yield { type: 'done', content, reasoning, ...result };
     } catch (error) { uncertainCost(reservationId, error.code === 'HTTP' && error.status >= 400 && error.status < 500); this.lastError = logger.redact(error.message); throw error; }
     finally {
       if (usageRaw || content || reasoning) {
-        const result = streamResult(messages, content, reasoning, usageRaw, model);
-        this.recordCost(result, { ...opts, reservationId, kind: done ? opts.kind : (opts.kind || 'chat') + ':partial' });
+        const result = streamResult(messages, content, reasoning, usageRaw, model, requestedAt);
+        this.recordCost(result, { ...opts, reservationId, requestId, outcome: finishReason === 'length' ? 'truncated' : done ? 'completed' : 'partial', kind: done ? opts.kind : (opts.kind || 'chat') + ':partial' });
         opts.onUsage?.(result);
       }
     }
@@ -292,6 +320,11 @@ export class DeepSeek {
         cacheHitTokens: result.usage.hit,
         costCny: result.costCny,
         sessionId: opts.sessionId || null,
+        requestId: opts.requestId || '', attempt: opts.attempt || 1,
+        reasoningTokens: result.usage.reasoning || 0,
+        outcome: opts.outcome || 'completed', usageEstimated: result.usageEstimated === true,
+        priceVersion: result.priceVersion || '',
+        createdAt: result.requestedAt,
       };
       if (opts.reservationId) settleCost(opts.reservationId, cost);
       else addCost(cost);

@@ -54,6 +54,8 @@ import {
 import { logger } from './logger.js';
 import { DeepSeek } from './llm.js';
 import { Companion, chatActivity } from './chat.js';
+import { drainReflections } from './reflect.js';
+import { recoverReflections, reflectionWorkStatus, retryFailedReflections } from './reflection-work.js';
 import { Scheduler } from './scheduler.js';
 import { checkNapcatVersions, lastVersionReport, versionAlerts, versionHintForOutage } from './napcat-versions.js';
 import { desktopNotifyEnabled, desktopNotifyState, notifyDesktop } from './notify.js';
@@ -703,7 +705,7 @@ async function handleApi(req, res, pathname, url) {
       memoryCounts: countMemories(),
       intentions: listIntentions({ limit: 6 }),
       pendingPosts: countPendingPosts(),
-      costs: costSummary(7),
+      costs: { ...costSummary(7), reflectionWork: reflectionWorkStatus() },
       scheduler: scheduler?.status() || null,
       search: searchStatus(),
       qq: onebot?.status() || null,
@@ -1016,7 +1018,13 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/costs' && method === 'GET') {
     const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7));
-    return sendJson(res, 200, costSummary(days));
+    return sendJson(res, 200, { ...costSummary(days), reflectionWork: reflectionWorkStatus() });
+  }
+
+  if (pathname === '/api/reflection/retry' && method === 'POST') {
+    const count = retryFailedReflections();
+    drainReflections(llm).catch(error => logger.warn('后台整理暂缓', { code: error.code }));
+    return sendJson(res, 200, { ok: true, count });
   }
 
   if (pathname === '/api/moods' && method === 'GET') {
@@ -2632,6 +2640,13 @@ async function main() {
   server.listen(env.port, '127.0.0.1', () => {
     onebot.initializeJournal();
     recoverCostReservations();
+    recoverReflections();
+    if (!env.testMode) {
+      const reflectionTimer = setInterval(() => {
+        drainReflections(llm).catch(error => logger.warn('后台整理暂缓', { code: error.code }));
+      }, 30000);
+      reflectionTimer.unref();
+    }
     env.port = server.address().port;
     const url = `http://127.0.0.1:${env.port}`;
     if (!env.testMode) scheduler.start();

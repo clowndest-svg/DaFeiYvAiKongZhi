@@ -111,6 +111,22 @@ export function initDb(file = paths.db) {
     );
   `);
   ensureColumn(db, 'messages', 'context_tokens', 'INTEGER NOT NULL DEFAULT 0');
+  for (const [column, definition] of Object.entries({
+    request_id: "TEXT NOT NULL DEFAULT ''", attempt: 'INTEGER NOT NULL DEFAULT 1',
+    reasoning_tokens: 'INTEGER NOT NULL DEFAULT 0', outcome: "TEXT NOT NULL DEFAULT 'legacy'",
+    usage_estimated: 'INTEGER NOT NULL DEFAULT 0', price_version: "TEXT NOT NULL DEFAULT ''",
+  })) ensureColumn(db, 'costs', column, definition);
+  db.exec(`CREATE TABLE IF NOT EXISTS reflection_work (
+    message_id INTEGER PRIMARY KEY, session_id TEXT NOT NULL, from_id INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, error TEXT NOT NULL DEFAULT ''
+  ); CREATE INDEX IF NOT EXISTS idx_reflection_work_state ON reflection_work(state,session_id,message_id);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS llm_attempts (
+    id TEXT PRIMARY KEY, request_id TEXT NOT NULL, kind TEXT NOT NULL, attempt INTEGER NOT NULL,
+    session_id TEXT, state TEXT NOT NULL DEFAULT 'pending', created_at TEXT NOT NULL
+  ); CREATE INDEX IF NOT EXISTS idx_llm_attempts_created ON llm_attempts(created_at);
+  CREATE INDEX IF NOT EXISTS idx_llm_attempts_request ON llm_attempts(request_id,attempt);
+  CREATE INDEX IF NOT EXISTS idx_costs_request ON costs(request_id);`);
   db.exec(`
     CREATE INDEX IF NOT EXISTS idx_moods_created ON moods(created_at);
     CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
@@ -172,7 +188,7 @@ export function closeDb() {
   instance = null;
 }
 
-function parseJson(text, fallback) {
+export function parseJson(text, fallback) {
   try {
     return JSON.parse(text);
   } catch {
@@ -626,12 +642,14 @@ export function addCost({
   cacheHitTokens = 0,
   costCny = 0,
   sessionId = null,
+  requestId = '', attempt = 1, reasoningTokens = 0, outcome = 'legacy', usageEstimated = false, priceVersion = '',
+  createdAt = nowIso(),
 }) {
   getDb()
     .prepare(
-      'INSERT INTO costs (model, kind, prompt_tokens, completion_tokens, cache_hit_tokens, cost_cny, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO costs (model, kind, prompt_tokens, completion_tokens, cache_hit_tokens, cost_cny, session_id, created_at, request_id, attempt, reasoning_tokens, outcome, usage_estimated, price_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     )
-    .run(model, kind, Math.round(promptTokens), Math.round(completionTokens), Math.round(cacheHitTokens), costCny, sessionId, nowIso());
+    .run(model, kind, Math.round(promptTokens), Math.round(completionTokens), Math.round(cacheHitTokens), costCny, sessionId, createdAt, requestId, attempt, reasoningTokens, outcome, Number(usageEstimated), priceVersion);
 }
 
 export function costSummary(days = 7) {
@@ -656,7 +674,32 @@ export function costSummary(days = 7) {
     .get(today);
   const todayPromptTokens = Number(todayRow?.prompt_tokens || 0);
   const todayCompletionTokens = Number(todayRow?.completion_tokens || 0);
+  const breakdown = getDb().prepare(`SELECT
+    CASE WHEN instr(kind,':') > 0 THEN substr(kind,1,instr(kind,':')-1) ELSE kind END AS feature,
+    count(*) AS attempts, count(DISTINCT nullif(request_id,'')) AS tasks,
+    sum(CASE WHEN request_id='' THEN 1 ELSE 0 END) AS legacyAttempts,
+    sum(CASE WHEN attempt > 1 THEN 1 ELSE 0 END) AS retries,
+    sum(CASE WHEN outcome IN ('truncated','empty','partial','invalid_json') THEN 1 ELSE 0 END) AS unsuccessful,
+    sum(prompt_tokens) AS inputTokens, sum(completion_tokens) AS outputTokens,
+    sum(reasoning_tokens) AS reasoningTokens, sum(cache_hit_tokens) AS cacheHitTokens,
+    sum(cost_cny) AS estimatedCny FROM costs WHERE created_at >= ? GROUP BY feature ORDER BY estimatedCny DESC`).all(today);
+  const attempts = getDb().prepare(`SELECT CASE WHEN instr(kind,':')>0 THEN substr(kind,1,instr(kind,':')-1) ELSE kind END AS feature,count(*) AS attempts,
+    count(DISTINCT request_id) AS tasks,sum(CASE WHEN attempt>1 THEN 1 ELSE 0 END) AS retries,
+    sum(CASE WHEN state IN ('unknown','pending') THEN 1 ELSE 0 END) AS uncertain
+    FROM llm_attempts WHERE created_at>=? GROUP BY feature`).all(today);
+  for (const trace of attempts) {
+    let feature = breakdown.find(row => row.feature === trace.feature);
+    if (!feature) {
+      feature = { feature: trace.feature, legacyAttempts: 0, inputTokens: 0, outputTokens: 0, reasoningTokens: 0, cacheHitTokens: 0, estimatedCny: 0, unsuccessful: 0 };
+      breakdown.push(feature);
+    }
+    feature.attempts = trace.attempts + feature.legacyAttempts;
+    feature.tasks = trace.tasks;
+    feature.retries = trace.retries;
+    feature.uncertain = trace.uncertain;
+  }
   return {
+    breakdown,
     days,
     calls: Number(row?.calls || 0),
     promptTokens: Number(row?.prompt_tokens || 0),

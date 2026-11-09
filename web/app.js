@@ -310,6 +310,7 @@ function renderStatus() {
   const costs = status.costs || {};
   $('#todayCost').textContent = money(costs.todayCostCny);
   $('#todayTokens').textContent = fmtNum(costs.todayTokens);
+  renderCostBreakdown(costs);
   $('#weekCost').textContent = money(costs.costCny);
   $('#weekCost2').textContent = money(costs.costCny);
   $('#sessionTokens').textContent = status.session?.contextTokens
@@ -476,6 +477,25 @@ async function liveRefresh() {
   } finally {
     state.liveBusy = false;
   }
+}
+
+function renderCostBreakdown(costs) {
+  const host = $('#costUsageBreakdown');
+  host.replaceChildren();
+  const labels = { chat: '聊天', reflect: '内心整理', compact: '记忆压缩', handover: '会话交接' };
+  for (const row of costs.breakdown || []) {
+    const item = el('div', 'usage-row');
+    item.append(el('strong', '', `${labels[row.feature] || row.feature} · ${money(row.estimatedCny)}`));
+    item.append(el('span', 'small muted', `${row.attempts} 次请求 · ${row.tasks} 个已追踪任务 · ${row.retries} 次重试 · 待对账 ${row.uncertain || 0}`));
+    const hit = row.inputTokens ? Math.round(row.cacheHitTokens / row.inputTokens * 100) : 0;
+    item.append(el('span', 'small muted', `输入 ${fmtNum(row.inputTokens)} · 输出 ${fmtNum(row.outputTokens)}（含推理 ${fmtNum(row.reasoningTokens)}）· 缓存 ${hit}% · 输出异常 ${row.unsuccessful}`));
+    if (row.legacyAttempts) item.append(el('span', 'small muted', `${row.legacyAttempts} 条历史记录缺少任务明细`));
+    host.append(item);
+  }
+  const counts = Object.fromEntries((costs.reflectionWork || []).map(row => [row.state, row.count]));
+  const paused = (costs.reflectionWork || []).find(row => row.state === 'pending')?.budgetPaused || 0;
+  $('#reflectionWorkStatus').textContent = `待整理 ${counts.pending || 0} · 正在整理 ${counts.running || 0} · 已完成 ${counts.done || 0} · 待检查 ${counts.failed || 0}${paused ? ` · ${paused} 条等待预算恢复` : ''}`;
+  $('#retryReflections').disabled = !counts.failed;
 }
 
 async function loadBalance(force = false) {
@@ -2079,6 +2099,10 @@ function fillSettings() {
   renderSearchLine();
   $('#setReflectMaxTokens').value = settings.model?.reflectMaxTokens ?? 450;
   $('#setReflectEvery').value = settings.model?.reflectEvery ?? 2;
+  $('#setReflectMinSeconds').value = settings.model?.reflectMinSeconds ?? 120;
+  $('#setReflectMaxDailyCny').value = settings.model?.reflectMaxDailyCny ?? 0.5;
+  $('#setThinkingMode').value = settings.model?.thinkingMode || 'adaptive';
+  $('#setMaxInputTokens').value = settings.memory?.maxInputTokens ?? 6000;
   $('#setMaxContextTokens').value = settings.memory?.maxContextTokens ?? 64000;
   $('#setMaxPromptTokens').value = settings.memory?.maxPromptTokens ?? 6000;
   $('#setRetrieveBudget').value = settings.memory?.retrieveBudgetTokens ?? 2200;
@@ -2225,12 +2249,16 @@ function collectSettings() {
       reasoningEffort: $('#setEffort').value,
       reflectMaxTokens: Number($('#setReflectMaxTokens').value) || 450,
       reflectEvery: Number($('#setReflectEvery').value) || 2,
+      reflectMinSeconds: Number($('#setReflectMinSeconds').value) || 120,
+      reflectMaxDailyCny: Number($('#setReflectMaxDailyCny').value) || 0.5,
+      thinkingMode: $('#setThinkingMode').value,
     },
     memory: {
       ...(prev.memory || {}),
       compactTokens: Number($('#setCompactTokens').value) || 24000,
       handoverTokens: Number($('#setHandoverTokens').value) || 48000,
       shortTurns: Number($('#setShortTurns').value) || 24,
+      maxInputTokens: Number($('#setMaxInputTokens').value) || 6000,
       retrieveCount: Number($('#setRetrieveCount').value) || 10,
       maxContextTokens: Number($('#setMaxContextTokens').value) || 64000,
       maxPromptTokens: Number($('#setMaxPromptTokens').value) || 6000,
@@ -3235,6 +3263,13 @@ async function loadSentinelStatus() {
 }
 
 function bindSettings() {
+  $('#retryReflections').addEventListener('click', () => withBusy($('#retryReflections'), async () => {
+    try {
+      const result = await api('/api/reflection/retry', { method: 'POST' });
+      toast(`已重新排队 ${result.count} 条，按间隔和预算处理`);
+      await loadStatus();
+    } catch (error) { toast(error.message, 'error'); }
+  }));
   bindSettingsNavigation();
   $('#reloadSettingsBtn').addEventListener('click', async () => {
     if (state.settingsDirty && !confirm('重新载入会放弃当前未保存修改。请先复制需要保留的内容。继续？')) return;

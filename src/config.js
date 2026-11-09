@@ -168,8 +168,11 @@ export function normalizeSettings(settings) {
   s.model.name = String(s.model.name || env.defaultModel);
   s.model.temperature = Math.min(1.5, Math.max(0.1, Number(s.model.temperature) || 0.95));
   s.model.chatMaxTokens = Math.min(8000, Math.max(600, Number(s.model.chatMaxTokens) || 1400));
-  s.model.reflectMaxTokens = Math.min(4000, Math.max(200, Number(s.model.reflectMaxTokens) || 450));
+  s.model.reflectMaxTokens = Math.min(1600, Math.max(800, Number(s.model.reflectMaxTokens) || 1000));
   s.model.reflectEvery = Math.min(10, Math.max(1, Number(s.model.reflectEvery) || 2));
+  s.model.reflectMinSeconds = Math.min(3600, Math.max(30, Number(s.model.reflectMinSeconds) || 120));
+  s.model.reflectMaxDailyCny = Math.min(50, Math.max(0.01, Number(s.model.reflectMaxDailyCny) || 0.5));
+  s.model.thinkingMode = ['adaptive', 'enabled', 'disabled'].includes(s.model.thinkingMode) ? s.model.thinkingMode : 'adaptive';
   s.model.reasoningEffort = ['low', 'high', 'max'].includes(s.model.reasoningEffort)
     ? s.model.reasoningEffort
     : 'low';
@@ -181,6 +184,7 @@ export function normalizeSettings(settings) {
   );
   s.memory.maxContextTokens = Math.min(128000, Math.max(8000, numberOr(s.memory.maxContextTokens, 64000)));
   s.memory.maxPromptTokens = Math.min(16000, Math.max(3000, numberOr(s.memory.maxPromptTokens, 6000)));
+  s.memory.maxInputTokens = Math.min(32000, Math.max(3000, numberOr(s.memory.maxInputTokens, 6000)));
   s.memory.shortTurns = Math.min(80, Math.max(6, numberOr(s.memory.shortTurns, 24)));
   s.memory.retrieveCount = Math.min(30, Math.max(3, numberOr(s.memory.retrieveCount, 10)));
   s.memory.retrieveBudgetTokens = Math.min(8000, Math.max(500, numberOr(s.memory.retrieveBudgetTokens, 2200)));

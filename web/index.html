@@ -141,12 +141,12 @@
               </div>
 
               <details class="card diagnostics"><summary>服务与用量</summary><div class="stats-card">
-                <div><span class="muted">今日花费</span><strong id="todayCost">--</strong></div>
+                <div><span class="muted">今日估算花费</span><strong id="todayCost">--</strong></div>
                 <div><span class="muted">今日 tokens</span><strong id="todayTokens">--</strong></div>
                 <div><span class="muted">本周花费</span><strong id="weekCost">--</strong></div>
                 <div><span class="muted">当前上下文 tokens</span><strong id="sessionTokens">--</strong></div>
                 <div><span class="muted">QQ</span><strong id="qqState">未连接</strong></div>
-              </div></details>
+              </div><div id="costUsageBreakdown" class="usage-breakdown"></div><p class="muted small">金额按记录中的模型、费率版本和汇率估算，以官方账单为准。历史请求的重试与推理明细可能尚未记录。</p></details>
             </aside>
           </div>
         </section>
@@ -436,8 +436,15 @@
                 <label>每次想起几条重点 <input id="setRetrieveCount" type="number" min="3" max="30"></label>
                 <details class="adv">
                   <summary>高级：记忆预算与睡前反思</summary>
-                  <label>反思一次最多写多少 tokens <input id="setReflectMaxTokens" type="number" min="200" max="4000"></label>
+                  <label>反思一次最多写多少 tokens <input id="setReflectMaxTokens" type="number" min="800" max="1600"></label>
                   <label>每几轮做一次内心整理 <input id="setReflectEvery" type="number" min="1" max="10"></label>
+                  <label>内心整理最小间隔（秒）<input id="setReflectMinSeconds" type="number" min="30" max="3600"></label>
+                  <label>内心整理每日预算（估算元）<input id="setReflectMaxDailyCny" type="number" min="0.01" max="50" step="0.01"></label>
+                  <label>聊天思考模式<select id="setThinkingMode"><option value="adaptive">按问题复杂度自动选择</option><option value="disabled">关闭思考</option><option value="enabled">启用思考</option></select></label>
+                  <label>单轮输入预算（估算 tokens）<input id="setMaxInputTokens" type="number" min="3000" max="32000"></label>
+                  <p class="muted small">整理按批次和最小间隔执行，批次不足时到期也会处理。自动思考模式按问题关键词选择。输入预算优先保留当前问题和必要规则，长输入可能超过该预算。</p>
+                  <p class="muted small" id="reflectionWorkStatus"></p>
+                  <button type="button" id="retryReflections">重试待检查的内心整理</button>
                   <label>一轮最多带多少上下文 tokens <input id="setMaxContextTokens" type="number" min="8000" max="128000"></label>
                   <label>系统提示最多多少 tokens <input id="setMaxPromptTokens" type="number" min="3000" max="16000"></label>
                   <label>每次回忆最多花多少 tokens <input id="setRetrieveBudget" type="number" min="500" max="8000"></label>

@@ -47,6 +47,10 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   await page.getByRole('tab', { name: '聊天与记忆', exact: true }).click();
   await page.locator('#setSearchDailyMax').fill('13');
   await page.locator('#set-card-memory summary').click();
+  await page.locator('#setThinkingMode').selectOption('disabled');
+  await page.locator('#setReflectMinSeconds').fill('180');
+  await page.locator('#setReflectMaxDailyCny').fill('0.25');
+  await page.locator('#setMaxInputTokens').fill('5000');
   await page.locator('#setDreamHour').fill('0');
   await page.getByRole('tab', { name: '主动陪伴', exact: true }).click();
   await page.locator('#setIdleMin').fill('37');
@@ -54,6 +58,10 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   await page.locator('#saveSectionBtn').click();
   await page.waitForFunction(() => !document.querySelector('#saveSectionBtn').disabled);
   assert.equal((await current()).settings.search.dailyMax, 13);
+  assert.equal((await current()).settings.model.thinkingMode, 'disabled');
+  assert.equal((await current()).settings.model.reflectMinSeconds, 180);
+  assert.equal((await current()).settings.model.reflectMaxDailyCny, 0.25);
+  assert.equal((await current()).settings.memory.maxInputTokens, 5000);
   assert.notEqual((await current()).settings.proactive.idleMinutesMin, 37);
   assert.notEqual((await current()).settings.companion.name, '分区切换保留草稿');
   await page.getByRole('tab', { name: '界面与系统', exact: true }).click();

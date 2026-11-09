@@ -11,6 +11,7 @@ import { applyNeuroEvent, neuroStatus, noteHisMessage } from './neuro.js';
 import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection, reflectionBusy } from './reflect.js';
+import { chatThinking } from './llm-policy.js';
 import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
@@ -195,6 +196,7 @@ export class Companion {
         model: prep.settings.model.name,
         ...generationProfile(prep.settings),
         reasoningEffort: prep.settings.model.reasoningEffort,
+        thinking: chatThinking(prep.text, prep.settings),
         kind: 'chat',
         sessionId: prep.session.id,
         signal,
@@ -316,6 +318,7 @@ export class Companion {
       temperature,
       maxTokens,
       reasoningEffort: prep.settings.model.reasoningEffort,
+      thinking: chatThinking(prep.text, prep.settings),
       kind: 'chat',
       sessionId: prep.session.id,
       mockKind: 'chat',

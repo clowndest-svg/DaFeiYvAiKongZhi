@@ -809,6 +809,8 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .reply-editor .btn-row { margin-top: 6px; }
 
 .btn-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; min-width: 0; }
+.usage-breakdown { display: grid; gap: 10px; margin: 12px 0; }
+.usage-row { display: grid; gap: 4px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; overflow-wrap: anywhere; }
 .btn-row > button { flex: 0 1 auto; }
 .social-toolbar > div:first-child, .interaction-head > div:first-child { flex: 1 1 260px; min-width: 0; }
 .social-toolbar .btn-row, .interaction-head .btn-row { align-self: flex-start; }

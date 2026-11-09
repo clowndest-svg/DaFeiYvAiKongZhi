@@ -11,16 +11,20 @@
     "chatMaxTokens": 1800,
     "reflectMaxTokens": 900,
     "reasoningEffort": "low",
-    "reflectEvery": 2
+    "reflectEvery": 4,
+    "reflectMinSeconds": 120,
+    "reflectMaxDailyCny": 0.5,
+    "thinkingMode": "adaptive"
   },
   "memory": {
     "compactTokens": 24000,
     "handoverTokens": 48000,
     "maxContextTokens": 64000,
-    "maxPromptTokens": 6000,
-    "shortTurns": 24,
-    "retrieveCount": 10,
-    "retrieveBudgetTokens": 2200
+    "maxPromptTokens": 3500,
+    "maxInputTokens": 6000,
+    "shortTurns": 16,
+    "retrieveCount": 6,
+    "retrieveBudgetTokens": 1200
   },
   "search": {
     "enabled": true,
