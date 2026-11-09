@@ -16,6 +16,15 @@ import { fillXPost, reactXTweet, readSelfTweets, readTweetThread, readXTimeline,
 
 const HOUR_KEY = 'x_action_hour';
 
+// 「逛的关键词」就是用来搜的：这个号没关注任何人，首页时间线本来就是空的。
+// 每轮轮一个词，别每次都搜同一个；一个都没填才回首页。
+export function nextXKeyword(keywords, turn = 0) {
+  const list = (Array.isArray(keywords) ? keywords : []).filter(Boolean);
+  if (!list.length) return { keyword: '', tab: 'home', turn: 0 };
+  const index = Math.abs(Math.trunc(Number(turn) || 0)) % list.length;
+  return { keyword: list[index], tab: 'search', turn: index + 1 };
+}
+
 function localDayKey() {
   return new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date());
 }
@@ -188,7 +197,9 @@ export async function processXExplore({ llm, maxTweets = 0, force = false } = {}
   const appetite = Math.max(2, Math.min(6, 2 + Math.round(Number(mood.energy || 0.5) * 4)));
   const limit = Number(maxTweets) > 0 ? Math.min(Number(maxTweets), appetite) : appetite;
   const keywords = String(social.xSearchKeywords || '').split(/[,，\s]+/).filter(Boolean);
-  const feed = await readXTimeline({ tab: 'home', limit: Math.max(12, limit * 3) });
+  const plan = nextXKeyword(keywords, kvGet('x_keyword_turn'));
+  if (plan.tab === 'search') kvSet('x_keyword_turn', String(plan.turn));
+  const feed = await readXTimeline({ tab: plan.tab, keyword: plan.keyword, limit: Math.max(12, limit * 3) });
   const seen = seenSet();
   const ownerHandle = String(social.xOwnerHandle || '').toLowerCase();
   const actions = [];
@@ -266,7 +277,7 @@ export async function processXExplore({ llm, maxTweets = 0, force = false } = {}
     }
     await new Promise((resolve) => setTimeout(resolve, 20000 + Math.random() * 40000));
   }
-  addEvent('x_browse_done', `她逛了 X ${browsed} 条：回了 ${replied} 句，点了 ${liked} 个赞，${passed} 条看完没说话`, { appetite: limit, keywords: keywords.length });
+  addEvent('x_browse_done', `她逛了 X ${browsed} 条：回了 ${replied} 句，点了 ${liked} 个赞，${passed} 条看完没说话`, { appetite: limit, keyword: plan.keyword || '', keywords: keywords.length });
   return { ok: true, actions, browsed, replied, liked, passed, appetite: limit };
 }
 

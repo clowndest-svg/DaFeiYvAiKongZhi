@@ -19,7 +19,7 @@ import {
   triggerXCooldown,
   xCooldownUntil,
 } from '../src/channels/x-safety.js';
-import { canActX, manualXAct, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
+import { canActX, manualXAct, nextXKeyword, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
 import { readXTimeline, xProxyAlive, normalizeTyped, firstDifference, ownerHandleNotice } from '../src/channels/x.js';
 import { otherHolders } from '../src/browser/cdp.js';
 
@@ -314,6 +314,18 @@ test('主人账号和当前登录号对不上时要说出来，不能悄悄把�
   assert.ok(src.includes('owner: ownerHandleNotice('), '状态里没带上主人账号的对账结果，界面也就没法显示');
   const appSrc = fs.readFileSync(path.join(paths.root, 'web', 'app.js'), 'utf8');
   assert.ok(appSrc.includes('s.owner?.text'), '界面没把对账结果写出来');
+});
+
+test('逛的关键词要真的拿去搜：这个号没关注人，首页本来就是空的', () => {
+  assert.deepEqual(nextXKeyword([], 5), { keyword: '', tab: 'home', turn: 0 }, '没填关键词才回首页');
+  assert.deepEqual(nextXKeyword(['咖啡'], 0), { keyword: '咖啡', tab: 'search', turn: 1 });
+  assert.deepEqual(nextXKeyword(['咖啡', '摄影'], 0).keyword, '咖啡');
+  assert.deepEqual(nextXKeyword(['咖啡', '摄影'], 1).keyword, '摄影', '第二个词要在下一轮轮到');
+  assert.deepEqual(nextXKeyword(['咖啡', '摄影'], 2).keyword, '咖啡', '轮完一圈要绕回来');
+  assert.deepEqual(nextXKeyword(['咖啡'], -3).keyword, '咖啡', '计数坏了也不能抛');
+  assert.deepEqual(nextXKeyword(['咖啡'], 'abc').keyword, '咖啡');
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x-actions.js'), 'utf8');
+  assert.ok(src.includes('tab: plan.tab, keyword: plan.keyword'), '算了关键词却没传给 readXTimeline：设置里的「逛的关键词」等于没用');
 });
 
 test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {
