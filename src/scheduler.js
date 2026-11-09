@@ -157,10 +157,16 @@ export class Scheduler {
     this.qzoneTimer = null;
     this.xhsTimer = null;
     this.xTimer = null;
+    this.sentinelTimer = null;
     this.xBusy = false;
     this.lastXError = null;
     this.xhsBusy = false;
     this.lastXhsError = null;
+    // 退避是上一轮运行的判断，重启后不该继续压着：否则一次断网会让新进程也白等一小时。
+    this.xFailures = 0;
+    this.xRetryAt = 0;
+    this.xhsReadFailures = 0;
+    this.xhsReadRetryAt = 0;
   }
 
   async pollQzone() {

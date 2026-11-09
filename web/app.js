@@ -384,6 +384,16 @@ function renderStatus() {
     }
   }
   document.title = `${companion.name || '小知'} · 在呢`;
+  // 动态页是她自己运营的地方：被省钱闸门停了却只在设置里写，他看到的就只是"好几天什么都没发生"。
+  const socialCost = $('#socialCostLine');
+  if (socialCost) {
+    const paused = costState && (costState.level === 'low' || costState.level === 'stop');
+    // 这个元素常驻 class="hidden"（.hidden 是 !important），只改 hidden 属性它是永远出不来的。
+    socialCost.classList.toggle('hidden', !paused);
+    socialCost.textContent = paused
+      ? `自动运营已暂停：${(costState.reasons || []).join('；')}。回你的消息不受影响；想继续就去设置里调低余额阈值或充值。`
+      : '';
+  }
 }
 
 function renderHealth(list) {
@@ -2577,6 +2587,8 @@ async function loadQqSetup() {
   const notify = data.notify || null;
   if (notify) {
     const last = notify.last || null;
+    const toggle = $('#qqNotifyToggleBtn');
+    if (toggle) toggle.textContent = notify.enabled ? '关掉桌面通知' : '打开桌面通知';
     lines.push(notify.enabled
       ? '桌面通知：开着' + (last ? (last.ok ? `（上次自检 ${new Date(last.at).toLocaleString('zh-CN', { hour12: false })} 让系统弹了气泡）` : `（上次自检没弹成：${last.error || '退出码 ' + last.exitCode}）`) : '（还没自检过，点「测试桌面通知」验一下）')
       : '桌面通知：已关掉（断线只写在控制台里，不弹气泡）');
@@ -2753,9 +2765,11 @@ async function loadXStatus(verify = false) {
     }
     const line = $('#xAccountLine');
     if (line) {
-      line.textContent = s.loggedIn || s.selfHandle
+      const ownerNote = s.loggedIn && s.owner?.text ? ` · ${s.owner.text}` : '';
+      line.textContent = (s.loggedIn || s.selfHandle
         ? `当前账号：@${s.selfHandle || '未读到'} · 今天回复 ${b.repliesToday}/${b.dailyReplyMax} · 赞 ${b.likesToday}/${b.dailyLikeMax} · 转推 ${b.retweetsToday}/${b.dailyRetweetMax} · 草稿 ${b.draftsToday}/${b.dailyPostMax} · 本小时动作 ${b.actionsThisHour}/${b.hourlyActionMax}`
-        : '当前登录的 X 账号：还没登录，读不到。';
+        : '当前登录的 X 账号：还没登录，读不到。') + ownerNote;
+      line.classList.toggle('warn-text', s.owner?.state === 'different' || s.owner?.state === 'unset');
     }
     const publish = $('#xPublishHint');
     if (publish && s.cached) {
@@ -3379,6 +3393,18 @@ function bindSettings() {
     loadQqSetup().catch(() => {});
     } catch (error) {
       toast('这条通知没发出去：' + error.message, 'error');
+    }
+  }));
+  $('#qqNotifyToggleBtn')?.addEventListener('click', () => withBusy($('#qqNotifyToggleBtn'), async () => {
+    try {
+      // 状态从服务端回读，不拿界面上的文案当真相：按钮写"关掉"不代表它现在是开的。
+      const setup = await api('/api/qq/setup');
+      const on = setup?.notify?.enabled !== false;
+      const data = await api('/api/qq/notify/toggle', { method: 'POST', body: { on: !on } });
+      toast(data.enabled ? '桌面通知已打开：断线时系统会弹气泡。' : '桌面通知已关掉：断线只写进控制台。', 'ok');
+      await loadQqSetup().catch(() => {});
+    } catch (error) {
+      toast('桌面通知没切成：' + error.message, 'error');
     }
   }));
   $('#qqHealthBtn')?.addEventListener('click', () => withBusy($('#qqHealthBtn'), async () => {

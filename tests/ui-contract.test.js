@@ -117,3 +117,13 @@ test('页面仍然没有内联样式（CSP 会整条忽略它们）', () => {
   const inline = [...HTML.matchAll(/style="[^"]*"/g)].map((m) => m[0]);
   assert.deepEqual(inline, [], `内联样式在 CSP 下不生效：${inline.join(' ')}`);
 });
+
+test('被省钱闸门停掉的自动运营要在动态页说出来，不能只在设置里写', () => {
+  // 余额低于阈值时小红书/X/空间一起停；动态页不写原因，他看到的就只是"好几天什么都没发生"。
+  assert.match(HTML, /id="socialCostLine"/, '动态页没有省钱闸门的提示位');
+  assert.match(APP, /socialCostLine/, '提示位没接线');
+  assert.match(APP, /costState\.level === 'low' \|\| costState\.level === 'stop'/, '提示没有按闸门档位显示');
+  // 这个元素常驻 class="hidden"（display:none !important），只改 hidden 属性的话永远显示不出来。
+  assert.match(APP, /socialCost\.classList\.toggle\('hidden'/, '切的是 hidden 属性：元素上的 .hidden 类会一直把它藏住');
+  assert.doesNotMatch(APP, /socialCost\.hidden\s*=/, '又回到改 hidden 属性了；它对 !important 的类无效');
+});

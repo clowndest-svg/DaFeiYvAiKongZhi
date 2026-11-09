@@ -4,7 +4,11 @@ import { logger } from './logger.js';
 import { nowIso, shanghaiDayKey } from './util.js';
 import { costReservationStatus } from './cost-reservations.js';
 
-export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'qzoneAuto', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
+// 名单和消费点必须两边对上（tests/budget-gate.test.js 会逐条核对）：
+// 漏注册 = 熔断线到了它还照样花钱；注册了没人查 = 名单上写着暂停，其实没人执行。
+export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'look', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
+// 余额低只停"她自己主动花"的部分；回他、看他发来的东西、帮他查资料照旧。
+export const LOW_BALANCE_PAUSE = ['voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'dream', 'weekly', 'reflect'];
 
 export function evaluateBudget({ balanceCny = null, todayCostCny = 0, settings }) {
   const cost = settings?.cost || {};
@@ -20,7 +24,7 @@ export function evaluateBudget({ balanceCny = null, todayCostCny = 0, settings }
     COST_FEATURES.forEach((feature) => blocked.add(feature));
     reasons.push(`余额只剩 ${value.toFixed(2)} 元，熔断线 ${stop} 元：只留着回你，额外动作暂停`);
   } else if (value !== null && value <= low) {
-    ['voice', 'xhsAuto', 'qzoneAuto', 'dream', 'weekly', 'reflect'].forEach((feature) => blocked.add(feature));
+    LOW_BALANCE_PAUSE.forEach((feature) => blocked.add(feature));
     reasons.push(`余额 ${value.toFixed(2)} 元低于 ${low} 元：暂停语音和自动运营，主动间隔拉长`);
   }
   if (capped) {

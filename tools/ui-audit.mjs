@@ -1,5 +1,6 @@
 // 界面体检：起一个隔离演示实例，灌入有代表性的数据，然后在五档视口 × 五个视图上
 // 量六类可判定的缺陷：横向溢出、真遮挡、文字截断、元素出界、可点区域过小、对比度不达 WCAG AA。
+// 另加一组交互检查：带开关的卡片必须真的能切后端状态（只钉"按钮存在"会漏掉没绑事件）。
 // 任何一项不达标就以非 0 退出，可以直接挂在本机收尾或 CI 上。
 //
 //   node tools/ui-audit.mjs            # 只判定
@@ -264,6 +265,44 @@ if (!executable) {
     if(!positiveControl.contrast.some(item=>item.includes('contrast-pos')))throw new Error('对比度正向对照未被检出，探针不可用于验收');
     console.log('✓ 对比度正向对照已检出');
     if (wantShots) fs.mkdirSync(shotDir, { recursive: true });
+    // 交互体检：带开关的卡片必须在真页面上真的能切后端状态。
+    // 只钉"按钮存在/接口存在"会漏掉没绑事件、绑错接口、状态不刷新这几种（桌面通知原来就只测不改）。
+    {
+      const cookies = await context.cookies(BASE);
+      const cookie = cookies.map((item) => `${item.name}=${item.value}`).join('; ');
+      const notifyOn = async () => {
+        const res = await fetch(`${BASE}/api/qq/setup`, { headers: { cookie } });
+        return (await res.json())?.notify?.enabled;
+      };
+      await page.goto(`${BASE}/?view=settings`);
+      await page.waitForFunction(() => document.querySelector('#view-settings')?.classList.contains('active'));
+      const before = await notifyOn();
+      if (typeof before !== 'boolean') throw new Error('桌面通知状态读不到：界面也没法把开关写成开/关');
+      await page.evaluate(() => document.querySelector('#qqNotifyToggleBtn')?.click());
+      let after = before;
+      for (let i = 0; i < 40 && after === before; i += 1) {
+        await page.waitForTimeout(150);
+        after = await notifyOn();
+      }
+      if (after === before) throw new Error('点了桌面通知开关，后端状态没变');
+      const label = await page.evaluate(() => document.querySelector('#qqNotifyToggleBtn')?.textContent || '');
+      if (!/关掉桌面通知|打开桌面通知/.test(label)) throw new Error(`开关按钮没跟着状态改文案：「${label}」`);
+      const social = await page.evaluate(() => {
+        const node = document.querySelector('#socialCostLine');
+        if (!node) return { exists: false };
+        // 必须看真实计算结果：这个元素常驻 .hidden 类（display:none !important），
+        // 只断言 node.hidden 属性会在"永远显示不出来"的时候照样判绿。
+        const visible = getComputedStyle(node).display !== 'none';
+        node.classList.remove('hidden');
+        const canShow = getComputedStyle(node).display !== 'none';
+        node.classList.add('hidden');
+        return { exists: true, visible, canShow };
+      });
+      if (!social.exists) throw new Error('动态页缺省钱闸门的提示位');
+      if (social.visible) throw new Error('省钱闸门正常时动态页不该显示暂停提示');
+      if (!social.canShow) throw new Error('省钱提示位就算去掉 hidden 也显示不出来');
+      console.log('✓ 交互：桌面通知开关真的切了后端状态，省钱提示位按档位隐藏');
+    }
     for (const width of WIDTHS) {
       await page.setViewportSize({ width, height: width < 800 ? 880 : 900 });
       for (const view of VIEWS) {

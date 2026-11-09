@@ -1420,6 +1420,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .icon-btn.recording { color: var(--danger); }
 #presenceHint.warn { color: var(--danger); }
 #presenceHint.ok { color: var(--ok); }
+.warn-text { color: var(--warn); }
 #camCanvas { display: none; }
 .neuro-list, .sense-list, .forget-list, .kv-lines { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
 .neuro-row {

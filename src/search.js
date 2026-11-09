@@ -9,6 +9,7 @@
 // 4) 花钱的那条路要走闸门：每天次数封顶、按次记账，失败与空结果不记账。
 
 import { env, loadSettings } from './config.js';
+import { costBlocked } from './budget.js';
 import { addEvent, kvGet, kvSet, toolCallsToday } from './db.js';
 import { logger } from './logger.js';
 import { privacyProblems } from './privacy.js';
@@ -168,6 +169,8 @@ export function extractReadableUrl(text) {
 function gate(query, settings) {
   if (!query) return { ok: false, reason: '没摘出要查的词', items: [] };
   if (settings.search?.enabled === false) return { ok: false, reason: '设置里关了联网搜索', items: [], skipped: true };
+  // DeepSeek 的搜索/读页是按次收费的：熔断线或当日上限到了就不再往外花钱。
+  if (costBlocked('search')) return { ok: false, reason: '今天的花费到线了，先不联网查（回你的消息不受影响）', items: [], costBlocked: true };
   const problems = privacyProblems(query, settings);
   if (problems.length) {
     logger.warn('联网请求被隐私闸门挡下', { problems: problems.length });

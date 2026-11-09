@@ -84,6 +84,11 @@ test('接线：断线、要扫码、需要人出手三条路都挂了钩；页�
   assert.match(read('web/index.html'), /测试桌面通知/);
   assert.match(read('src/index.js'), /notify\/test/);
   assert.match(read('src/index.js'), /notify\/toggle/);
+  // 后端有开关、界面只有"测试"按钮的话，他一旦关掉就再也打不开了：
+  // 光钉路由存在证明不了这个能力有入口（原来就是这么漏的）。
+  assert.match(read('web/index.html'), /id="qqNotifyToggleBtn"/, '桌面通知只有测试按钮、没有开关：关掉之后界面上打不回来');
+  assert.match(app, /qqNotifyToggleBtn[^\n]*addEventListener/, '开关按钮没绑事件');
+  assert.match(app, /\/api\/qq\/notify\/toggle/, '开关按钮没打到后端那个接口');
 });
 
 test('界面要说清通知的真实状态：没自检过就写没自检过', () => {

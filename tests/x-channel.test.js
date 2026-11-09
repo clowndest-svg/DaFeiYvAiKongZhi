@@ -20,7 +20,7 @@ import {
   xCooldownUntil,
 } from '../src/channels/x-safety.js';
 import { canActX, manualXAct, parseHerAnswer, shouldSkipTweet, xBudgetStatus } from '../src/channels/x-actions.js';
-import { readXTimeline, xProxyAlive, normalizeTyped, firstDifference } from '../src/channels/x.js';
+import { readXTimeline, xProxyAlive, normalizeTyped, firstDifference, ownerHandleNotice } from '../src/channels/x.js';
 import { otherHolders } from '../src/browser/cdp.js';
 
 test.after(closeDb);
@@ -284,6 +284,36 @@ test('比对输入框要忽略零宽字符，重试前必须先清空：实测�
   assert.ok(state[0].includes('all[all.length - 1]'), '页面上有多个框时没取最后长出来的那个：实测回复框在 /compose/post 上，不在弹层里');
   assert.ok(!/document\.querySelector\('div\[data-testid="tweetTextarea_0"'\)\)/.test(reply[0]), '回复里还用了"抓第一个"的选择器：会点到主页发帖框');
   assert.ok(!/document\.querySelector\('div\[data-testid="tweetTextarea_0"\]'\)/.test(reply[0]), '回复里还用了不限范围的发帖框选择器');
+});
+
+test('回复的发送按钮必须和输入框同属一个编辑器：整页回复时页面上还挂着主页那个空发帖框', () => {
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  const state = /function composerState\(action[\s\S]*?\r?\n}/.exec(src)[0];
+  assert.ok(state.includes('const pickButton = (box) =>'), '挑发送按钮时没拿到输入框：没法判断按钮是不是同一个编辑器的');
+  assert.ok(state.includes('for (let el = box; el; el = el.parentElement)'), '没从输入框往上找按钮：按"页面上最后一个"会拿到主页那条空框的按钮，它永远是灰的');
+  assert.ok(!state.includes("const all = [...document.querySelectorAll('button[data-testid=\"' + id + '\"]')];"), '又回到"页面上最后一个发送按钮"了');
+  assert.ok(state.includes('const btn = pickButton(box);'), '挑按钮没把框传进去');
+  const reply = /async function replyToTweetLocked[\s\S]*?\r?\n}/.exec(src)[0];
+  assert.ok(reply.includes('waitForComposerReady(readback)'), '读到字就立刻判"按钮灰"：Slate 落字和按钮变亮不是同一帧，会把刚填好的回复误杀');
+});
+
+test('主人账号和当前登录号对不上时要说出来，不能悄悄把他降级成陌生人', () => {
+  assert.equal(ownerHandleNotice({ configured: 'MetaverseTomOne', self: 'metaversetomone' }).state, 'match');
+  assert.equal(ownerHandleNotice({ configured: '@MetaVerseTomOne', self: 'metaversetomone' }).text, '', '对得上就不该有提示');
+  const diff = ownerHandleNotice({ configured: 'Tomve5j', self: 'MetaverseTomOne' });
+  assert.equal(diff.state, 'different');
+  assert.ok(diff.text.includes('@Tomve5j') && diff.text.includes('@MetaverseTomOne'), '要把他填的和实际登录的都写出来');
+  assert.ok(diff.text.includes('陌生人的'), '要说清后果：他的评论会被当成陌生人的');
+  const unset = ownerHandleNotice({ configured: '', self: 'abc' });
+  assert.equal(unset.state, 'unset');
+  assert.ok(unset.text.includes('@abc'), '没填主人账号时也要说清他会被当成陌生人');
+  assert.equal(ownerHandleNotice({ configured: '@A', self: '' }).state, 'unknown');
+  assert.equal(ownerHandleNotice({ configured: '', self: '' }).text, '');
+  // 算得对但没接到状态里/界面上，等于没说：这条专门钉接线。
+  const src = fs.readFileSync(path.join(paths.root, 'src', 'channels', 'x.js'), 'utf8');
+  assert.ok(src.includes('owner: ownerHandleNotice('), '状态里没带上主人账号的对账结果，界面也就没法显示');
+  const appSrc = fs.readFileSync(path.join(paths.root, 'web', 'app.js'), 'utf8');
+  assert.ok(appSrc.includes('s.owner?.text'), '界面没把对账结果写出来');
 });
 
 test('模型把 JSON 截断时不许打断整轮逛：能捞就捞，捞不到就闭嘴', () => {

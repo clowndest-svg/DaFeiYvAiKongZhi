@@ -237,15 +237,17 @@ async function xStatusLocked({ verify = false } = {}) {
     if (loggedIn && state.selfName) kvSet('x_self_name', state.selfName);
     lastCheckAt = nowIso();
     lastError = '';
+    const selfHandle = state.selfHandle || cached.selfHandle;
     return {
       ...cached,
       loggedIn,
       browserRunning: true,
       url: state.url,
-      selfHandle: state.selfHandle || cached.selfHandle,
+      selfHandle,
       selfName: state.selfName || cached.selfName,
       profileUrl: loggedIn && state.selfHandle ? `${BASE}/${state.selfHandle}` : cached.profileUrl,
       notifyBadge: state.notifyBadge,
+      owner: ownerHandleNotice({ configured: loadSettings().social?.xOwnerHandle, self: selfHandle }),
       lastError: '',
       proxyOk: true,
     };
@@ -254,6 +256,22 @@ async function xStatusLocked({ verify = false } = {}) {
     logger.warn('X 登录状态检查失败', { error: error.message });
     return { ...cached, proxyOk: proxy.ok, error: error.message };
   }
+}
+
+// 设置里的"主人账号"和当前登录号是两回事：对不上时他的评论会被当成陌生人的
+// （受每日回复上限和内容过滤约束）。这件事必须让他在界面上看见，不能悄悄降级。
+export function ownerHandleNotice({ configured, self }) {
+  // 比大小写不敏感，但显示要用他填的原样：X 句柄不区分大小写，展示的时候可不是。
+  const wantRaw = String(configured || '').replace(/^@/, '').trim();
+  const gotRaw = String(self || '').replace(/^@/, '').trim();
+  const want = wantRaw.toLowerCase();
+  const got = gotRaw.toLowerCase();
+  if (!want) return got
+    ? { state: 'unset', text: `还没填主人账号：@${gotRaw} 下面的评论会被当成陌生人的，占每日回复额度。` }
+    : { state: 'unset', text: '' };
+  if (!got) return { state: 'unknown', text: `设置的主人账号是 @${wantRaw}，但还没读到当前登录号。` };
+  if (want === got) return { state: 'match', text: '' };
+  return { state: 'different', text: `设置的主人账号是 @${wantRaw}，当前登录的却是 @${gotRaw}：@${wantRaw} 的评论会被当成陌生人的，占每日回复额度。` };
 }
 
 async function openXLoginLocked() {
@@ -511,20 +529,22 @@ function composerState(action, text = '') {
       const all = [...document.querySelectorAll('div[data-testid="tweetTextarea_0"]')];
       return all.length ? all[all.length - 1] : null;
     };
-    const pickButton = () => {
-      for (const id of ['tweetButton', 'tweetButtonInline']) {
-        const inDialog = document.querySelector('[role="dialog"] button[data-testid="' + id + '"]');
-        if (inDialog) return inDialog;
-      }
-      for (const id of ['tweetButton', 'tweetButtonInline']) {
-        const all = [...document.querySelectorAll('button[data-testid="' + id + '"]')];
-        if (all.length) return all[all.length - 1];
+    // 发送按钮必须和输入框属于同一个编辑器：整页回复（/compose/post）时页面上还挂着
+    // 主页那个发帖框，按"取最后一个"会拿到那条空框的按钮——它永远是灰的，于是每次
+    // 都停在"回复按钮还是灰的"。从输入框往上找最近的、真正装着发送按钮的那层容器。
+    const pickButton = (box) => {
+      if (!box) return null;
+      const selector = 'button[data-testid="tweetButton"], button[data-testid="tweetButtonInline"]';
+      for (let el = box; el; el = el.parentElement) {
+        const inSame = el.querySelector(selector);
+        if (inSame) return inSame;
+        if (el.getAttribute && el.getAttribute('role') === 'dialog') break;
       }
       return null;
     };
     const clean = (s) => (s || '').replace(/[\u00ad\u034f\u061c\u180e\u200b-\u200f\u202a-\u202e\u2060-\u2064\ufeff]/g, '').replace(/\s+/g, ' ').trim();
     const box = pickBox();
-    const btn = pickButton();
+    const btn = pickButton(box);
     // 把我们真正选中的那两个元素标出来，Node 侧后续动作要用同一个，不能再查一次选择器。
     if (box) box.setAttribute('data-bizhi-target', 'composer');
     if (btn) btn.setAttribute('data-bizhi-target', 'send');
@@ -589,6 +609,17 @@ async function readComposerUntil(timeoutMs = 8000) {
   }
 }
 
+// 字落进框里和按钮从灰变亮不是同一帧：读到字就判"没准备好"会误杀刚填好的回复。
+async function waitForComposerReady(read, timeoutMs = 4000) {
+  const deadline = Date.now() + timeoutMs;
+  let state = read;
+  while (!state.ready && Date.now() < deadline) {
+    await sleep(300);
+    state = await browser.evaluate(composerRead());
+  }
+  return state;
+}
+
 // 回复的送达证据：在原推文下面，找"她账号发的、逐字相同的那一条"。
 // 值必须在建串时就变成字面量——页面里没有 Node 的变量，写进去就是 ReferenceError。
 function replyProof(content, handle) {
@@ -646,7 +677,8 @@ async function replyToTweetLocked(href, text) {
   await browser.evaluate(composerPaste(content));
   const readback = await readComposerUntil();
   if (normalizeTyped(readback.text) !== content) throw new Error(`回复没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
-  if (!readback.ready) throw new Error('回复按钮还是灰的，这次没发');
+  const ready = await waitForComposerReady(readback);
+  if (!ready.ready) throw new Error(`回复按钮还是灰的，这次没发（按钮写的是「${ready.sendLabel || '空'}」；${ready.found ? '框还在' : '框已经没了'}）`);
   // 发出去之前确认这一页真的在"回复"：实测点回复后落在 /compose/post，那颗按钮写的是"发帖"。
   // 分不清就把一句心里话发成他账号上的一条独立推文——这种事一次都不能错。
   if (!/回复|reply/i.test(readback.sendLabel || '')) {
