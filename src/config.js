@@ -165,7 +165,11 @@ export function normalizeSettings(settings) {
   s.companion.nickname = String(s.companion.nickname || '').trim().slice(0, 20);
   s.companion.intro = String(s.companion.intro || '').trim().slice(0, 80);
 
-  s.model.name = String(s.model.name || env.defaultModel);
+  s.model.name = String(s.model.name || env.defaultModel).trim().slice(0, 80);
+  // 控制台可填接口地址与 Key（只存在本机 config/settings.json，不进仓库）；地址只认 http(s)。
+  const rawApiBase = String(s.model.apiBase || '').trim().replace(/\/+$/, '');
+  s.model.apiBase = /^https?:\/\//i.test(rawApiBase) ? rawApiBase.slice(0, 200) : '';
+  s.model.apiKey = String(s.model.apiKey || '').trim().slice(0, 300);
   s.model.temperature = Math.min(1.5, Math.max(0.1, Number(s.model.temperature) || 0.95));
   s.model.chatMaxTokens = Math.min(8000, Math.max(600, Number(s.model.chatMaxTokens) || 1400));
   s.model.reflectMaxTokens = Math.min(1600, Math.max(800, Number(s.model.reflectMaxTokens) || 1000));

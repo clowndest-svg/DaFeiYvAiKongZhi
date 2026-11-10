@@ -478,19 +478,33 @@
 
               <section class="card" id="set-card-model">
                 <h3>模型</h3>
-                <label>模型
-                  <select id="setModel">
-                    <option value="deepseek-flash">deepseek-flash（便宜、1M 上下文）</option>
-                    <option value="deepseek-v4-pro">deepseek-v4-pro（更强、更贵）</option>
+                <label>服务商
+                  <select id="setModelPreset">
+                    <option value="deepseek">DeepSeek（官方；搜索/余额可用）</option>
+                    <option value="openai">OpenAI</option>
+                    <option value="moonshot">Moonshot / Kimi</option>
+                    <option value="zhipu">智谱 GLM</option>
+                    <option value="qwen">阿里通义（DashScope 兼容模式）</option>
+                    <option value="siliconflow">硅基流动 SiliconFlow</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="custom">自定义（自己填地址和模型名）</option>
                   </select>
                 </label>
-                <label>自定义模型名（换其他服务商时填这里，优先于上面的选择）<input id="setModelCustom" maxlength="80" placeholder="例如 gpt-4.1-mini / qwen-plus；留空用上面的选择"></label>
-                <label>接口地址（可选，OpenAI 兼容的 /v1 地址）<input id="setModelApiBase" maxlength="200" placeholder="例如 https://api.moonshot.cn/v1；留空用 .env 的 DEEPSEEK_BASE_URL"></label>
+                <label>模型名（可直接输入，也可以从下拉里选）
+                  <input id="setModel" list="modelNameOptions" maxlength="80" placeholder="deepseek-flash">
+                  <datalist id="modelNameOptions"></datalist>
+                </label>
+                <label>API Key（已配置时显示掩码；输入新值覆盖，清空则删除）
+                  <input id="setModelApiKey" type="password" maxlength="300" autocomplete="off" placeholder="sk-…；也可以继续用 .env 的 DEEPSEEK_API_KEY">
+                </label>
+                <label>接口地址（OpenAI 兼容的 /v1 地址；留空用 .env 的 DEEPSEEK_BASE_URL）
+                  <input id="setModelApiBase" maxlength="200" placeholder="例如 https://api.moonshot.cn/v1">
+                </label>
                 <div class="btn-row">
                   <button type="button" id="modelTestBtn">测试连接</button>
                   <span class="muted small" id="modelTestResult">换服务商前先点一次；会花一次最小请求的费用</span>
                 </div>
-                <p class="muted small">API Key 仍写在 .env 的 <code>DEEPSEEK_API_KEY</code>，控制台不保存密钥。换到非 DeepSeek 服务商时：联网搜索会退到免费网页抓取（DeepSeek 搜索/读页接口只对官方地址有效）、余额查询显示未读数、费用按旧模型单价估算，聊天主体功能不受影响。</p>
+                <p class="muted small">Key 存在本机 <code>config/settings.json</code>（不进仓库、不提交）。换到非 DeepSeek 服务商时：联网搜索自动退到免费网页抓取（DeepSeek 搜索/读页接口只对官方地址有效）、余额查询不可用、费用按旧模型单价估算，聊天主体功能不受影响；图片理解取决于对方模型是否支持。</p>
                 <label>温度 <input id="setTemperature" type="number" step="0.05" min="0.1" max="1.5"></label>
                 <label>回复 token 上限 <input id="setChatMaxTokens" type="number" min="600" max="8000"></label>
                 <label>推理强度

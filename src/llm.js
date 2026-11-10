@@ -7,6 +7,7 @@ import { logger } from './logger.js';
 import { estimateMessagesTokens, estimateTokens, sleep } from './util.js';
 import crypto from 'node:crypto';
 import { boundedBackground, socialTask } from './llm-policy.js';
+import { resolveModelRuntime } from './model-config.js';
 import { officialRate } from './pricing.js';
 
 const USD_TO_CNY = 7.15;
@@ -124,11 +125,10 @@ function mockJson(mockKind) {
 // 接口地址可以在控制台改（settings.model.apiBase），不用改 .env 也不用重启。
 // 只认 http(s)：填错了就退回 .env 里的 DEEPSEEK_BASE_URL。
 function runtimeBaseUrl(fallback) {
-  try {
-    const value = String(loadSettings().model?.apiBase || '').trim().replace(/\/+$/, '');
-    if (/^https?:\/\//i.test(value)) return value;
-  } catch { /* 设置读不到就用 .env */ }
-  return fallback;
+  return resolveModelRuntime({ baseUrl: fallback }).baseUrl;
+}
+function runtimeApiKey(fallback) {
+  return resolveModelRuntime({ apiKey: fallback }).apiKey;
 }
 
 export class DeepSeek {
@@ -140,12 +140,12 @@ export class DeepSeek {
   }
 
   get configured() {
-    return Boolean(this.apiKey);
+    return Boolean(runtimeApiKey(this.apiKey));
   }
 
   assertConfigured() {
-    if (!this.apiKey) {
-      throw new LlmError('还没有配置 DeepSeek API Key，请先编辑 .env 里的 DEEPSEEK_API_KEY。', { code: 'NO_KEY' });
+    if (!runtimeApiKey(this.apiKey)) {
+      throw new LlmError('还没有配置模型 API Key：在 .env 写 DEEPSEEK_API_KEY，或去设置 → 模型里填。', { code: 'NO_KEY' });
     }
   }
 
@@ -180,7 +180,7 @@ export class DeepSeek {
         estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
       try {
         const res = await fetch(runtimeBaseUrl(this.baseUrl) + '/chat/completions', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
+          method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runtimeApiKey(this.apiKey) },
           body: JSON.stringify(body), signal,
         });
         if (!res.ok) {
@@ -293,7 +293,7 @@ export class DeepSeek {
       estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
     try {
       const res = await fetch(runtimeBaseUrl(this.baseUrl) + '/chat/completions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey }, body: JSON.stringify(body), signal,
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runtimeApiKey(this.apiKey) }, body: JSON.stringify(body), signal,
       });
       if (!res.ok) throw new LlmError('DeepSeek 返回 HTTP ' + res.status + '：' + logger.redact((await res.text()).slice(0, 150)), { status: res.status, code: 'HTTP' });
       for await (const payload of readSse(res.body)) {
@@ -347,6 +347,10 @@ export class DeepSeek {
 
   async balance() {
     this.assertConfigured();
+    const runtime = resolveModelRuntime({ baseUrl: this.baseUrl, apiKey: this.apiKey });
+    if (!runtime.officialDeepSeek) {
+      throw new LlmError('当前接口不是 DeepSeek 官方，查不到余额；费用仍按本地台账估算', { code: 'NO_BALANCE' });
+    }
     const res = await fetch(`${runtimeBaseUrl(this.baseUrl)}/user/balance`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
       signal: AbortSignal.timeout(30000),

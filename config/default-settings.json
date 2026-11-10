@@ -8,6 +8,7 @@
   "model": {
     "name": "deepseek-flash",
     "apiBase": "",
+    "apiKey": "",
     "temperature": 0.95,
     "chatMaxTokens": 1800,
     "reflectMaxTokens": 900,

@@ -2159,6 +2159,30 @@ async function loadSettings() {
   $('#dataDir').textContent = data.meta?.dataDir || '--';
 }
 
+const MODEL_PRESETS = {
+  deepseek: { base: '', models: ['deepseek-flash', 'deepseek-v4-pro'] },
+  openai: { base: 'https://api.openai.com/v1', models: ['gpt-4.1-mini', 'gpt-4.1', 'gpt-4o-mini'] },
+  moonshot: { base: 'https://api.moonshot.cn/v1', models: ['kimi-k2-turbo-preview', 'kimi-latest'] },
+  zhipu: { base: 'https://open.bigmodel.cn/api/paas/v4', models: ['glm-4.6', 'glm-4.5-air'] },
+  qwen: { base: 'https://dashscope.aliyuncs.com/compatible-mode/v1', models: ['qwen-plus', 'qwen-max'] },
+  siliconflow: { base: 'https://api.siliconflow.cn/v1', models: ['deepseek-ai/DeepSeek-V3', 'Qwen/Qwen2.5-72B-Instruct'] },
+  openrouter: { base: 'https://openrouter.ai/api/v1', models: ['openai/gpt-4.1-mini', 'anthropic/claude-sonnet-4'] },
+  custom: { base: '', models: [] },
+};
+function modelPresetFor(baseUrl) {
+  const value = String(baseUrl || '').trim().replace(/\/+$/, '');
+  if (!value) return 'deepseek';
+  const found = Object.entries(MODEL_PRESETS).find(([key, preset]) => key !== 'custom' && preset.base && preset.base === value);
+  return found ? found[0] : 'custom';
+}
+function applyModelPreset(name, { keepModel = false } = {}) {
+  const preset = MODEL_PRESETS[name] || MODEL_PRESETS.custom;
+  $('#setModelPreset').value = MODEL_PRESETS[name] ? name : 'custom';
+  if (name !== 'custom') $('#setModelApiBase').value = preset.base;
+  $('#modelNameOptions').innerHTML = preset.models.map((value) => '<option value="' + value + '"></option>').join('');
+  if (!keepModel) $('#setModel').value = preset.models[0] || '';
+}
+
 function fillSettings() {
   const settings = state.settings;
   if (!settings) return;
@@ -2166,11 +2190,10 @@ function fillSettings() {
   $('#setUserName').value = settings.companion?.userName || '';
   $('#setNickname').value = settings.companion?.nickname || '';
   $('#setIntro').value = settings.companion?.intro || '';
-  const modelName = settings.model?.name || 'deepseek-flash';
-  const knownModels = ['deepseek-flash', 'deepseek-v4-pro'];
-  $('#setModel').value = knownModels.includes(modelName) ? modelName : 'deepseek-flash';
-  $('#setModelCustom').value = knownModels.includes(modelName) ? '' : modelName;
+  $('#setModel').value = settings.model?.name || 'deepseek-flash';
+  $('#setModelApiKey').value = settings.model?.apiKey || '';
   $('#setModelApiBase').value = settings.model?.apiBase || '';
+  applyModelPreset(modelPresetFor(settings.model?.apiBase), { keepModel: true });
   $('#setTemperature').value = settings.model?.temperature ?? 0.95;
   $('#setChatMaxTokens').value = settings.model?.chatMaxTokens ?? 1400;
   $('#setEffort').value = settings.model?.reasoningEffort || 'low';
@@ -2332,8 +2355,9 @@ function collectSettings() {
     },
     model: {
       ...(prev.model || {}),
-      name: $('#setModelCustom').value.trim() || $('#setModel').value,
+      name: $('#setModel').value.trim() || 'deepseek-flash',
       apiBase: $('#setModelApiBase').value.trim(),
+      apiKey: $('#setModelApiKey').value,
       temperature: Number($('#setTemperature').value) || 0.95,
       chatMaxTokens: Number($('#setChatMaxTokens').value) || 1400,
       reasoningEffort: $('#setEffort').value,
@@ -3739,13 +3763,14 @@ function bindSettings() {
     settingsView.addEventListener('change', markDirty);
   }
   $('#saveSettingsBtn').addEventListener('click', () => saveSettings());
+  $('#setModelPreset').addEventListener('change', () => applyModelPreset($('#setModelPreset').value));
   $('#modelTestBtn').addEventListener('click', () => withBusy($('#modelTestBtn'), async () => {
     const line = $('#modelTestResult');
     line.textContent = '正在测试…';
     try {
       const data = await api('/api/model/test', {
         method: 'POST',
-        body: { apiBase: $('#setModelApiBase').value.trim(), model: $('#setModelCustom').value.trim() || $('#setModel').value },
+        body: { apiBase: $('#setModelApiBase').value.trim(), apiKey: $('#setModelApiKey').value, model: $('#setModel').value.trim() || 'deepseek-flash' },
       });
       line.textContent = data.ok
         ? `通了：${data.model} 回了「${data.reply}」（${data.ms} ms）`

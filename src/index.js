@@ -56,6 +56,7 @@ import {
 } from './db.js';
 import { logger } from './logger.js';
 import { clearHerSelfNotes, getHerSelfNotes, selfNotesVersions } from './self.js';
+import { API_KEY_MASK, maskSettingsKey, resolveModelRuntime, restoreMaskedKey } from './model-config.js';
 import { DeepSeek } from './llm.js';
 import { Companion, chatActivity } from './chat.js';
 import { drainReflections } from './reflect.js';
@@ -1079,11 +1080,12 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/settings' && method === 'GET') {
     const settings = loadSettings();
     return sendJson(res, 200, {
-      settings,
+      settings: maskSettingsKey(settings),
       revision: crypto.createHash('sha256').update(JSON.stringify(settings)).digest('hex'),
       persona: getPersona(),
       meta: {
         keyMasked: maskKey(),
+        modelKeyMasked: API_KEY_MASK,
         keyConfigured: llm.configured,
         mock: env.mock,
         dataDir: paths.data,
@@ -1099,7 +1101,7 @@ async function handleApi(req, res, pathname, url) {
       const before = loadSettings();
       const revision = crypto.createHash('sha256').update(JSON.stringify(before)).digest('hex');
       if (req.headers['if-match'] && req.headers['if-match'] !== revision) return sendJson(res, 409, { error: '设置已被其他页面或后台更新，草稿已保留，请重新载入后合并修改。' });
-      const settings = saveSettings(body);
+      const settings = saveSettings(restoreMaskedKey(body, before));
       writeBotAccountFile(settings.qq?.botAccount);
       if (before.proactive.enabled !== settings.proactive.enabled) {
         if (!settings.proactive.enabled) {
@@ -1160,11 +1162,13 @@ async function handleApi(req, res, pathname, url) {
     const baseUrl = String(body.apiBase || '').trim().replace(/\/+$/, '').slice(0, 200);
     const model = String(body.model || '').trim().slice(0, 80);
     if (baseUrl && !/^https?:\/\//i.test(baseUrl)) throw new HttpError(400, '接口地址要以 http:// 或 https:// 开头');
-    const tester = new DeepSeek({ baseUrl: baseUrl || env.baseUrl });
+    const rt = resolveModelRuntime();
+    const providedKey = String(body.apiKey || '').trim();
+    const tester = new DeepSeek({ apiKey: providedKey && providedKey !== API_KEY_MASK ? providedKey : rt.apiKey, baseUrl: baseUrl || rt.baseUrl });
     try {
       const result = await tester.chat(
         [{ role: 'user', content: '只回复两个字：在吗' }],
-        { kind: 'model_test', model: model || loadSettings().model.name, maxTokens: 16, temperature: 0, timeoutMs: 20000 },
+        { kind: 'model_test', model: model || rt.model, maxTokens: 16, temperature: 0, timeoutMs: 20000 },
       );
       return sendJson(res, 200, { ok: true, model: result.model || model, reply: String(result.content || '').trim().slice(0, 40), ms: result.latencyMs || 0 });
     } catch (error) {
@@ -1833,8 +1837,9 @@ async function handleApi(req, res, pathname, url) {
     const body = await readJsonBody(req);
     const step = String(body.step || 'explore');
     if (step === 'replies') return sendJson(res, 200, await processXOwnReplies({ llm, force: true }));
-    if (step === 'browse') return sendJson(res, 200, await processXExplore({ llm, force: true }));
-    return sendJson(res, 400, { error: '只有 explore/replies 两种' });
+    // 前端按钮叫 explore，旧接口/文档叫 browse：两个名字都认，别再出现"只有 explore/replies 两种"。
+    if (step === 'browse' || step === 'explore') return sendJson(res, 200, await processXExplore({ llm, force: true }));
+    return sendJson(res, 400, { error: 'step 只能是 explore / browse / replies' });
   }
 
   if (pathname === '/api/x/gate' && method === 'POST') {

@@ -43,3 +43,30 @@ test('接口地址填坏了就退回 .env 的地址，不会把整个聊天打�
     saveSettings({ model: { ...loadSettings().model, apiBase: '' } });
   }
 });
+
+const { resolveModelRuntime, isOfficialDeepSeekBase, maskSettingsKey, restoreMaskedKey, API_KEY_MASK } = await import('../src/model-config.js');
+
+test('控制台填的 Key/地址优先于 .env；官方判定只认 deepseek.com', () => {
+  saveSettings({ model: { ...loadSettings().model, apiBase: 'https://api.moonshot.cn/v1', apiKey: 'settings-key' } });
+  const runtime = resolveModelRuntime();
+  assert.equal(runtime.baseUrl, 'https://api.moonshot.cn/v1');
+  assert.equal(runtime.apiKey, 'settings-key');
+  assert.equal(runtime.officialDeepSeek, false);
+  assert.equal(isOfficialDeepSeekBase('https://api.deepseek.com'), true);
+  assert.equal(isOfficialDeepSeekBase('https://api.deepseek.com/v1'), true);
+  assert.equal(isOfficialDeepSeekBase('https://evil-deepseek.com'), false);
+  saveSettings({ model: { ...loadSettings().model, apiBase: '', apiKey: '' } });
+});
+
+test('设置接口回给前端的是掩码，保存时掩码还原成原 Key', () => {
+  const previous = { model: { apiKey: 'secret-key', name: 'x' } };
+  const masked = maskSettingsKey(previous);
+  assert.equal(masked.model.apiKey, API_KEY_MASK);
+  assert.equal(masked.model.name, 'x');
+  const restored = restoreMaskedKey({ model: { apiKey: API_KEY_MASK, name: 'x' } }, previous);
+  assert.equal(restored.model.apiKey, 'secret-key');
+  const cleared = restoreMaskedKey({ model: { apiKey: '', name: 'x' } }, previous);
+  assert.equal(cleared.model.apiKey, '');
+  const replaced = restoreMaskedKey({ model: { apiKey: 'new-key' } }, previous);
+  assert.equal(replaced.model.apiKey, 'new-key');
+});

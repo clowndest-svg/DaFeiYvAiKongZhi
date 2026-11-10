@@ -303,7 +303,8 @@ export async function processXOwnReplies({ llm, maxTweets = 3, maxReplies = 2, f
     const replies = thread.filter((item) => item.id && item.id !== tweet.id && String(item.handle || '').toLowerCase() !== String(selfName || '').toLowerCase());
     for (const item of replies) {
       const isOwner = Boolean(ownerHandle && String(item.handle || '').toLowerCase() === ownerHandle);
-      if (!isOwner && actions.length >= maxReplies) break;
+      // 不因陌生人的额度用完就 break：后面的主人评论必须还能被处理。
+      if (!isOwner && actions.length >= maxReplies) continue;
       const receiptKey = `x_replied:${item.id}`;
       if (kvGet(receiptKey)) continue;
       const budget = canActX('reply', { ignoreCounts: isOwner });

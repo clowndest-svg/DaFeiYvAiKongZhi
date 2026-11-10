@@ -10,6 +10,7 @@
 import { env } from './config.js';
 import { addCost } from './db.js';
 import { logger } from './logger.js';
+import { resolveModelRuntime } from './model-config.js';
 
 export const PRICE_PER_REQUEST_CNY = 5 / 1000;
 export const QUALITY_SCORE = 1.5;
@@ -41,10 +42,11 @@ function errorHint(status, payload) {
 // 一次 POST，带超时；网络层错误一律收成 { status: 0 }，不在这里判成败。
 async function postOnce(pathname, body, { timeoutMs, fetchImpl }) {
   const signal = AbortSignal.timeout(timeoutMs);
+  const runtime = resolveModelRuntime();
   try {
-    const res = await fetchImpl(env.baseUrl + pathname, {
+    const res = await fetchImpl(runtime.baseUrl + pathname, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${env.apiKey}` },
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${runtime.apiKey}` },
       body: JSON.stringify(body),
       signal,
     });
@@ -130,7 +132,9 @@ export async function deepseekSearch(query, {
 } = {}) {
   const started = Date.now();
   const engine = 'deepseek';
-  if (!env.apiKey) return { ok: false, engine, items: [], reason: '还没配 DeepSeek Key', unavailable: true, ms: 0 };
+  const runtime = resolveModelRuntime();
+  if (!runtime.apiKey) return { ok: false, engine, items: [], reason: '还没配模型 Key', unavailable: true, ms: 0 };
+  if (!runtime.officialDeepSeek) return { ok: false, engine, items: [], reason: '当前接口不是 DeepSeek 官方，搜索接口用不了（会用免费网页抓取兜底）', unavailable: true, ms: 0 };
   const q = text(query, 128);
   if (q.length < 2) return { ok: false, engine, items: [], reason: '没摘出要查的词', ms: 0 };
 
@@ -168,7 +172,9 @@ export async function deepseekFetch(url, {
   wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 } = {}) {
   const started = Date.now();
-  if (!env.apiKey) return { ok: false, reason: '还没配 DeepSeek Key', unavailable: true, ms: 0 };
+  const runtime = resolveModelRuntime();
+  if (!runtime.apiKey) return { ok: false, reason: '还没配模型 Key', unavailable: true, ms: 0 };
+  if (!runtime.officialDeepSeek) return { ok: false, reason: '当前接口不是 DeepSeek 官方，读页接口用不了', unavailable: true, ms: 0 };
   const target = String(url || '').trim();
   if (!isPublicHttpUrl(target)) return { ok: false, reason: '这个地址不像能公开访问的网页，我不发出去', refused: true, ms: 0 };
 

@@ -8,12 +8,13 @@
 // 3) 搜不到/被墙/超时都如实报原因，界面显示"未测"而不是拿旧数据冒充；
 // 4) 花钱的那条路要走闸门：每天次数封顶、按次记账，失败与空结果不记账。
 
-import { env, loadSettings } from './config.js';
+import { loadSettings } from './config.js';
 import { costBlocked } from './budget.js';
 import { addEvent, kvGet, kvGetJson, kvSet, kvSetJson, toolCallsToday } from './db.js';
 import { logger } from './logger.js';
 import { privacyProblems } from './privacy.js';
 import { deepseekFetch, deepseekSearch, isPublicHttpUrl, PRICE_PER_REQUEST_CNY } from './search-deepseek.js';
+import { resolveModelRuntime } from './model-config.js';
 import { shanghaiDayKey } from './util.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
@@ -373,7 +374,8 @@ function writeSearchCache(query, result) {
 async function enrichPages(items, { maxPages = 2 } = {}) {
   const settings = loadSettings();
   const cfg = settings.search || {};
-  if (cfg.enabled === false || cfg.readPages === false || !env.apiKey) return items;
+  const runtime = resolveModelRuntime();
+  if (cfg.enabled === false || cfg.readPages === false || !runtime.apiKey || !runtime.officialDeepSeek) return items;
   const targets = items.filter((item) => item && !item.content && isPublicHttpUrl(item.url)).slice(0, maxPages);
   for (const item of targets) {
     if (costBlocked('search')) break;
@@ -414,7 +416,9 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
   const want = Math.max(1, Math.min(limit, 8));
 
   // 第一路：DeepSeek 官方搜索。它给分数和长摘要，need_content 还要正文。
-  if (cfg.provider !== 'scrape' && env.apiKey) {
+  // 换成别的服务商后这条自动让位，免得拿错 Key 去撞官方接口。
+  const runtime = resolveModelRuntime();
+  if (cfg.provider !== 'scrape' && runtime.apiKey && runtime.officialDeepSeek) {
     requests += 1;
     const found = await deepseekSearch(query, {
       count: Math.max(want, 5),
@@ -471,7 +475,8 @@ export async function readWebPage(rawUrl, { text = '', timeoutMs = 8000 } = {}) 
   const dailyMax = Number(cfg.fetchDailyMax ?? 10);
   const today = fetchCountToday();
   if (today >= dailyMax) return { ok: false, url, reason: `今天读网页的次数用完了（${today}/${dailyMax}）`, quotaOut: true };
-  if (!env.apiKey) return { ok: false, url, reason: '读网页要用 DeepSeek 的抓取接口，还没配 Key', unavailable: true };
+  const runtime = resolveModelRuntime();
+  if (!runtime.apiKey || !runtime.officialDeepSeek) return { ok: false, url, reason: '读网页要用 DeepSeek 官方抓取接口；当前接口不是官方或没配 Key', unavailable: true };
 
   bumpFetchCount();
   const found = await deepseekFetch(url, {
@@ -535,7 +540,8 @@ ${read.content}
 export function searchStatus() {
   const settings = loadSettings();
   const cfg = settings.search || {};
-  const providerOn = cfg.provider !== 'scrape' && Boolean(env.apiKey);
+  const runtime = resolveModelRuntime();
+  const providerOn = cfg.provider !== 'scrape' && Boolean(runtime.apiKey) && runtime.officialDeepSeek;
   const tool = toolCallsToday();
   return {
     enabled: cfg.enabled !== false,
@@ -548,7 +554,8 @@ export function searchStatus() {
     // 链路上第一个是真的在花钱、也是第一个会被用的那一路。
     chain: providerOn ? ['deepseek', ...ENGINES.map((e) => e.name)] : ENGINES.map((e) => e.name),
     provider: providerOn ? 'deepseek' : 'scrape',
-    keyConfigured: Boolean(env.apiKey),
+    keyConfigured: Boolean(runtime.apiKey),
+    officialDeepSeek: runtime.officialDeepSeek,
     minScore: Number(cfg.minScore ?? 1.5),
     pricePerRequestCny: PRICE_PER_REQUEST_CNY,
     // 今天真付了钱的请求：按 kinds 记在台账里，界面只报读数，不猜。
