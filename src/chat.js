@@ -12,7 +12,7 @@ import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection, reflectionBusy } from './reflect.js';
 import { chatThinking } from './llm-policy.js';
-import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb, resolveSearchQuery, isSearchConfirmation, EXPLICIT_SEARCH } from './search.js';
+import { extractReadableUrl, formatPageNote, formatSearchNote, informativeQuery, isCasualTalk, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb, resolveSearchQuery, isSearchConfirmation, EXPLICIT_SEARCH } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
@@ -50,6 +50,24 @@ function parseReply(text, name = '小知') {
 
 export function parseStickerHint(text) {
   return parseReply(text);
+}
+
+// 追问接上一轮查询词：最近三条他说的话里，找上一次真正搜过的那条查询，
+// 和小尾巴拼成新查询。闲聊、情绪话和关于她本人的话不算追问。
+function followUpQuery(text, recentUserMessages = []) {
+  const value = String(text || '').trim();
+  if (value.length < 2 || value.length > 40) return '';
+  if (isCasualTalk(value)) return '';
+  const detail = informativeQuery(value);
+  if (!detail || detail.length < 2) return '';
+  const last = [...recentUserMessages].reverse().find((message) => message.meta?.searchQuery || message.meta?.searchNote);
+  if (!last) return '';
+  // 旧消息只有整段搜索说明、没有单独存查询词：从说明里把「查的是…」捞回来。
+  const base = last.meta.searchQuery
+    || (String(last.meta.searchNote || '').match(/查(?:的是)?「([^」]{1,80})」/) || [])[1]
+    || '';
+  if (!base) return '';
+  return `${base} ${detail}`.trim().slice(0, 60);
 }
 
 export class Companion {
@@ -99,7 +117,10 @@ export class Companion {
     const contextLines = String(extraContext || '').split('\n');
     const noteStart = contextLines.findIndex((line) => /^【(刚刚联网搜到的|联网搜索的结果|他发的那个链接，我读到的内容|他发的链接)】/.test(line));
     const searchNote = noteStart >= 0 ? contextLines.slice(noteStart).join('\n') : '';
-    if (searchNote) updateMessageMeta(userMessage.id, { searchNote: searchNote.slice(0, 1600) });
+    if (searchNote) {
+      const queryMatch = searchNote.match(/查(?:的是)?「([^」]{1,80})」/);
+      updateMessageMeta(userMessage.id, { searchNote: searchNote.slice(0, 1600), ...(queryMatch ? { searchQuery: queryMatch[1] } : {}) });
+    }
 
     const restricted = channel === 'qq-group' || channel === 'qq-guest';
     const history = getMessagesForPrompt(active.id, settings.memory.shortTurns)
@@ -302,12 +323,16 @@ export class Companion {
       }
       const explicit = EXPLICIT_SEARCH.test(opts.text || '');
       const confirmation = isSearchConfirmation(opts.text || '');
-      if (!needsSearch(opts.text || '') && !explicit && !confirmation) return '';
       const session = opts.sessionId ? getSession(opts.sessionId) : getActiveSession();
-      const previous = session
-        ? getMessagesForPrompt(session.id, 8).filter((m) => m.role === 'user' && ['web', 'qq'].includes(m.channel || 'web')).slice(-4).map((m) => m.content)
+      const recent = session
+        ? getMessagesForPrompt(session.id, 8).filter((m) => m.role === 'user' && ['web', 'qq'].includes(m.channel || 'web'))
         : [];
-      const query = resolveSearchQuery(opts.text, previous);
+      // 他顺着刚查过的话题追问（"Claude呢"/"我记得有 fable5.2 了"）也要查，
+      // 不能因为这句话里没写"最新"就凭印象回答。
+      const followUp = (!needsSearch(opts.text || '') && !explicit && !confirmation) ? followUpQuery(opts.text, recent) : '';
+      if (!needsSearch(opts.text || '') && !explicit && !confirmation && !followUp) return '';
+      const previous = recent.slice(-4).map((m) => m.content);
+      const query = followUp || resolveSearchQuery(opts.text, previous);
       if (!query) {
         if (!explicit && !confirmation) return '';
         return '【联网搜索的结果】他让你去查，但这句话里没说要查什么，也没接住他刚才问的事。这次没搜。直接问他要查哪件事，别编搜索过程，也别拿不相干的词去搜。';

@@ -78,6 +78,11 @@ test('真实响应的字段都能落地：分数从高到低、长摘要当资�
 test('没有网址的条目不算结果，null 站点名不许变成 "null"', () => {
   const item = mapSearchItem({ title: '没有链接的一条', url: '', site_name: null, summary: '甲', rerank_score: 2 });
   assert.equal(item, null, '缺 url 也被当成结果了');
+  const withContent = mapSearchItem({ title: '带正文的一条', url: 'https://a.example/x', summary: '摘要', content: '正文'.repeat(1200), rerank_score: 2 });
+  assert.equal(withContent.content.slice(0, 2), '正文', 'need_content 拿到的正文没带回来');
+  assert.ok(withContent.content.length <= 1600, `正文没截断：${withContent.content.length}`);
+  const noContent = mapSearchItem({ title: '没正文的一条', url: 'https://a.example/y', summary: '摘要', content: '', rerank_score: 2 });
+  assert.equal(noContent.content, '', '空正文要如实留空，等补读');
   const ok = mapSearchItem({ title: '甲', url: 'https://a.example/x', site_name: null, rerank_score: 1.9, authority: -1 });
   assert.equal(ok.site, '');
   assert.equal(ok.authority, -1, '权威性未知（-1）被洗成别的数了');
@@ -177,21 +182,28 @@ test('搜索优先走 DeepSeek，成功就不再碰免费抓取；退回时引�
   saveSettings({ search: SEARCH_SETTINGS });
   kvSet(`search_day:${shanghaiDayKey()}`, '0');
   const urls = [];
+  const posts = [];
   const original = globalThis.fetch;
-  globalThis.fetch = async (url) => {
+  globalThis.fetch = async (url, options = {}) => {
     urls.push(String(url));
-    if (String(url).includes('/v1/tools/search')) return jsonResponder(REAL)();
+    if (String(url).includes('/v1/tools/search')) {
+      posts.push(JSON.parse(String(options.body || '{}')));
+      return jsonResponder(REAL)();
+    }
     return { ok: true, async text() { return '<html>不该走到这里</html>'; } };
   };
   try {
     const found = await searchWeb('DeepSeek 最近发布了什么新接口');
     assert.equal(found.ok, true, 'DeepSeek 有真实结果却报了失败');
     assert.equal(found.engine, 'deepseek', '引擎归属不对');
-    assert.equal(urls.length, 1, `DeepSeek 成功还去扒网页（一共发了 ${urls.length} 次）`);
+    assert.equal(posts[0].need_content, true, '搜索没向接口要正文；网页版答得准就是因为它读过原文');
+    assert.ok(!urls.some((u) => /bing\.com|sogou\.com/.test(u)), `DeepSeek 成功还去扒了免费搜索引擎（${urls.length} 次请求）`);
+    assert.ok(urls.some((u) => /tools\/fetch/.test(u)), '结果没带正文时应该补读原文');
     assert.ok(found.items[0].score != null, '带回的结果丢了可信度');
     // 反过来：DeepSeek 挂了要真退回免费抓取，并且 reason 里能看到两路都试过
     urls.length = 0;
     kvSet(`search_day:${shanghaiDayKey()}`, '0');
+    kvSet(`fetch_day:${shanghaiDayKey()}`, '0');
     globalThis.fetch = async (url) => {
       urls.push(String(url));
       if (String(url).includes('/v1/tools/search')) return jsonResponder({ error: { message: 'down' } }, 402)();

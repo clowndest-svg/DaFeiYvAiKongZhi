@@ -85,12 +85,15 @@ export function mapSearchItem(raw) {
   const score = Number(raw?.rerank_score);
   const summary = text(raw?.summary, 320);
   const snippet = text(raw?.snippet, 200);
+  const content = text(raw?.content, 1600);
   return {
     title: text(raw?.title, 160) || '（没有标题）',
     url,
     // 长摘要给模型读，短摘要给界面显示；两个都没有就如实留空。
     snippet: (summary || snippet).slice(0, 320),
     short: snippet,
+    // need_content 时要过正文：这是网页版那种"读过原文"的底气，没有就留空去补抓。
+    content: content || '',
     score: Number.isFinite(score) ? Number(score.toFixed(2)) : null,
     authority: Number.isFinite(Number(raw?.authority)) ? Number(raw.authority) : null,
     site: text(raw?.site_name, 60),

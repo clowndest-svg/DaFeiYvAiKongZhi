@@ -302,3 +302,88 @@ test('搜索说明跟着消息落库，下一轮历史里看得见真实结果',
   const joined = payload.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
   assert.ok(joined.includes('https://a.example/x'), '下一轮上下文里没有真实来源，模型只能编');
 });
+
+// —— 11-10 晚：QQ 里被网页版 DeepSeek 比下去的那次 ——
+// 根因三条：没要正文、追问不触发搜索、说明里没有"按日期/来源"的硬要求。
+
+test('搜索会向接口要正文；说明带上正文节选、来源日期和引用纪律', () => {
+  const rich = formatSearchNote({
+    ok: true, engine: 'deepseek', query: 'gpt claude 最新模型',
+    items: [
+      { title: 'Claude Fable 5.2 登场', url: 'https://a.example/news', content: 'IT之家 11 月 10 日消息，Anthropic 今天发布 Claude Fable 5.2。', date: '2026-11-10T16:00:00+00:00', score: 2.33, site: 'IT之家' },
+      { title: '旧闻', url: 'https://a.example/old', snippet: '只有摘要的一条', date: '2026-11-01' },
+    ],
+  });
+  assert.match(rich, /正文节选：IT之家 11 月 10 日消息/);
+  assert.match(rich, /发布 2026-11-10/, '日期要只留到天');
+  assert.match(rich, /只有摘要的一条/);
+  assert.match(rich, /正文节选里没出现的模型名、日期、数字，不许写进回答/);
+  assert.match(rich, /按日期从新到旧/);
+  assert.match(rich, /标签页、列表页、论坛帖不算"发布"的凭据/);
+  assert.match(rich, /来源说法不一致/);
+  assert.match(rich, /最多发 1-2 个最靠谱的原文/);
+});
+
+test('搜索没带正文时补读前两页：正文进说明，最多两页，读不到就按摘要走', async () => {
+  const original = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push(String(url));
+    if (String(url).includes('/v1/tools/fetch')) {
+      const target = JSON.parse(String(options.body || '{}')).url;
+      return { ok: true, status: 200, text: async () => JSON.stringify({ title: '正文页', content: `正文里写到：Fable 5.2 于 11 月 10 日发布。来源 ${target}` }) };
+    }
+    return { ok: true, text: async () => BING_FIXTURE };
+  };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'scrape', dailyMax: 20, readPages: true, fetchDailyMax: 10 } });
+    kvSet(`search_day:${shanghaiDayKey()}`, '0');
+    kvSet(`fetch_day:${shanghaiDayKey()}`, '0');
+    const found = await searchWeb('最新发布的模型');
+    assert.equal(found.ok, true);
+    const fetched = calls.filter((u) => u.includes('/v1/tools/fetch'));
+    assert.ok(fetched.length >= 1, '没正文却没去补读原文');
+    assert.ok(fetched.length <= 2, `补读超过了前两页：${fetched.length}`);
+    assert.ok(found.items.some((item) => item.content), '补读到的正文没挂回结果');
+    assert.match(formatSearchNote(found), /正文节选：正文里写到/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('追问接上一轮搜索：问完 GPT 再问 Claude 也要真去查，闲聊不查', async () => {
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    seen.push(decodeURIComponent(String(url)));
+    return { ok: true, text: async () => BING_FIXTURE };
+  };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'scrape', dailyMax: 20, readPages: false } });
+    kvSet(`search_day:${shanghaiDayKey()}`, '0');
+    const session = getActiveSession();
+    addMessage({ sessionId: session.id, role: 'user', content: 'gpt和claude出最新模型了吗', channel: 'qq', meta: { searchQuery: 'gpt和claude出最新模型了吗' } });
+    addMessage({ sessionId: session.id, role: 'assistant', content: '我查到了一些…', channel: 'qq' });
+    const companion = new Companion({ llm: { configured: true } });
+    const note = await companion.searchNoteFor({ text: 'Claude呢', channel: 'qq' });
+    assert.match(note, /【刚刚联网搜到的】/, '追问没有触发搜索');
+    const sent = seen.join(' ');
+    assert.match(sent, /claude/i, '追问没把 Claude 带进查询词');
+    assert.match(sent, /gpt/i, '追问没接上一轮的主题');
+    seen.length = 0;
+    assert.equal(await companion.searchNoteFor({ text: '晚安', channel: 'qq' }), '', '闲聊被当成追问去搜了');
+    assert.equal(seen.length, 0);
+    // 旧消息只留了整段搜索说明（没有单独存查询词）也要能接上。
+    addMessage({ sessionId: session.id, role: 'user', content: 'gpt和claude出最新模型了吗', channel: 'qq', meta: { searchNote: '【刚刚联网搜到的】（bing，11/10，查的是「gpt和claude出最新模型了吗」）\n1. 甲' } });
+    seen.length = 0;
+    const legacy = await companion.searchNoteFor({ text: 'Claude呢', channel: 'qq' });
+    assert.match(legacy, /【刚刚联网搜到的】/, '旧消息的搜索说明没被用来接主题');
+    assert.match(seen.join(' '), /claude/i);
+  } finally { globalThis.fetch = original; }
+});
+
+test('搜索说明落库时同时记下查询词，下一轮追问才能接上', () => {
+  const session = getActiveSession();
+  const note = formatSearchNote({ ok: true, engine: 'bing', query: 'gpt claude 最新模型', items: [{ title: '甲', url: 'https://a.example/x', snippet: '乙' }] });
+  const prep = new Companion({ llm: { configured: true } }).prepare({ text: '查一下最新模型', channel: 'qq', extraContext: note });
+  const stored = getMessagesForPrompt(session.id, 4).find((m) => m.id === prep.userMessage.id);
+  assert.equal(stored.meta?.searchQuery, 'gpt claude 最新模型', '查询词没落库，追问时接不上');
+});

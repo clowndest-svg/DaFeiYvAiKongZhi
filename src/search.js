@@ -43,6 +43,13 @@ const CONFIRM_PREFIX = /^(搜索给我看|搜给我看|查给我看|搜索看看
 const TOPIC_COMMAND = /(帮我查|帮我搜|替我查|查一下|搜一下|查查|搜一搜|查下|搜下)/;
 const CARRY_SHELLS = /^(搜索给我看|搜给我看|查给我看|搜索看看|搜看看|给我看|给我看看|看一下|看一看|看看|看下|检索吧|联网检索吧|联网检索|联网搜吧|联网查吧|联网看看吧|联网看看|联网看|上网看看|上网查|上网搜|去搜索|去查|去搜|搜吧|查吧|搜索|搜|查|你|帮我|那就|可以|好的?|行|嗯+|麻烦|请|吧|啊|呀|呢|哦|了|吗|嘛|[,，。.!！?？~～\s])+/;
 
+// 闲聊、情绪或关于她本人的话：追问搜索时用来挡掉"晚安""你吃了吗"这类。
+export function isCasualTalk(text) {
+  const value = String(text || '').trim();
+  if (!value) return true;
+  return PERSONAL.test(value) || ABOUT_HER.test(value) || CONFIRM_SHELL.test(value);
+}
+
 function clean(value) {
   return String(value || '')
     .replace(/<[^>]*>/g, '')
@@ -242,6 +249,41 @@ export function dropDefinitionNoise(items) {
   return (items || []).filter((item) => !DEFINITION_NOISE.test(String(item.title || '')));
 }
 
+// 搜索给的是摘要；网页版答得准是因为它真的打开了原文。没带正文的结果补读前两页。
+// 按次计费、受日额度约束；读不到就按摘要走，不算这次搜索失败。
+async function enrichPages(items, { maxPages = 2 } = {}) {
+  const settings = loadSettings();
+  const cfg = settings.search || {};
+  if (cfg.enabled === false || cfg.readPages === false || !env.apiKey) return items;
+  const targets = items.filter((item) => item && !item.content && isPublicHttpUrl(item.url)).slice(0, maxPages);
+  for (const item of targets) {
+    if (costBlocked('search')) break;
+    if (fetchCountToday() >= Number(cfg.fetchDailyMax ?? 10)) break;
+    try {
+      bumpFetchCount();
+      const page = await deepseekFetch(item.url, {
+        timeoutMs: Math.min(Number(cfg.fetchTimeoutSeconds ?? 8) * 1000, 8000),
+        maxChars: Number(cfg.pageMaxChars ?? 3000),
+      });
+      if (page.ok && page.content) {
+        item.content = String(page.content).slice(0, 1600);
+        item.fetched = true;
+      }
+    } catch { /* 补读失败就按摘要走，不影响这次搜索 */ }
+  }
+  return items;
+}
+
+// 问"最新/今天"这类问题时按发布日期从新到旧排，别让旧文压着新文。
+function orderByFreshness(items, query) {
+  if (!FRESH.test(String(query || ''))) return items;
+  const stamp = (item) => {
+    const at = Date.parse(item?.date || '');
+    return Number.isFinite(at) ? at : -1;
+  };
+  return [...items].sort((a, b) => stamp(b) - stamp(a));
+}
+
 export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOverride = '' } = {}) {
   const settings = loadSettings();
   const query = String(queryOverride || '').trim().slice(0, 60) || buildQuery(rawQuery);
@@ -257,7 +299,7 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
   let requests = 0;
   const want = Math.max(1, Math.min(limit, 8));
 
-  // 第一路：DeepSeek 官方搜索。它给分数和长摘要，不用再猜哪条是正主。
+  // 第一路：DeepSeek 官方搜索。它给分数和长摘要，need_content 还要正文。
   if (cfg.provider !== 'scrape' && env.apiKey) {
     requests += 1;
     const found = await deepseekSearch(query, {
@@ -265,12 +307,14 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
       limit: want,
       oriQuestion: String(rawQuery || '').slice(0, 128),
       minScore: Number(cfg.minScore ?? 1.5),
+      needContent: true,
       timeoutMs: Math.min(Number(cfg.providerTimeoutSeconds ?? 6) * 1000, timeoutMs),
     });
     if (found.ok) {
+      const items = orderByFreshness(await enrichPages(found.items), query);
       bumpSearchCount(requests);
-      logger.info('联网搜索成功', { engine: found.engine, count: found.items.length, ms: found.ms });
-      return { ok: true, engine: found.engine, items: found.items, query, ms: Date.now() - started, attempts: found.attempts };
+      logger.info('联网搜索成功', { engine: found.engine, count: items.length, withContent: items.filter(item => item.content).length, ms: found.ms });
+      return { ok: true, engine: found.engine, items, query, ms: Date.now() - started, attempts: found.attempts };
     }
     if (!found.unavailable) tried.push(`deepseek:${String(found.reason).slice(0, 40)}`);
   }
@@ -279,10 +323,10 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
     try {
       requests += 1;
       const html = await fetchText(engine.build(query), timeoutMs);
-      const items = dropDefinitionNoise(engine.parse(html)).slice(0, want);
+      const items = orderByFreshness(await enrichPages(dropDefinitionNoise(engine.parse(html)).slice(0, want)), query);
       if (items.length) {
         bumpSearchCount(requests);
-        logger.info('联网搜索成功', { engine: engine.name, count: items.length, ms: Date.now() - started });
+        logger.info('联网搜索成功', { engine: engine.name, count: items.length, withContent: items.filter(item => item.content).length, ms: Date.now() - started });
         return { ok: true, engine: engine.name, items, query, ms: Date.now() - started };
       }
       tried.push(`${engine.name}:没解析出结果`);
@@ -330,15 +374,21 @@ export function formatSearchNote(found, { now = new Date() } = {}) {
   }
   const when = now.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
   const lines = found.items.map((item, i) => {
-    const extra = [item.date ? `发布 ${item.date}` : '', item.score != null ? `可信度 ${item.score}/3` : '', item.site ? `站点 ${item.site}` : '']
+    const extra = [item.date ? `发布 ${String(item.date).slice(0, 10)}` : '', item.score != null ? `可信度 ${item.score}/3` : '', item.site ? `站点 ${item.site}` : '']
       .filter(Boolean)
       .join('，');
-    return `${i + 1}. ${item.title}\n   ${item.snippet || '（没有摘要）'}\n   来源 ${item.url}${extra ? `\n   （${extra}）` : ''}`;
+    const body = item.content
+      ? `   正文节选：${String(item.content).replace(/\s+/g, ' ').trim().slice(0, 700)}`
+      : `   ${item.snippet || '（没有摘要）'}`;
+    return `${i + 1}. ${item.title}${extra ? `（${extra}）` : ''}\n${body}\n   来源 ${item.url}`;
   });
   return `【刚刚联网搜到的】（${found.engine}，${when}，查的是「${found.query}」）
 ${lines.join('\n')}
 怎么用：这些是网上刚查到的外部信息，不是你自己记得的事。可以说"我查到…"，并挑一条把来源网址发给他；
 带"X 天前/小时前"的说明时效，别讲成刚发生；几条互相矛盾就直说不确定；观点要说是谁的观点；
+正文节选里没出现的模型名、日期、数字，不许写进回答；日期以正文为准。
+他问"最新/有哪些/出了什么"这种列表题时：挑 2-4 个正文里明确写到发布或上线的，按日期从新到旧，一句一条，每条带日期；来源之间的日期或名字对不上，就直说"来源说法不一致"，别替他挑一个。
+链接最多发 1-2 个最靠谱的原文；标签页、列表页、论坛帖不算"发布"的凭据，不拿它们当证据。
 他没问就别展开成长篇报道，一两句说完就停，让他接着问。搜不到的部分直说没查到。`;
 }
 
