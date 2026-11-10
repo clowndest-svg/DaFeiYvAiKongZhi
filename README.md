@@ -299,6 +299,8 @@ snowluma/ napcat/   QQ 接入端安装目录（不提交）
 
 ## 18. 文档索引
 
+完整文档按「使用与接入 / 历史验收」分类列在 ；服务器备份教程见 。
+
 - `docs/OPTIMIZATION_PLAN.md` — 总优化方案
 - `docs/VERIFICATION.md` — 验收报告
 - `docs/HUMAN_STYLE_AND_SEARCH_20261101.md` — 说话风格与联网搜索实测

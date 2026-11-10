@@ -31,15 +31,18 @@ export function sentinelConfig() {
   try {
     raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
   } catch {
-    return { ok: false, enabled: false, reason: '本机还没配哨兵（缺 data/sentinel/config.json）' };
+    return { ok: false, enabled: false, mode: 'local', reason: '本机还没配哨兵（缺 data/sentinel/config.json）' };
   }
+  // 老配置没有 mode：本来就配了 host/user 的按服务器模式处理，保持原行为。
+  const mode = raw.mode === 'server' ? 'server' : raw.mode === 'local' ? 'local' : (raw.host && raw.user ? 'server' : 'local');
+  if (mode === 'local') return { ok: false, enabled: false, mode, reason: '本机备份模式（不往外部机器发东西）' };
   const host = String(raw.host || '').trim();
   const user = String(raw.user || '').trim();
   const keyFile = String(raw.keyFile || DEFAULT_KEY).trim();
-  if (raw.enabled === false) return { ok: false, enabled: false, host, user, keyFile, reason: '哨兵开关是关的' };
+  if (raw.enabled === false) return { ok: false, enabled: false, mode, host, user, keyFile, reason: '哨兵开关是关的' };
   // host/user 要拼进 ssh 的 user@host，只允许规矩字符——不给任何注入的机会
-  if (!/^[\w.-]+$/.test(host) || !/^[A-Za-z0-9._-]+$/.test(user)) return { ok: false, enabled: true, host, user, keyFile, reason: '配置里的 host/user 不是合法字符' };
-  if (!fs.existsSync(keyFile)) return { ok: false, enabled: true, host, user, keyFile, reason: '找不到哨兵密钥（data/sentinel/）' };
+  if (!/^[\w.-]+$/.test(host) || !/^[A-Za-z0-9._-]+$/.test(user)) return { ok: false, enabled: true, mode, host, user, keyFile, reason: '配置里的 host/user 不是合法字符' };
+  if (!fs.existsSync(keyFile)) return { ok: false, enabled: true, mode, host, user, keyFile, reason: '找不到哨兵密钥（data/sentinel/）' };
   const knownHostsFile = path.join(DIR, 'known_hosts');
   try {
     if (!fs.existsSync(knownHostsFile)) {
@@ -50,7 +53,7 @@ export function sentinelConfig() {
       else fs.writeFileSync(knownHostsFile, '', { flag: 'wx', mode: 0o600 });
     }
     if (fs.lstatSync(knownHostsFile).isSymbolicLink()) throw new Error('linked trust store');
-  } catch { return { ok: false, enabled: true, host, user, keyFile, reason: '无法准备项目内 SSH 主机校验文件' }; }
+  } catch { return { ok: false, enabled: true, mode, host, user, keyFile, reason: '无法准备项目内 SSH 主机校验文件' }; }
   return { ok: true, enabled: true, host, user, keyFile, knownHostsFile, sshPath: String(raw.sshPath || 'ssh'), reason: '' };
 }
 
@@ -109,12 +112,14 @@ function runSsh(cfg, command, { stdinFile = '', timeoutMs = 90000 } = {}) {
 export function saveSentinelConfig(input = {}) {
   const host = String(input.host || '').trim().slice(0, 200);
   const user = String(input.user || '').trim().slice(0, 64);
-  if (!host || !/^[\w.-]+$/.test(host)) throw Object.assign(new Error('服务器地址只允许字母、数字、点和横线'), { status: 400 });
-  if (!/^[A-Za-z0-9._-]+$/.test(user)) throw Object.assign(new Error('SSH 用户名不合法'), { status: 400 });
   let raw = {};
   try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) || {}; } catch { /* 第一次配置 */ }
+  const mode = input.mode === 'server' ? 'server' : input.mode === 'local' ? 'local' : ((input.host || raw.host) && (input.user || raw.user) ? 'server' : 'local');
+  // 只备份在本电脑时不需要地址和用户名；选了服务器才校验。
+  if (mode === 'server' && (!host || !/^[\w.-]+$/.test(host))) throw Object.assign(new Error('服务器地址只允许字母、数字、点和横线'), { status: 400 });
+  if (mode === 'server' && !/^[A-Za-z0-9._-]+$/.test(user)) throw Object.assign(new Error('SSH 用户名不合法'), { status: 400 });
   const keyFile = String(input.keyFile || raw.keyFile || DEFAULT_KEY).trim().slice(0, 500);
-  const next = { ...raw, enabled: input.enabled !== false, host, user, keyFile };
+  const next = { ...raw, mode, enabled: mode === 'server' && input.enabled !== false, host, user, keyFile };
   fs.mkdirSync(DIR, { recursive: true });
   fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2), { mode: 0o600 });
   return sentinelStatus();
@@ -128,6 +133,7 @@ export function sentinelStatus() {
     configured: cfg.ok,
     enabled: cfg.enabled,
     reason: cfg.reason,
+    mode: cfg.mode || 'local',
     host: cfg.host || '',
     user: cfg.user || '',
     keyFile: cfg.keyFile || '',

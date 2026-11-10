@@ -174,3 +174,17 @@ test('控制台能改服务器配置：非法地址/用户名拒绝，合法值�
     assert.equal(raw.sshPath, 'ssh', '保存时丢了其他字段');
   } finally { if (real == null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, real); }
 });
+
+test('备份方式二选一：本机模式不走 SSH，服务器模式才校验地址', () => {
+  const file = path.join(paths.data, 'sentinel', 'config.json');
+  const real = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const local = saveSentinelConfig({ mode: 'local', host: '', user: '' });
+    assert.equal(local.mode, 'local');
+    assert.equal(local.enabled, false, '本机模式不该启用远程哨兵');
+    const server = saveSentinelConfig({ mode: 'server', enabled: true, host: '203.0.113.10', user: 'bizhisync', keyFile: path.join(paths.data, 'sentinel', 'id') });
+    assert.equal(server.mode, 'server');
+    assert.equal(server.host, '203.0.113.10');
+  } finally { if (real == null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, real); }
+});

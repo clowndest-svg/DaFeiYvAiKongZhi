@@ -858,6 +858,12 @@
               <section class="card" id="set-card-sentinel">
                 <h3>异机哨兵（备份 + 报平安）</h3>
                 <p class="muted small" id="sentinelStatusText">正在读取哨兵状态…</p>
+                <label>备份方式
+                  <select id="sentinelMode">
+                    <option value="local">只备份在本电脑（默认，不需要服务器）</option>
+                    <option value="server">备份到自己的服务器（SSH 哨兵）</option>
+                  </select>
+                </label>
                 <label>服务器地址（SSH）<input id="sentinelHost" maxlength="200" placeholder="例如 203.0.113.10"></label>
                 <label>SSH 用户名<input id="sentinelUser" maxlength="64" placeholder="例如 bizhisync"></label>
                 <label>私钥路径（本机文件）<input id="sentinelKeyFile" maxlength="500" placeholder="例如 data/sentinel/id_bizhi_sentinel"></label>

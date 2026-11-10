@@ -3718,7 +3718,9 @@ async function loadSentinelStatus() {
     $('#sentinelHost').value = st.host || '';
     $('#sentinelUser').value = st.user || '';
     $('#sentinelKeyFile').value = st.keyFile || '';
+    $('#sentinelMode').value = st.mode === 'server' ? 'server' : 'local';
     $('#sentinelEnabled').checked = st.enabled === true;
+    for (const id of ['#sentinelHost', '#sentinelUser', '#sentinelKeyFile', '#sentinelEnabled']) $(id).closest('label').hidden = st.mode !== 'server';
   };
   if (!el) return;
   try {
@@ -4155,9 +4157,10 @@ function bindSettings() {
     toast(data.ok ? `发出去了${data.already ? '（这条之前已经发过，没重复点）' : ''}` : `没发：${data.reason || data.error || '未知原因'}`, data.ok ? undefined : 'error');
     await loadXStatus();
   }));
+  $('#sentinelMode').addEventListener('change', () => { const server = $('#sentinelMode').value === 'server'; for (const id of ['#sentinelHost', '#sentinelUser', '#sentinelKeyFile', '#sentinelEnabled']) $(id).closest('label').hidden = !server; });
   $('#sentinelSave').addEventListener('click', () => withBusy($('#sentinelSave'), async () => {
     try {
-      await api('/api/sentinel/config', { method: 'POST', body: { enabled: $('#sentinelEnabled').checked, host: $('#sentinelHost').value.trim(), user: $('#sentinelUser').value.trim(), keyFile: $('#sentinelKeyFile').value.trim() } });
+      await api('/api/sentinel/config', { method: 'POST', body: { mode: $('#sentinelMode').value, enabled: $('#sentinelEnabled').checked, host: $('#sentinelHost').value.trim(), user: $('#sentinelUser').value.trim(), keyFile: $('#sentinelKeyFile').value.trim() } });
       toast('服务器配置已保存');
       await loadSentinelStatus();
     } catch (error) { toast(error.message, 'error'); }
