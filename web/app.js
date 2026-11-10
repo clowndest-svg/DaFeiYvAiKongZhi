@@ -2166,7 +2166,11 @@ function fillSettings() {
   $('#setUserName').value = settings.companion?.userName || '';
   $('#setNickname').value = settings.companion?.nickname || '';
   $('#setIntro').value = settings.companion?.intro || '';
-  $('#setModel').value = settings.model?.name || 'deepseek-flash';
+  const modelName = settings.model?.name || 'deepseek-flash';
+  const knownModels = ['deepseek-flash', 'deepseek-v4-pro'];
+  $('#setModel').value = knownModels.includes(modelName) ? modelName : 'deepseek-flash';
+  $('#setModelCustom').value = knownModels.includes(modelName) ? '' : modelName;
+  $('#setModelApiBase').value = settings.model?.apiBase || '';
   $('#setTemperature').value = settings.model?.temperature ?? 0.95;
   $('#setChatMaxTokens').value = settings.model?.chatMaxTokens ?? 1400;
   $('#setEffort').value = settings.model?.reasoningEffort || 'low';
@@ -2328,7 +2332,8 @@ function collectSettings() {
     },
     model: {
       ...(prev.model || {}),
-      name: $('#setModel').value,
+      name: $('#setModelCustom').value.trim() || $('#setModel').value,
+      apiBase: $('#setModelApiBase').value.trim(),
       temperature: Number($('#setTemperature').value) || 0.95,
       chatMaxTokens: Number($('#setChatMaxTokens').value) || 1400,
       reasoningEffort: $('#setEffort').value,
@@ -3734,6 +3739,21 @@ function bindSettings() {
     settingsView.addEventListener('change', markDirty);
   }
   $('#saveSettingsBtn').addEventListener('click', () => saveSettings());
+  $('#modelTestBtn').addEventListener('click', () => withBusy($('#modelTestBtn'), async () => {
+    const line = $('#modelTestResult');
+    line.textContent = '正在测试…';
+    try {
+      const data = await api('/api/model/test', {
+        method: 'POST',
+        body: { apiBase: $('#setModelApiBase').value.trim(), model: $('#setModelCustom').value.trim() || $('#setModel').value },
+      });
+      line.textContent = data.ok
+        ? `通了：${data.model} 回了「${data.reply}」（${data.ms} ms）`
+        : `没通：${data.reason}`;
+    } catch (error) {
+      line.textContent = `没通：${error.message}`;
+    }
+  }));
   $$('[data-save-scope]').forEach(button => button.addEventListener('click', () => saveSettings(button.dataset.saveScope)));
   $('#voicePreviewBtn').addEventListener('click', () => previewVoice($('#voicePreviewBtn')));
   $('#rvcEnabled').addEventListener('change', () => rvcSelect(''));

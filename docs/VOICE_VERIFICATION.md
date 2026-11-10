@@ -63,7 +63,7 @@
 | `settings.qq` 的 `botAccount/sendStickers/selfFollowUp/sleepyMode` | 假号 + 三个 false | 283\*\*\*\*971（NapCat 登录号，打码）+ 三个 true | 02:49 的 file-history 快照 + 三处一致的机器人号证据 |
 | `settings.tts` 的 `callEnabled/callDailyMax/callMinIntervalSeconds` | true / 80 / 0 | false / 40 / 8 | 默认值 |
 
-**没有丢东西**：`data/bizhi.db`、`bizhi.db-wal`、`config/settings.json` 三份修复前副本都留在 `data/*.before-repair-1435`；真实消息 144 条、记忆 66 条、群白名单、`companion`（鲸鲸）、`presence.speakReplies=true` 等今天真实改动逐项复核过仍在。有一条消息命中我搜「在干嘛」的关键词，核对后确认是 10-29 主人真实发言，**没有删**。
+**没有丢东西**：`data/bizhi.db`、`bizhi.db-wal`、`config/settings.json` 三份修复前副本都留在 `data/*.before-repair-1435`；真实对话与记忆数据、群白名单、`companion`（鲸鲸）、`presence.speakReplies=true` 等今天真实改动逐项复核过仍在。有一条消息命中我搜「在干嘛」的关键词，核对后确认是 10-29 主人真实发言，**没有删**。
 
 **根因不是"我下次小心"**：`src/config.js` 现在自己识别测试进程 —— 只要 `NODE_TEST_CONTEXT` 或 `BIZHI_TEST_MODE=1` 成立而没给 `BIZHI_DATA_DIR`，就强制改到 `data/test-isolated-guard-<pid>`，并在 stderr 喊一声，生产文件碰不到。这类"测试能不能碰生产"的门以后应当都长在代码里，而不是靠我记得带环境变量。
 

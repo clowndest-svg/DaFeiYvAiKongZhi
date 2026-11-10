@@ -11,8 +11,7 @@ process.env.BIZHI_DATA_DIR = dataDir;
 const { privacyProblems, leaksFromChat, TOPIC_HINTS } = await import('../src/privacy.js');
 const { parseOwnerCommand } = await import('../src/channels/onebot.js');
 const { buildSystemPrompt } = await import('../src/prompt.js');
-const { loadSettings } = await import('../src/config.js');
-const { getMomLetter } = await import('../src/config.js');
+const { loadSettings, getMomLetter, paths } = await import('../src/config.js');
 const { closeDb } = await import('../src/db.js');
 
 test('私密称呼和恋爱关系不许出现在公开内容里', () => {
@@ -30,6 +29,8 @@ test('他聊天里说过的原话，不许被她搬到公开笔记里', () => {
 });
 
 test('妈妈的话进了她的脑子，QQ 口令能认出来', () => {
+  // 开源仓库里不带任何人的私信原文：测试自己写一封夹具信，不依赖 config/mom-letter.md 的内容。
+  fs.writeFileSync(paths.momLetter, '妈妈留给你：家里说的话留在家里；广场上只发你自己的东西。\n');
   assert.ok(getMomLetter().includes('广场'), '信里要有“广场/家里”那条');
   const system = buildSystemPrompt({
     settings: loadSettings(),

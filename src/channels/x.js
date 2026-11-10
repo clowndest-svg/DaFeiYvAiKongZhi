@@ -217,7 +217,7 @@ async function xStatusLocked({ verify = false } = {}) {
         tweets: document.querySelectorAll('article[data-testid="tweet"]').length,
         selfHandle: handle.startsWith('/') && handle.length > 1 ? handle.slice(1) : '',
         selfName: (() => {
-          // 实测侧栏账号按钮里就是两行：「nodeNetwork」+「@MetaverseTomOne」，主页上就能读到名字，
+          // 实测侧栏账号按钮里就是两行：两行账号信息，主页上就能读到名字，
           // 不用先跑去个人主页（AccountGridItem_fullName 那个 testid 在这个版本的页面上不存在）。
           const btn = document.querySelector('[data-testid="SideNav_AccountSwitcher_Button"]');
           const lines = ((btn && btn.innerText) || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean);

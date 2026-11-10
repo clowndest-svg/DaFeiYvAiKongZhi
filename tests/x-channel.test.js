@@ -298,11 +298,11 @@ test('回复的发送按钮必须和输入框同属一个编辑器：整页回�
 });
 
 test('主人账号和当前登录号对不上时要说出来，不能悄悄把他降级成陌生人', () => {
-  assert.equal(ownerHandleNotice({ configured: 'MetaverseTomOne', self: 'metaversetomone' }).state, 'match');
-  assert.equal(ownerHandleNotice({ configured: '@MetaVerseTomOne', self: 'metaversetomone' }).text, '', '对得上就不该有提示');
-  const diff = ownerHandleNotice({ configured: 'Tomve5j', self: 'MetaverseTomOne' });
+  assert.equal(ownerHandleNotice({ configured: 'example_owner', self: 'example_owner' }).state, 'match');
+  assert.equal(ownerHandleNotice({ configured: '@Example_Owner', self: 'example_owner' }).text, '', '对得上就不该有提示');
+  const diff = ownerHandleNotice({ configured: 'example_alt', self: 'example_owner' });
   assert.equal(diff.state, 'different');
-  assert.ok(diff.text.includes('@Tomve5j') && diff.text.includes('@MetaverseTomOne'), '要把他填的和实际登录的都写出来');
+  assert.ok(diff.text.includes('@example_alt') && diff.text.includes('@example_owner'), '要把他填的和实际登录的都写出来');
   assert.ok(diff.text.includes('陌生人的'), '要说清后果：他的评论会被当成陌生人的');
   const unset = ownerHandleNotice({ configured: '', self: 'abc' });
   assert.equal(unset.state, 'unset');

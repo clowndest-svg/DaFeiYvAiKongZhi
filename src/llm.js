@@ -121,6 +121,16 @@ function mockJson(mockKind) {
   }
 }
 
+// 接口地址可以在控制台改（settings.model.apiBase），不用改 .env 也不用重启。
+// 只认 http(s)：填错了就退回 .env 里的 DEEPSEEK_BASE_URL。
+function runtimeBaseUrl(fallback) {
+  try {
+    const value = String(loadSettings().model?.apiBase || '').trim().replace(/\/+$/, '');
+    if (/^https?:\/\//i.test(value)) return value;
+  } catch { /* 设置读不到就用 .env */ }
+  return fallback;
+}
+
 export class DeepSeek {
   constructor({ apiKey = env.apiKey, baseUrl = env.baseUrl } = {}) {
     this.apiKey = apiKey;
@@ -169,7 +179,7 @@ export class DeepSeek {
       const reservationId = reserveCost({ model: body.model, kind: opts.kind, requestId, attempt: attempt + 1, sessionId: opts.sessionId,
         estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
       try {
-        const res = await fetch(this.baseUrl + '/chat/completions', {
+        const res = await fetch(runtimeBaseUrl(this.baseUrl) + '/chat/completions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey },
           body: JSON.stringify(body), signal,
         });
@@ -282,7 +292,7 @@ export class DeepSeek {
     const reservationId = reserveCost({ model: body.model, kind: opts.kind, requestId, sessionId: opts.sessionId,
       estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
     try {
-      const res = await fetch(this.baseUrl + '/chat/completions', {
+      const res = await fetch(runtimeBaseUrl(this.baseUrl) + '/chat/completions', {
         method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + this.apiKey }, body: JSON.stringify(body), signal,
       });
       if (!res.ok) throw new LlmError('DeepSeek 返回 HTTP ' + res.status + '：' + logger.redact((await res.text()).slice(0, 150)), { status: res.status, code: 'HTTP' });
@@ -337,7 +347,7 @@ export class DeepSeek {
 
   async balance() {
     this.assertConfigured();
-    const res = await fetch(`${this.baseUrl}/user/balance`, {
+    const res = await fetch(`${runtimeBaseUrl(this.baseUrl)}/user/balance`, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
       signal: AbortSignal.timeout(30000),
     });

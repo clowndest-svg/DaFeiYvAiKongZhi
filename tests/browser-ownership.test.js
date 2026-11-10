@@ -37,7 +37,7 @@ test('参数顺序与相邻参数不影响判定', () => {
 test('导航超时后要看地址，不许拿 CDP 有没有回话当成功', () => {
   assert.equal(sameLocation('https://x.com/home', 'https://x.com/home'), true);
   assert.equal(sameLocation('https://x.com/home/', 'https://x.com/home'), true, '浏览器补的斜杠不该算没到');
-  assert.equal(sameLocation('https://X.com/MetaverseTomOne#top', 'https://x.com/MetaverseTomOne'), true, '大小写和 hash 不该算没到');
+  assert.equal(sameLocation('https://X.com/example_owner#top', 'https://x.com/example_owner'), true, '大小写和 hash 不该算没到');
   assert.equal(sameLocation('https://x.com/home?show=following', 'https://x.com/home'), false, '查询串不同就是另一个页');
   assert.equal(sameLocation('https://x.com/i/flow/login', 'https://x.com/home'), false, '还停在登录页不能算成功');
   assert.equal(sameLocation('', 'https://x.com/home'), false, '读不到地址等于没到，不许当成跳转成功');
@@ -81,12 +81,12 @@ test('接管时逐个标签页试，谁答话用谁，别一把抓第一个', ()
   // 真机量到的 8 个 target：3 个 about:blank + 一个卡住的旧页，活的只有开着站点的那个
   const targets = [
     { url: 'about:blank' },
-    { url: 'https://x.com/MetaverseTomOne' },
+    { url: 'https://x.com/example_owner' },
     { url: 'about:blank' },
     { url: 'chrome://omnibox-popup.top-chrome/' },
     { url: 'about:blank' },
   ];
   const ranked = [...targets].sort((a, b) => liveScore(b) - liveScore(a));
-  assert.equal(ranked[0].url, 'https://x.com/MetaverseTomOne', '没把开着站点的页排在最前');
+  assert.equal(ranked[0].url, 'https://x.com/example_owner', '没把开着站点的页排在最前');
   assert.ok(liveScore({ url: 'about:blank' }) < liveScore({ url: 'chrome://omnibox-popup.top-chrome/' }), '空白页该排在别的非站点页后面');
 });

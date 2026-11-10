@@ -1155,6 +1155,23 @@ async function handleApi(req, res, pathname, url) {
     }
   }
 
+  if (pathname === '/api/model/test' && method === 'POST') {
+    const body = await readJsonBody(req);
+    const baseUrl = String(body.apiBase || '').trim().replace(/\/+$/, '').slice(0, 200);
+    const model = String(body.model || '').trim().slice(0, 80);
+    if (baseUrl && !/^https?:\/\//i.test(baseUrl)) throw new HttpError(400, '接口地址要以 http:// 或 https:// 开头');
+    const tester = new DeepSeek({ baseUrl: baseUrl || env.baseUrl });
+    try {
+      const result = await tester.chat(
+        [{ role: 'user', content: '只回复两个字：在吗' }],
+        { kind: 'model_test', model: model || loadSettings().model.name, maxTokens: 16, temperature: 0, timeoutMs: 20000 },
+      );
+      return sendJson(res, 200, { ok: true, model: result.model || model, reply: String(result.content || '').trim().slice(0, 40), ms: result.latencyMs || 0 });
+    } catch (error) {
+      return sendJson(res, 200, { ok: false, reason: errorMessage(error) });
+    }
+  }
+
   if (pathname === '/api/costs' && method === 'GET') {
     const days = Math.min(90, Math.max(1, Number(url.searchParams.get('days')) || 7));
     return sendJson(res, 200, { ...costSummary(days), reflectionWork: reflectionWorkStatus() });

@@ -4,6 +4,8 @@ import { env, paths } from './config.js';
 
 // Provider is fixed for the lifetime of the server. Switching requires a cold
 // restart, so a settings save cannot route an in-flight reply to another client.
+// 本项目实机验证用 SnowLuma（.env.example 与 setup 默认写 snowluma）；
+// 没设环境变量时回退 NapCat 兼容路径。
 export const qqProvider = process.env.BIZHI_QQ_PROVIDER || 'napcat';
 if (!['napcat', 'snowluma'].includes(qqProvider)) throw new Error('BIZHI_QQ_PROVIDER 只能是 napcat 或 snowluma');
 export function providerInfo() {

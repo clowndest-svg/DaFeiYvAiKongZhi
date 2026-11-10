@@ -34,7 +34,7 @@ test('host/user 里的注入字符一律拒绝，绝不拼进命令', () => {
     const cfg = sentinelConfig();
     assert.equal(cfg.ok, false, '非法 host 竟然通过了校验');
     assert.match(cfg.reason, /不是合法字符/);
-    fs.writeFileSync(file, JSON.stringify({ enabled: true, host: '124.220.54.64', user: 'bizhisync; rm', keyFile: path.join(paths.data, 'sentinel', 'id_bizhi_sentinel') }));
+    fs.writeFileSync(file, JSON.stringify({ enabled: true, host: '203.0.113.10', user: 'bizhisync; rm', keyFile: path.join(paths.data, 'sentinel', 'id_bizhi_sentinel') }));
     assert.equal(sentinelConfig().ok, false, '非法 user 竟然通过了校验');
   } finally {
     if (real !== null) fs.writeFileSync(file, real);

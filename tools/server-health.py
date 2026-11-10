@@ -15,7 +15,7 @@ def snapshot():
         memory[name] = int(value.split()[0])
     disk = shutil.disk_usage('/')
     services = {}
-    for name in ('qingsu', 'qingsu-ops', 'qingsu-asr', 'qingsu-llama', 'qingsu-vision', 'docker', 'sshd', 'douyin-tool'):
+    for name in os.environ.get('BIZHI_HEALTH_SERVICES', 'sshd,docker').split(','):
         try:
             result = subprocess.run(['systemctl', 'is-active', name + '.service'], capture_output=True, text=True, timeout=2)
             services[name] = result.stdout.strip()[:32] or 'unknown'
