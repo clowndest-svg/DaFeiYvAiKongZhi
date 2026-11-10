@@ -1,7 +1,7 @@
 export const SETTINGS_CARDS = {
   identity: ['identity', 'persona'], chat: ['model', 'memory', 'search'], proactive: ['proactive'],
   voice: ['voice', 'rvc', 'presence'], qq: ['qq-login', 'qq'], social: ['social'],
-  xhs: ['xhs'], x: ['x'], system: ['background', 'ui', 'data', 'sentinel'],
+  xhs: ['xhs'], x: ['x'], douyin: ['douyin'], system: ['background', 'ui', 'data', 'sentinel'],
 };
 
 export function settingsScopePatch(values, scope) {

@@ -131,7 +131,7 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   const shots = path.resolve('data/browser-verification'); fs.mkdirSync(shots, { recursive: true });
   for (const width of [1440, 1024, 768, 390, 320]) {
     await page.setViewportSize({ width, height: 1000 });
-    for (const section of ['identity', 'chat', 'proactive', 'voice', 'qq', 'social', 'xhs', 'x', 'system']) {
+    for (const section of ['identity', 'chat', 'proactive', 'voice', 'qq', 'social', 'xhs', 'x', 'douyin', 'system']) {
       await page.locator(`[data-settings-tab="${section}"]`).click();
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `${width}/${section} overflow`);
       const gaps = await page.locator('#settingsCards > .card:not([hidden])').evaluateAll(cards => cards.slice(1).map((card, i) => Math.round(card.getBoundingClientRect().top - cards[i].getBoundingClientRect().bottom)));

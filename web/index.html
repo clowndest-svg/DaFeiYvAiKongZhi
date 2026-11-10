@@ -406,6 +406,7 @@
               <button type="button" role="tab" id="settings-tab-social" aria-controls="settingsCards" data-settings-tab="social">动态与空间</button>
               <button type="button" role="tab" id="settings-tab-xhs" aria-controls="settingsCards" data-settings-tab="xhs">小红书</button>
               <button type="button" role="tab" id="settings-tab-x" aria-controls="settingsCards" data-settings-tab="x">X / 推特</button>
+              <button type="button" role="tab" id="settings-tab-douyin" aria-controls="settingsCards" data-settings-tab="douyin">抖音</button>
               <button type="button" role="tab" id="settings-tab-system" aria-controls="settingsCards" data-settings-tab="system">界面与系统</button>
             </nav>
             <div class="settings-grid" id="settingsCards" role="tabpanel" aria-labelledby="settings-tab-identity">
@@ -738,6 +739,17 @@
                 </div>
                 <p class="muted small" id="xPublishHint">「发布」只发她刚填进输入框、并且逐字核对过的那一条；填稿超过 15 分钟必须重新填，避免把输入框里的旧内容发出去。</p>
                 <div id="xReadBox" class="search-results"></div>
+              </section>
+              <section class="card" id="set-card-douyin">
+                <h3>抖音（浏览器自动化）</h3>
+                <p class="muted small" id="douyinSettingsStatus">正在读取抖音状态…</p>
+                <label class="check"><input type="checkbox" id="douyinToggleMonitor" data-immediate="1"> 定时检查已记录视频的评论（每 30 分钟至多一个，失败停 6 小时）</label>
+                <label class="check"><input type="checkbox" id="douyinToggleAutoReply" data-immediate="1"> 自动回复符合条件的新评论（发送未实机验收时只起草，不会发出）</label>
+                <label class="check"><input type="checkbox" id="douyinToggleBrowse" data-immediate="1"> 自动刷视频并理解内容（每半小时一条、每天 6 条，走社交预算）</label>
+                <p class="muted small">开关即时生效，不跟「保存」按钮走。扫码登录、读评论、看理解笔记在「动态」页的抖音卡片里。</p>
+                <div class="btn-row">
+                  <button type="button" id="douyinToSocial">去「动态」页操作抖音</button>
+                </div>
               </section>
               <section class="card" id="set-card-sentinel">
                 <h3>异机哨兵（备份 + 报平安）</h3>

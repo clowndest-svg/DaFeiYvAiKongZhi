@@ -904,7 +904,7 @@ async function handleApi(req, res, pathname, url) {
   }
 
   if (pathname === '/api/douyin/comment-inbox' && method === 'GET') {
-    return sendJson(res, 200, { videos: douyinCommentInbox(), draft: douyinReplyDraft(), autoQueue: douyinAutoQueue(), autoReply: kvGetJson('douyin:auto-reply', false) === true, sendAvailable: process.env.BIZHI_DOUYIN_REPLY_ENABLED === '1', monitoring: kvGetJson('douyin:monitor-enabled', false) === true });
+    return sendJson(res, 200, { videos: douyinCommentInbox(), draft: douyinReplyDraft(), autoQueue: douyinAutoQueue(), autoReply: kvGetJson('douyin:auto-reply', false) === true, sendAvailable: process.env.BIZHI_DOUYIN_REPLY_ENABLED === '1', monitoring: kvGetJson('douyin:monitor-enabled', false) === true, account: kvGet('douyin:account', '') });
   }
 
   if (pathname === '/api/douyin/auto-reply' && method === 'POST') {
