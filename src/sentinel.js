@@ -106,6 +106,20 @@ function runSsh(cfg, command, { stdinFile = '', timeoutMs = 90000 } = {}) {
   });
 }
 
+export function saveSentinelConfig(input = {}) {
+  const host = String(input.host || '').trim().slice(0, 200);
+  const user = String(input.user || '').trim().slice(0, 64);
+  if (!host || !/^[\w.-]+$/.test(host)) throw Object.assign(new Error('服务器地址只允许字母、数字、点和横线'), { status: 400 });
+  if (!/^[A-Za-z0-9._-]+$/.test(user)) throw Object.assign(new Error('SSH 用户名不合法'), { status: 400 });
+  let raw = {};
+  try { raw = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')) || {}; } catch { /* 第一次配置 */ }
+  const keyFile = String(input.keyFile || raw.keyFile || DEFAULT_KEY).trim().slice(0, 500);
+  const next = { ...raw, enabled: input.enabled !== false, host, user, keyFile };
+  fs.mkdirSync(DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(next, null, 2), { mode: 0o600 });
+  return sentinelStatus();
+}
+
 export function sentinelStatus() {
   const cfg = sentinelConfig();
   const heartbeat = kvGetJson('sentinel_heartbeat', null);
@@ -115,6 +129,9 @@ export function sentinelStatus() {
     enabled: cfg.enabled,
     reason: cfg.reason,
     host: cfg.host || '',
+    user: cfg.user || '',
+    keyFile: cfg.keyFile || '',
+    keyFilePresent: Boolean(cfg.keyFile && fs.existsSync(cfg.keyFile)),
     lastHeartbeat: heartbeat,
     lastBackup: backup,
     heartbeatHealthy: Boolean(heartbeat?.ok && Date.now() - new Date(heartbeat.at).getTime() < 90 * 60 * 1000),

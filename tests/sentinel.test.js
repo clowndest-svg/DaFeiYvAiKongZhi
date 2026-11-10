@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from '../src/config.js';
 import { closeDb } from '../src/db.js';
-import { sentinelConfig, sentinelHeartbeatPayload, sentinelStatus } from '../src/sentinel.js';
+import { saveSentinelConfig, sentinelConfig, sentinelHeartbeatPayload, sentinelStatus } from '../src/sentinel.js';
 
 test.after(closeDb);
 
@@ -157,4 +157,20 @@ test('界面和接口同一份读数：状态来自后端，不是界面自己�
   assert.ok(web.includes('beat.reason'), '界面没把失败原因如实说出来');
   const status = sentinelStatus();
   for (const field of ['configured', 'lastHeartbeat', 'lastBackup', 'heartbeatHealthy']) assert.ok(field in status, `状态里少了 ${field}`);
+});
+
+test('控制台能改服务器配置：非法地址/用户名拒绝，合法值写入且不丢其他字段', () => {
+  const file = path.join(paths.data, 'sentinel', 'config.json');
+  const real = fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null;
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ enabled: true, host: '203.0.113.10', user: 'bizhisync', keyFile: path.join(paths.data, 'sentinel', 'id'), sshPath: 'ssh' }));
+    assert.throws(() => saveSentinelConfig({ host: 'evil; rm', user: 'bizhisync' }), /服务器地址/);
+    assert.throws(() => saveSentinelConfig({ host: '203.0.113.10', user: 'bad user' }), /用户名/);
+    const saved = saveSentinelConfig({ enabled: false, host: '203.0.113.11', user: 'syncuser', keyFile: path.join(paths.data, 'sentinel', 'id') });
+    assert.equal(saved.host, '203.0.113.11');
+    assert.equal(saved.enabled, false);
+    const raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+    assert.equal(raw.sshPath, 'ssh', '保存时丢了其他字段');
+  } finally { if (real == null) fs.rmSync(file, { force: true }); else fs.writeFileSync(file, real); }
 });

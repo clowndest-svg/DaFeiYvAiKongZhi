@@ -3713,9 +3713,17 @@ function bindSocial() {
 // 异机哨兵的状态：全部数字都来自 /api/sentinel，界面不自己算节奏
 async function loadSentinelStatus() {
   const el = $('#sentinelStatusText');
+  const fill = (data) => {
+    const st = data.status || {};
+    $('#sentinelHost').value = st.host || '';
+    $('#sentinelUser').value = st.user || '';
+    $('#sentinelKeyFile').value = st.keyFile || '';
+    $('#sentinelEnabled').checked = st.enabled === true;
+  };
   if (!el) return;
   try {
     const data = await api('/api/sentinel');
+  fill(data);
     const s = data.status || {};
     const beat = s.lastHeartbeat;
     const backup = s.lastBackup;
@@ -4146,6 +4154,13 @@ function bindSettings() {
     const data = await xPost('/api/x/publish', {}, null);
     toast(data.ok ? `发出去了${data.already ? '（这条之前已经发过，没重复点）' : ''}` : `没发：${data.reason || data.error || '未知原因'}`, data.ok ? undefined : 'error');
     await loadXStatus();
+  }));
+  $('#sentinelSave').addEventListener('click', () => withBusy($('#sentinelSave'), async () => {
+    try {
+      await api('/api/sentinel/config', { method: 'POST', body: { enabled: $('#sentinelEnabled').checked, host: $('#sentinelHost').value.trim(), user: $('#sentinelUser').value.trim(), keyFile: $('#sentinelKeyFile').value.trim() } });
+      toast('服务器配置已保存');
+      await loadSentinelStatus();
+    } catch (error) { toast(error.message, 'error'); }
   }));
   $('#sentinelBeatBtn').addEventListener('click', () => withBusy($('#sentinelBeatBtn'), async () => {
     const data = await api('/api/sentinel/run', { method: 'POST', body: { what: 'heartbeat' } });

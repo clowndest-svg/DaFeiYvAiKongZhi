@@ -858,6 +858,11 @@
               <section class="card" id="set-card-sentinel">
                 <h3>异机哨兵（备份 + 报平安）</h3>
                 <p class="muted small" id="sentinelStatusText">正在读取哨兵状态…</p>
+                <label>服务器地址（SSH）<input id="sentinelHost" maxlength="200" placeholder="例如 203.0.113.10"></label>
+                <label>SSH 用户名<input id="sentinelUser" maxlength="64" placeholder="例如 bizhisync"></label>
+                <label>私钥路径（本机文件）<input id="sentinelKeyFile" maxlength="500" placeholder="例如 data/sentinel/id_bizhi_sentinel"></label>
+                <label class="check"><input type="checkbox" id="sentinelEnabled"> 启用哨兵（定时报平安 + 备份到这里）</label>
+                <div class="btn-row"><button type="button" id="sentinelSave">保存服务器配置</button></div>
                 <p class="muted small">她自己每半小时向另一台机器报一次平安，并把数据库、人设、周记、信和存档压成一份快照存到那里——本机磁盘坏了也不丢记忆。那条连接是单向的（本机 → 服务器），服务器上不跑常驻进程、不开新端口；用的密钥在那边只允许"写心跳"和"交备份"两件事。心跳里只有读数（连没连上、剩多少内存），没有聊天内容。</p>
                 <div class="btn-row">
                   <button type="button" id="sentinelBeatBtn">现在就报一次</button>

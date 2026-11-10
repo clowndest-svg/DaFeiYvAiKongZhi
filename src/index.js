@@ -311,7 +311,7 @@ import {
   xActivitySummary,
   xBudgetStatus,
 } from './channels/x-actions.js';
-import { runSentinelBackup, sendSentinelHeartbeat, sentinelStatus } from './sentinel.js';
+import { runSentinelBackup, saveSentinelConfig, sendSentinelHeartbeat, sentinelStatus } from './sentinel.js';
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -1735,6 +1735,11 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/sentinel' && method === 'GET') {
     return sendJson(res, 200, { ok: true, status: sentinelStatus() });
+  }
+
+  if (pathname === '/api/sentinel/config' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, { ok: true, status: saveSentinelConfig(body) });
   }
 
   if (pathname === '/api/sentinel/run' && method === 'POST') {
