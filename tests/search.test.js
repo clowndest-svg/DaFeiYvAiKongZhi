@@ -3,11 +3,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { closeDb, kvSet } from '../src/db.js';
-import { saveSettings } from '../src/config.js';
+import { closeDb, kvSet, addMessage, getActiveSession, getMessagesForPrompt } from '../src/db.js';
+import { saveSettings, loadSettings } from '../src/config.js';
 import { shanghaiDayKey } from '../src/util.js';
 import { Companion } from '../src/chat.js';
-import { buildQuery, dropDefinitionNoise, formatSearchNote, needsSearch, parseBing, searchWeb } from '../src/search.js';
+import { buildChatPayload } from '../src/prompt.js';
+import { buildQuery, dropDefinitionNoise, formatSearchNote, needsSearch, parseBing, searchWeb, resolveSearchQuery, informativeQuery } from '../src/search.js';
 
 test.after(closeDb);
 
@@ -31,6 +32,8 @@ test('触发判断：要现查的才搜，情绪话和私密回忆不搜', () =>
     ['这个 app 最新版本是啥', true],
     ['苹果最新的手机是哪款', true],
     ['今天有什么新闻', true],
+    // 11-10 QQ 截图原话：句尾落在"了"上也要认出是在问新鲜事。
+    ['gpt和claude是不是出最新模型了', true],
     // 疑问词出现在句子中间不算在要资料；问的是她本人也不算。
     ['最近好累啊什么都不想做', false],
     ['你最近有没有好好吃饭', false],
@@ -218,4 +221,83 @@ test('提示词里必须写明"你能上网查"，并且不许她编出查的过
   assert.match(source, /装作查/, '不许凭感觉报天气/价格/版本号');
   assert.ok(!/以后不要说“我这边没网”/.test(source), '旧的补丁式禁令还在（已被更准的"没结果就别提"取代）');
   assert.match(source, /一次只说一遍/, '重复解释的约束没写进提示词');
+});
+
+// —— 11-10 QQ 截图翻车回归：搜"可以"/"给"的词典页、没搜却编"翻出来的都是…" ——
+
+test('空壳残句不算查询词：可以/给我看/嗯 都不许发去搜索引擎', () => {
+  for (const shell of ['可以', '给我看', '嗯', '好的吧', '可以，你联网检索吧', '搜索给我看']) {
+    assert.equal(informativeQuery(shell), '', `「${shell}」被当成了查询词`);
+  }
+  assert.equal(informativeQuery('可以，查一下上海房价'), '上海房价');
+  assert.equal(informativeQuery('搜索给我看 gpt和claude是不是出最新模型了'), 'gpt和claude是不是出最新模型了');
+});
+
+test('答应去搜时接住上一轮的问题：搜的是他问的事，不是"可以"', () => {
+  const topic = 'gpt和claude是不是出最新模型了';
+  for (const confirm of ['可以，你联网检索吧，有最新的ai咨询吗', '搜索给我看', '嗯，去查吧']) {
+    const query = resolveSearchQuery(confirm, [topic]);
+    assert.ok(query.includes('gpt') && query.includes('claude') && query.includes('最新'), `「${confirm}」没接住主题：${query}`);
+    assert.ok(!/^(可以|给)/.test(query), `「${confirm}」摘出了空壳词：${query}`);
+  }
+  assert.equal(resolveSearchQuery('搜索给我看', ['想你了', '晚安']), '', '上一轮是情绪话时不该硬接');
+  assert.equal(resolveSearchQuery('查一下上海房价', [topic]), '上海房价', '自己带主题时不接旧话题');
+});
+
+test('端到端：他说"可以，你联网检索吧"，发出去的查询词是他上一轮问的事', async () => {
+  const original = globalThis.fetch;
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    seen.push(String(url));
+    return { ok: true, text: async () => BING_FIXTURE };
+  };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'scrape', dailyMax: 20, maxResults: 5, timeoutSeconds: 8 } });
+    const session = getActiveSession();
+    addMessage({ sessionId: session.id, role: 'user', content: 'gpt和claude是不是出最新模型了', channel: 'qq' });
+    addMessage({ sessionId: session.id, role: 'assistant', content: '要我联网看一眼吗？你点个头，我就去翻。', channel: 'qq' });
+    const companion = new Companion({ llm: { configured: true } });
+    const note = await companion.searchNoteFor({ text: '可以，你联网检索吧，有最新的ai咨询吗', channel: 'qq' });
+    assert.match(note, /【刚刚联网搜到的】/, '接住主题后应该真搜');
+    assert.ok(seen.length >= 1, '没有发出搜索请求');
+    const sent = decodeURIComponent(seen.join(' '));
+    assert.ok(sent.includes('gpt') && sent.includes('claude'), `发出去的查询词不对：${sent}`);
+    assert.ok(!/[?&]q=(可以|给)[&%]/.test(seen.join(' ')), '把空壳词发出去了');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('让他去搜但接不住主题时：不搜、注入"问他要查什么"，绝不发空壳词', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return { ok: true, text: async () => BING_FIXTURE }; };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'scrape', dailyMax: 20 } });
+    const companion = new Companion({ llm: { configured: true } });
+    const note = await companion.searchNoteFor({ text: '搜索给我看', channel: 'qq', sessionId: 'no-such-session' });
+    assert.match(note, /这次没搜/);
+    assert.match(note, /问他要查哪件事/);
+    assert.equal(calls, 0, '没主题还把残句发出去了');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('搜索说明跟着消息落库，下一轮历史里看得见真实结果', () => {
+  const session = getActiveSession();
+  const note = formatSearchNote({ ok: true, engine: 'bing', query: 'gpt claude 最新模型', items: [{ title: '甲', url: 'https://a.example/x', snippet: '乙' }] });
+  const prep = new Companion({ llm: { configured: true } }).prepare({ text: '可以，你联网检索吧', channel: 'qq', extraContext: note });
+  const stored = getMessagesForPrompt(session.id, 4).find((m) => m.id === prep.userMessage.id);
+  assert.ok(stored.meta?.searchNote?.includes('【刚刚联网搜到的】'), '搜索说明没落库，下一轮她又会凭印象编');
+  const payload = buildChatPayload({
+    settings: loadSettings(),
+    mood: { label: '平静', valence: 0, energy: 0.5, affection: 20, reason: '' },
+    block: { core: [], long: [], mid: [], summary: '', handover: '', innerThoughts: [] },
+    history: [...getMessagesForPrompt(session.id, 4), { role: 'user', content: '那claude呢', meta: {} }],
+    maxContextTokens: 100000,
+    channel: 'qq',
+  });
+  const joined = payload.messages.map((m) => (typeof m.content === 'string' ? m.content : '')).join('\n');
+  assert.ok(joined.includes('https://a.example/x'), '下一轮上下文里没有真实来源，模型只能编');
 });

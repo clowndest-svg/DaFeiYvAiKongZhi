@@ -54,6 +54,13 @@ function hoursFromNow(hours) {
   return new Date(Date.now() + hours * 3600000).toISOString();
 }
 
+export function chooseDouyinMonitorVideo(inbox, cursor) {
+  const ids = [...new Set((Array.isArray(inbox) ? inbox : []).map(item => String(item?.videoId || '')).filter(id => /^\d{5,25}$/.test(id)))].sort();
+  if (!ids.length) return null;
+  const position = Number.isSafeInteger(Number(cursor)) && Number(cursor) >= 0 ? Number(cursor) % ids.length : 0;
+  return { videoId: ids[position], next: (position + 1) % ids.length };
+}
+
 export class Scheduler {
   constructor({ llm, companion, sendToOwner = null, refreshQzoneCookie = null, random = Math.random }) {
     this.llm = llm;
@@ -71,6 +78,7 @@ export class Scheduler {
     this.qzoneTimer = null;
     this.xhsTimer = null;
     this.xhsBusy = false;
+    this.douyinBusy = false;
     this.lastXhsError = null;
     this.xTimer = null;
     this.xBusy = false;
@@ -119,6 +127,12 @@ export class Scheduler {
         if (isRiskyError(error)) triggerXhsCooldown(6, error.message);
       });
     }, 10 * 60 * 1000);
+    this.douyinTimer = setInterval(() => {
+      this.pollDouyinComments()
+        .catch(error => logger.warn('抖音评论检查失败', { error: String(error.message).slice(0, 120) }))
+        .then(() => this.pollDouyinBrowse())
+        .catch(error => logger.warn('抖音刷视频失败', { error: String(error.message).slice(0, 120) }));
+    }, 10 * 60 * 1000);
     // 哨兵：半小时报一次平安，超过 20 小时没存过档就补一份。
     // 它挂了不影响任何主链路——心跳和备份都只写自己的读数，失败就如实记着。
     this.sentinelTimer = setInterval(() => {
@@ -128,6 +142,65 @@ export class Scheduler {
       });
     }, 30 * 60 * 1000);
     logger.info('主动行为调度器已启动');
+  }
+
+  async pollDouyinComments() {
+    if (this.douyinBusy || kvGetJson('qq_maintenance', false) === true || kvGetJson('douyin:monitor-enabled', false) !== true) return null;
+    if (Date.now() < Number(kvGet('douyin:monitor-next', '0'))) return null;
+    const { douyinCommentInbox, readDouyinComments, processDouyinAutoReply } = await import('./channels/douyin.js');
+    const selected = chooseDouyinMonitorVideo(douyinCommentInbox(), kvGet('douyin:monitor-index', '0'));
+    if (!selected) return null;
+    this.douyinBusy = true;
+    try {
+      const result = await readDouyinComments(selected.videoId, { active: () => kvGetJson('douyin:monitor-enabled', false) === true && kvGetJson('qq_maintenance', false) !== true });
+      if (result.cancelled) return result;
+      if (!result.ok) {
+        kvSet('douyin:monitor-next', String(Date.now() + 6 * 3600000));
+        addEvent('douyin_monitor_waiting', '抖音评论检查暂停六小时', { reason: result.reason });
+        return result;
+      }
+      kvSet('douyin:monitor-index', String(selected.next));
+      kvSet('douyin:monitor-next', String(Date.now() + 30 * 60000));
+      if (kvGetJson('douyin:auto-reply', false) === true && !this.costGate('douyinAuto', '抖音自动回复')) await processDouyinAutoReply(this.llm);
+      return result;
+    } catch (error) {
+      kvSet('douyin:monitor-next', String(Date.now() + 6 * 3600000));
+      throw error;
+    } finally {
+      this.douyinBusy = false;
+    }
+  }
+
+  async pollDouyinBrowse() {
+    if (this.douyinBusy || this.douyinBrowseBusy) return null;
+    if (kvGetJson('qq_maintenance', false) === true || kvGetJson('douyin:browse-enabled', false) !== true) return null;
+    if (Date.now() < Number(kvGet('douyin:browse-next', '0'))) return null;
+    if ((Number(kvGet(`douyin:browse-count:${shanghaiDayKey()}`, '0')) || 0) >= 6) return null;
+    if (this.costGate('douyinAuto', '抖音刷视频')) return null;
+    const { readDouyinVideos, douyinVideoNotes, chooseDouyinBrowseVideo, understandDouyinVideo } = await import('./channels/douyin.js');
+    this.douyinBrowseBusy = true;
+    try {
+      const feed = await readDouyinVideos();
+      if (!feed.ok) {
+        kvSet('douyin:browse-next', String(Date.now() + 6 * 3600000));
+        addEvent('douyin_browse_waiting', '抖音刷视频暂停六小时', { reason: feed.reason });
+        return feed;
+      }
+      const selected = chooseDouyinBrowseVideo(feed.items, douyinVideoNotes());
+      if (!selected) {
+        kvSet('douyin:browse-next', String(Date.now() + 30 * 60000));
+        return { skipped: true, reason: '这批视频都看过了' };
+      }
+      const result = await understandDouyinVideo(selected.id, { llm: this.llm });
+      kvSet('douyin:browse-next', String(Date.now() + (result.ok ? 30 * 60000 : 6 * 3600000)));
+      if (!result.ok) addEvent('douyin_browse_waiting', '抖音刷视频暂停六小时', { reason: result.reason });
+      return result;
+    } catch (error) {
+      kvSet('douyin:browse-next', String(Date.now() + 6 * 3600000));
+      throw error;
+    } finally {
+      this.douyinBrowseBusy = false;
+    }
   }
 
   async pollSentinel() {
@@ -152,10 +225,12 @@ export class Scheduler {
     if (this.qzoneTimer) clearInterval(this.qzoneTimer);
     if (this.xTimer) clearInterval(this.xTimer);
     if (this.xhsTimer) clearInterval(this.xhsTimer);
+    if (this.douyinTimer) clearInterval(this.douyinTimer);
     if (this.sentinelTimer) clearInterval(this.sentinelTimer);
     this.timer = null;
     this.qzoneTimer = null;
     this.xhsTimer = null;
+    this.douyinTimer = null;
     this.xTimer = null;
     this.sentinelTimer = null;
     this.xBusy = false;
@@ -348,7 +423,7 @@ export class Scheduler {
           } else {
             kvSet('xhs_graph_day', day);
           }
-    if (!graph.ok) return;
+          if (graph.ok) {
           const before = Number(kvGet('xhs_fans_count', '0') || 0);
           const now = Number(graph?.fans?.count || 0);
           if (before && now !== before) {
@@ -368,6 +443,7 @@ export class Scheduler {
                 note: '认出来了',
               });
             }
+          }
           }
         }
       } catch (error) {

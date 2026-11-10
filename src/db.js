@@ -674,6 +674,18 @@ export function costSummary(days = 7) {
     .get(today);
   const todayPromptTokens = Number(todayRow?.prompt_tokens || 0);
   const todayCompletionTokens = Number(todayRow?.completion_tokens || 0);
+  const socialCosts = getDb().prepare(`SELECT
+    CASE
+      WHEN kind = 'post:qzone' OR kind GLOB 'qzone_*' THEN 'qzone'
+      WHEN kind = 'post:xhs' OR kind GLOB 'xhs_*' THEN 'xhs'
+      WHEN kind = 'post:douyin' THEN 'douyin'
+      WHEN kind GLOB 'x_*' THEN 'x'
+      WHEN kind = 'comments' THEN 'shared'
+    END AS platform,
+    COUNT(*) AS calls, SUM(prompt_tokens + completion_tokens) AS tokens,
+    SUM(cost_cny) AS estimatedCny, SUM(usage_estimated) AS estimatedCalls
+    FROM costs WHERE created_at >= ?
+    GROUP BY platform HAVING platform IS NOT NULL`).all(today);
   const breakdown = getDb().prepare(`SELECT
     CASE WHEN instr(kind,':') > 0 THEN substr(kind,1,instr(kind,':')-1) ELSE kind END AS feature,
     count(*) AS attempts, count(DISTINCT nullif(request_id,'')) AS tasks,
@@ -700,6 +712,7 @@ export function costSummary(days = 7) {
   }
   return {
     breakdown,
+    socialCosts,
     days,
     calls: Number(row?.calls || 0),
     promptTokens: Number(row?.prompt_tokens || 0),

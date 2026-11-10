@@ -1,5 +1,5 @@
 import { loadSettings } from './config.js';
-import { addEvent, addPost, deletePost, getDb, getPost, listPosts, recentUserMessages, updatePost } from './db.js';
+import { addEvent, addPost, deletePost, getDb, getPost, kvGetJson, listPosts, recentUserMessages, updatePost } from './db.js';
 import { publishQzone, qzoneStatus } from './channels/qzone.js';
 import { logger } from './logger.js';
 import { getMood } from './mood.js';
@@ -10,13 +10,29 @@ import { beginEffect, finishEffect, failEffect, DeliveryUnknownError } from './e
 
 export const PLATFORM_LABELS = { qzone: 'QQ 空间', xhs: '小红书', douyin: '抖音' };
 
-export async function generatePost({ llm, kind = 'qzone' }) {
+export function resolveSocialNewsSource(topic, sourceUrl) {
+  if (!sourceUrl) return null;
+  const cached = kvGetJson('social:news', null);
+  const found = cached?.items?.find(item => item.url === sourceUrl && item.title === String(topic || '').trim());
+  const fetchedAt = Date.parse(cached?.fetchedAt || '');
+  if (!found || !Number.isFinite(fetchedAt) || Date.now() - fetchedAt >= 30 * 60000 || !/^https?:\/\//i.test(found.url || '')) {
+    throw Object.assign(new Error('资讯候选已过期或选题已修改，请重新搜索并选择'), { status: 409 });
+  }
+  return { title: String(found.title || '').slice(0, 120), url: String(found.url || '').slice(0, 2000), snippet: String(found.snippet || '').slice(0, 500), fetchedAt: cached.fetchedAt };
+}
+
+export async function generatePost({ llm, kind = 'qzone', topic = '', source = null }) {
   if (!Object.hasOwn(PLATFORM_LABELS, kind)) throw new Error('不支持的平台');
   const settings = loadSettings();
+  const publicTopic = String(topic || '').trim().slice(0, 300);
+  if (publicTopic) {
+    const topicGate = assertPublicContent(publicTopic, { settings, hisMessages: recentUserMessages(60) });
+    if (!topicGate.ok) throw new Error(`选题包含私密信息：${topicGate.reason}`);
+  }
   const mood = getMood();
   const messages = [
     { role: 'system', content: '你只输出合法的 JSON 对象，不要 markdown，不要解释。' },
-    { role: 'user', content: buildPostPrompt({ settings, mood, block: { mid: [] }, kind }) },
+    { role: 'user', content: buildPostPrompt({ settings, mood, block: { mid: [] }, kind, topic: publicTopic, source }) },
   ];
   let data;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -33,7 +49,7 @@ export async function generatePost({ llm, kind = 'qzone' }) {
     addEvent('post_blocked', '公开草稿包含私密信息，未保存', { reason: gate.reason });
     throw new Error(`这条不能公开写：${gate.reason}`);
   }
-  const post = addPost({ kind, title, content, tags, status: 'draft', meta: { hook: String(data.hook || ''), mood: mood.label, generatedAt: nowIso(), aiGenerated: true } });
+  const post = addPost({ kind, title, content, tags, status: 'draft', meta: { hook: String(data.hook || ''), topic: publicTopic, source, mood: mood.label, generatedAt: nowIso(), aiGenerated: true } });
   addEvent('post', `她写了一条${PLATFORM_LABELS[kind]}草稿`, { postId: post.id });
   return post;
 }

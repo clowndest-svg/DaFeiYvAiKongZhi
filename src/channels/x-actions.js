@@ -6,7 +6,8 @@
 // 3) 他的账号（xOwnerHandle）的推文和评论必须回，不占陌生人的额度——但风控冷却照守，那是账号安全。
 
 import { loadSettings } from '../config.js';
-import { addEvent, kvGet, kvGetJson, kvSet, kvSetJson } from '../db.js';
+import { addEvent, kvGet, kvGetJson, kvSet, kvSetJson, recentUserMessages } from '../db.js';
+import { assertPublicContent } from '../privacy.js';
 import { logger } from '../logger.js';
 import { buildXReplyPrompt } from '../prompt.js';
 import { parseJsonLoose } from '../util.js';
@@ -340,8 +341,13 @@ export async function processXOwnReplies({ llm, maxTweets = 3, maxReplies = 2, f
 }
 
 // 起草一条推文（只填不发）。
-export async function draftXPost({ topic = '', llm } = {}) {
+export async function draftXPost({ topic = '', source = null, llm } = {}) {
   const social = loadSettings().social || {};
+  const publicTopic = String(topic || '').trim().slice(0, 300);
+  if (publicTopic) {
+    const gate = assertPublicContent(publicTopic, { settings: loadSettings(), hisMessages: recentUserMessages(60) });
+    if (!gate.ok) return { ok: false, reason: `选题包含私密信息：${gate.reason}` };
+  }
   if (!social.xEnabled) return { ok: false, reason: 'X（推特）互动未开启' };
   const budget = canActX('post');
   if (!budget.ok) return { ok: false, reason: budget.reason };
@@ -354,7 +360,7 @@ export async function draftXPost({ topic = '', llm } = {}) {
     const result = await llm.chat(
       [
         { role: 'system', content: '你只输出严格 JSON，不要 markdown。' },
-        { role: 'user', content: buildXPostPrompt({ settings, mood: getMood(), topic }) },
+        { role: 'user', content: buildXPostPrompt({ settings, mood: getMood(), topic: publicTopic, source }) },
       ],
       { kind: 'x_post', model: settings.model.name, temperature: 0.9, maxTokens: 220, reasoningEffort: 'low', responseFormat: { type: 'json_object' }, mockKind: 'x_post' },
     );
@@ -366,7 +372,7 @@ export async function draftXPost({ topic = '', llm } = {}) {
     recordXActivity({ type: 'draft', text: '', note: '她今天没什么想说', ok: true });
     return { ok: false, reason: '她今天没什么想说的', skipped: true };
   }
-  const filled = await fillXPost({ text });
+  const filled = await fillXPost({ text, source });
   if (!filled.ok) return filled;
   recordXActivity({ type: 'draft', text, note: '已填进输入框，等他点发布' });
   return { ok: true, drafted: true, published: false, fillId: filled.fillId, text, chars: text.length };

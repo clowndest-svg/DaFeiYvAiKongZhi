@@ -6,7 +6,7 @@ import { reserveCost, settleCost, uncertainCost } from './cost-reservations.js';
 import { logger } from './logger.js';
 import { estimateMessagesTokens, estimateTokens, sleep } from './util.js';
 import crypto from 'node:crypto';
-import { boundedBackground } from './llm-policy.js';
+import { boundedBackground, socialTask } from './llm-policy.js';
 import { officialRate } from './pricing.js';
 
 const USD_TO_CNY = 7.15;
@@ -83,6 +83,8 @@ function mockJson(mockKind) {
       return { title: '测试标题', hook: '你有过这种瞬间吗？', content: '测试口播文案。', tags: ['日常'] };
     case 'comments':
       return { comments: ['这个我也想看！', '哈哈哈哈太真实了', '下次带上我一起呗'] };
+    case 'douyin:browse':
+      return { summary: '测试视频里在演示一道家常菜的做法，画面是厨房操作台。', topics: ['美食', '家常菜'], tone: '轻松' };
     case 'group_decision':
       return { reply: true, reason: '测试群聊判断' };
     case 'qzone_decision':
@@ -145,7 +147,7 @@ export class DeepSeek {
       max_tokens: Math.max(256, Number(opts.maxTokens || 1400)),
       stream: Boolean(opts.stream),
     };
-    const thinking = opts.thinking ?? (boundedBackground(opts.kind) ? false : undefined);
+    const thinking = opts.thinking ?? (boundedBackground(opts.kind) || socialTask(opts.kind) ? false : undefined);
     if (thinking !== undefined) body.thinking = { type: thinking ? 'enabled' : 'disabled' };
     if (opts.reasoningEffort && thinking !== false) body.reasoning_effort = opts.reasoningEffort;
     if (opts.responseFormat) body.response_format = opts.responseFormat;

@@ -12,7 +12,7 @@ import { listSenses } from './senses.js';
 import { buildChatPayload } from './prompt.js';
 import { scheduleReflection, reflectionBusy } from './reflect.js';
 import { chatThinking } from './llm-policy.js';
-import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb } from './search.js';
+import { extractReadableUrl, formatPageNote, formatSearchNote, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb, resolveSearchQuery, isSearchConfirmation, EXPLICIT_SEARCH } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
@@ -92,6 +92,14 @@ export class Companion {
       meta: { ...inputDeliveryMeta, hasImage: cleanImages.length > 0, displayName },
       tokens: estimateTokens(cleanText) + cleanImages.length * 900,
     });
+
+    // 搜索/读页说明跟着这条消息落库：下一轮模型还能看见真实结果，
+    // 不会凭印象编"翻出来的都是…"（11-10 QQ 截图里她就是这么翻车的）。
+    // 说明是多行块（条目/来源网址都在后续行），从标记行起整段收下，不能只留标题行。
+    const contextLines = String(extraContext || '').split('\n');
+    const noteStart = contextLines.findIndex((line) => /^【(刚刚联网搜到的|联网搜索的结果|他发的那个链接，我读到的内容|他发的链接)】/.test(line));
+    const searchNote = noteStart >= 0 ? contextLines.slice(noteStart).join('\n') : '';
+    if (searchNote) updateMessageMeta(userMessage.id, { searchNote: searchNote.slice(0, 1600) });
 
     const restricted = channel === 'qq-group' || channel === 'qq-guest';
     const history = getMessagesForPrompt(active.id, settings.memory.shortTurns)
@@ -292,8 +300,19 @@ export class Companion {
         notePageRead(read, channel);
         return formatPageNote(read);
       }
-      if (!needsSearch(opts.text || '')) return '';
-      const found = await searchWeb(opts.text);
+      const explicit = EXPLICIT_SEARCH.test(opts.text || '');
+      const confirmation = isSearchConfirmation(opts.text || '');
+      if (!needsSearch(opts.text || '') && !explicit && !confirmation) return '';
+      const session = opts.sessionId ? getSession(opts.sessionId) : getActiveSession();
+      const previous = session
+        ? getMessagesForPrompt(session.id, 8).filter((m) => m.role === 'user' && ['web', 'qq'].includes(m.channel || 'web')).slice(-4).map((m) => m.content)
+        : [];
+      const query = resolveSearchQuery(opts.text, previous);
+      if (!query) {
+        if (!explicit && !confirmation) return '';
+        return '【联网搜索的结果】他让你去查，但这句话里没说要查什么，也没接住他刚才问的事。这次没搜。直接问他要查哪件事，别编搜索过程，也别拿不相干的词去搜。';
+      }
+      const found = await searchWeb(query, { queryOverride: query });
       noteSearchEvent(found, channel);
       return formatSearchNote(found);
     } catch (error) {

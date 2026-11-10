@@ -6,9 +6,9 @@ import { costReservationStatus } from './cost-reservations.js';
 
 // 名单和消费点必须两边对上（tests/budget-gate.test.js 会逐条核对）：
 // 漏注册 = 熔断线到了它还照样花钱；注册了没人查 = 名单上写着暂停，其实没人执行。
-export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'look', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
+export const COST_FEATURES = ['proactive', 'selfFollowUp', 'voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'douyinAuto', 'look', 'daily', 'weekly', 'dream', 'reflect', 'compact', 'handover', 'search'];
 // 余额低只停"她自己主动花"的部分；回他、看他发来的东西、帮他查资料照旧。
-export const LOW_BALANCE_PAUSE = ['voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'dream', 'weekly', 'reflect'];
+export const LOW_BALANCE_PAUSE = ['voice', 'xhsAuto', 'xAuto', 'qzoneAuto', 'douyinAuto', 'dream', 'weekly', 'reflect'];
 
 export function evaluateBudget({ balanceCny = null, todayCostCny = 0, settings }) {
   const cost = settings?.cost || {};

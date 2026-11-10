@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { DeepSeek, pricingFor } from '../src/llm.js';
 import { officialRate } from '../src/pricing.js';
 import { chatThinking } from '../src/llm-policy.js';
-import { addMessage, createSession, getDb, getMessage, costSummary, closeDb, kvSet } from '../src/db.js';
+import { addCost, addMessage, createSession, getDb, getMessage, costSummary, closeDb, kvSet } from '../src/db.js';
 import { loadSettings, saveSettings } from '../src/config.js';
 import { queueReflection, claimReflection, recoverReflections, finishReflection } from '../src/reflection-work.js';
 import { reflect } from '../src/reflect.js';
@@ -22,10 +22,27 @@ test('非思考后台请求受限，聊天模式可按复杂度或显式偏好�
   assert.deepEqual(body.thinking, { type: 'disabled' });
   assert.equal(body.reasoning_effort, undefined);
   assert.equal(body.max_tokens, 1100);
+  for (const kind of ['post:douyin', 'post:qzone', 'comments', 'x_post', 'x_reply', 'xhs_comment', 'xhs_reply']) {
+    assert.deepEqual(llm.buildBody([], { kind }).thinking, { type: 'disabled' });
+  }
+  assert.deepEqual(llm.buildBody([], { kind: 'x_post', thinking: true }).thinking, { type: 'enabled' });
   assert.equal(chatThinking('在干嘛', { model: {} }), false);
   assert.equal(chatThinking('请逐步分析这个算法', { model: {} }), true);
   assert.equal(chatThinking('在干嘛', { model: { thinkingMode: 'enabled' } }), true);
   assert.equal(chatThinking('推导公式', { model: { thinkingMode: 'disabled' } }), false);
+});
+
+test('社交费用按平台归类，通用评论单列且不包含聊天', () => {
+  const before = new Map(costSummary().socialCosts.map(row => [row.platform, row.calls]));
+  for (const kind of ['post:qzone', 'post:xhs', 'post:douyin', 'x_reply', 'xhs_reply', 'comments', 'chat']) {
+    addCost({ model: 'social-cost-fixture', kind, costCny: 0.001, promptTokens: 10, completionTokens: 5 });
+  }
+  const after = new Map(costSummary().socialCosts.map(row => [row.platform, row.calls]));
+  for (const [platform, added] of [['qzone', 1], ['xhs', 2], ['douyin', 1], ['x', 1], ['shared', 1]]) {
+    assert.equal(after.get(platform) - (before.get(platform) || 0), added);
+  }
+  assert.equal(after.has('chat'), false);
+  getDb().prepare("DELETE FROM costs WHERE model = 'social-cost-fixture'").run();
 });
 
 test('后台截断一次结算后停止，既不放大输出也不应用半截 JSON', async () => {

@@ -1,7 +1,12 @@
 const BACKGROUND_TASKS = new Set(['reflect', 'compact', 'handover']);
+const SOCIAL_TASKS = new Set(['post', 'comments', 'x_comment', 'x_reply', 'x_post', 'xhs_comment', 'xhs_reply']);
 
 export function boundedBackground(kind = '') {
   return BACKGROUND_TASKS.has(String(kind).split(':')[0]);
+}
+
+export function socialTask(kind = '') {
+  return SOCIAL_TASKS.has(String(kind).split(':')[0]);
 }
 
 export function chatThinking(text, settings) {

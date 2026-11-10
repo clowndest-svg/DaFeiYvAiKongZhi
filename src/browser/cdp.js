@@ -197,7 +197,7 @@ export class CdpBrowser {
     this.child = spawn(executable, args, {
       detached: true,
       stdio: 'ignore',
-      windowsHide: false,
+      windowsHide: !this.visible,
     });
     this.child.unref();
     this.launchedVisible = this.visible;

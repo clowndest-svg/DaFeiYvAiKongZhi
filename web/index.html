@@ -268,15 +268,24 @@
               </div>
             </div>
             <p class="alert-warn hidden" id="socialCostLine"></p>
+            <details class="card"><summary>抖音账号与视频发现（接入验证）</summary><div class="btn-row"><button type="button" id="douyinConnect">显示登录页面</button><button type="button" id="douyinConnectionRefresh">刷新页面预览</button><button type="button" id="douyinReadVideos">读取视频列表</button><button type="button" id="douyinReadOwnVideos">读取我的作品</button></div><p class="muted small">专用浏览器在后台运行，可在下方预览中扫码登录。预览用于查看页面，验证码操作仍需在原生页面完成。评论发送仍需实机验收。</p><p id="douyinConnectionState" role="status"></p><img id="douyinConnectionPreview" class="douyin-connection-preview" alt="抖音专用浏览器页面预览" hidden><div id="douyinVideos"></div></details>
+            <details class="card"><summary>抖音刷视频与内容理解</summary><label class="check"><input type="checkbox" id="douyinBrowseEnabled"> 自动刷视频并理解内容（每半小时一条、每天六条，走社交预算）</label><div class="btn-row"><button type="button" id="douyinReadNotes">读取理解笔记</button></div><p class="muted small">打开视频页采两帧画面，连同标题简介交给视觉模型；声音不接入。也可在上方视频列表里点「理解这条」手动看一条。笔记只保存在本机，供选题和评论参考。</p><div id="douyinVideoNotes" class="search-results"></div></details>
+            <details class="card"><summary>抖音评论读取</summary><label>视频链接或 ID<input id="douyinCommentVideo" maxlength="250" placeholder="https://www.douyin.com/video/…"></label><div class="btn-row"><button type="button" id="douyinReadComments">读取当前评论</button><button type="button" id="douyinCommentInbox">查看已记录评论</button><button type="button" id="douyinSendDraft" disabled>确认发送后台草稿</button><button type="button" id="douyinResolveSent" disabled>核对为已发送</button><button type="button" id="douyinResolveUnsent" disabled>核对为未发送</button><button type="button" id="douyinClearDraft">清除后台回复草稿</button></div><label class="check"><input type="checkbox" id="douyinMonitorEnabled" disabled> 定时检查已记录的视频评论（先查看记录以加载状态）</label><label class="check"><input type="checkbox" id="douyinAutoReply" disabled> 自动回复符合条件的新评论（待发送功能实机验收）</label><p class="muted small">每 30 分钟至多检查一个视频，失败后暂停六小时。发送尝试结果待核对时请到抖音确认。</p><div id="douyinComments"></div></details>
+            <details class="card"><summary>跨平台待处理与公共配图</summary><button type="button" id="socialWorkspaceRefresh">刷新工作区</button><p class="muted small">汇总最近 80 条动态中的待处理记录和最近保存的 X 填稿记录。公共配图可保存后用于各平台，使用前核对素材来源。</p><div id="socialWorkspaceList"></div><div id="socialWorkspaceAssets" class="btn-row"></div></details>
+            <details class="card"><summary>视频任务与成片素材</summary><button type="button" id="socialTasksRefresh">刷新任务</button><div id="socialTasksList"></div><p class="muted small">显示最近 30 次制作记录。中断或失败后可在原草稿重新制作，成片可下载后在抖音发布。</p></details>
+            <div class="card"><h3>今日社交模型费用</h3><p class="muted small" id="socialCostBreakdown">正在读取费用…</p><p class="muted small">按已记录的模型调用估算，通用评论建议单独显示；平台自身费用和待对账请求未计入。</p></div>
+            <div class="card"><div class="interaction-head"><div><h3>AI 资讯选题</h3><p class="muted small">搜索近期资讯作为候选，制作前核对原文日期与事实。查询成功后缓存 30 分钟。</p></div><button type="button" id="socialNewsRefresh">查找资讯</button></div><div id="socialNewsResults" class="search-results"></div></div>
             <div class="social-toolbar card">
               <div>
                 <h3>让她写一条</h3>
-                <p class="muted small">都会先存成草稿：说说 / 小红书 / 抖音。她不会写出你的真实信息。</p>
+                <p class="muted small">选题可供四个平台使用。X 草稿填入 X 编辑器，其他草稿保存在动态记录。</p>
+                <label>共用选题（可留空）<input id="socialTopic" maxlength="300" placeholder="例如：鲸鲸的日常"></label>
               </div>
               <div class="btn-row">
                 <button data-post-kind="qzone">QQ 空间说说</button>
                 <button data-post-kind="xhs">小红书笔记</button>
                 <button data-post-kind="douyin">抖音文案</button>
+                <button data-post-kind="x">X 草稿</button>
               </div>
             </div>
 
@@ -669,7 +678,7 @@
                 <label>只回最近多少小时内的评论 <input id="setQzoneAutoReplyAge" type="number" min="1" max="168"></label>
                 <p class="muted small">主人评论必回（在时限内）；其他人按内容/心情判断，广告、辱骂、敏感、刷屏不回。</p>
                 <label class="check"><input type="checkbox" id="setDouyinAuto" disabled> 抖音自动发布（未实现，仅草稿）</label>
-                <p class="muted small">自动发布是否开启看上面的开关。她发不发、发什么由她自己决定；公开内容还会过隐私闸门。抖音目前只有文案草稿。</p>
+                <p class="muted small">抖音目前支持文案草稿和评论建议。刷视频、发送评论、视频制作及自动发布尚未接入，发布需在抖音手动完成。</p>
                 <details class="qzone-cookie-box settings-group">
                   <summary>QQ 空间 Cookie（自动发说说用）</summary>
                   <p class="muted small">用机器人小号登录 <code>user.qzone.qq.com</code>，F12 → Network → 刷新 → 点 user.qzone.qq.com 请求 → 复制整个 <code>Cookie</code> 请求头（不要只抄四个字段）。只保存在本机 <code>data/qzone-cookie.json</code>，不会上传。</p>

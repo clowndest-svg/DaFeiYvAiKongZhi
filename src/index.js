@@ -1,4 +1,6 @@
 import http from 'node:http';
+import { readDouyinVideos, readDouyinOwnVideos, readDouyinComments, draftDouyinReply, sendDouyinReply, resolveDouyinReply, douyinReplyDraft, clearDouyinReplyDraft, douyinCommentInbox, douyinAutoQueue, douyinConnection, douyinVideoNotes, understandDouyinVideo } from './channels/douyin.js';
+import { renderSocialVideo, socialVideoTasks } from './social-video.js';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { backgroundStatus } from './background-status.js';
@@ -276,6 +278,7 @@ import {
   listAllPosts,
   markPosted,
   removePost,
+  resolveSocialNewsSource,
   tryAutoPublish,
   PLATFORM_LABELS,
 } from './social.js';
@@ -321,6 +324,7 @@ const MIME = {
   '.woff2': 'font/woff2',
   '.mp3': 'audio/mpeg',
   '.wav': 'audio/wav',
+  '.mp4': 'video/mp4',
 };
 
 const llm = new DeepSeek();
@@ -877,6 +881,99 @@ async function handleApi(req, res, pathname, url) {
     return sendJson(res, 200, { posts: listAllPosts(80), labels: PLATFORM_LABELS });
   }
 
+  if (pathname === '/api/social/video-tasks' && method === 'GET') {
+    return sendJson(res, 200, { tasks: socialVideoTasks() });
+  }
+
+  if (pathname === '/api/douyin/videos' && method === 'POST') {
+    return sendJson(res, 200, await readDouyinVideos());
+  }
+
+  if (pathname === '/api/douyin/own-videos' && method === 'POST') {
+    return sendJson(res, 200, await readDouyinOwnVideos());
+  }
+
+  if (pathname === '/api/douyin/comments' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await readDouyinComments(body.video));
+  }
+
+  if (pathname === '/api/douyin/reply-draft' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await draftDouyinReply(body));
+  }
+
+  if (pathname === '/api/douyin/comment-inbox' && method === 'GET') {
+    return sendJson(res, 200, { videos: douyinCommentInbox(), draft: douyinReplyDraft(), autoQueue: douyinAutoQueue(), autoReply: kvGetJson('douyin:auto-reply', false) === true, sendAvailable: process.env.BIZHI_DOUYIN_REPLY_ENABLED === '1', monitoring: kvGetJson('douyin:monitor-enabled', false) === true });
+  }
+
+  if (pathname === '/api/douyin/auto-reply' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, '请选择开启或关闭');
+    if (body.enabled && process.env.BIZHI_DOUYIN_REPLY_ENABLED !== '1') throw new HttpError(409, '发送功能尚未完成实机验收');
+    const account = kvGet('douyin:account', '');
+    if (body.enabled && (!account || !kvGet(`douyin:author:${account}`, ''))) throw new HttpError(409, '请先读取本人作品中的作者评论以确认账号标识');
+    kvSetJson('douyin:auto-reply', body.enabled);
+    return sendJson(res, 200, { ok: true, enabled: body.enabled });
+  }
+
+  if (pathname === '/api/douyin/reply-draft/clear' && method === 'POST') {
+    return sendJson(res, 200, await clearDouyinReplyDraft());
+  }
+
+  if (pathname === '/api/douyin/reply-draft/send' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await sendDouyinReply(String(body.draftId || '')));
+  }
+
+  if (pathname === '/api/douyin/reply-draft/resolve' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await resolveDouyinReply(String(body.draftId || ''), body.delivered));
+  }
+
+  if (pathname === '/api/douyin/monitor' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, '请选择开启或关闭');
+    kvSetJson('douyin:monitor-enabled', body.enabled);
+    return sendJson(res, 200, { ok: true, monitoring: body.enabled });
+  }
+
+  if (pathname === '/api/douyin/connect' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await douyinConnection({ login: body.login === true }));
+  }
+
+  if (pathname === '/api/douyin/browse' && method === 'POST') {
+    const body = await readJsonBody(req);
+    if (typeof body.enabled !== 'boolean') throw new HttpError(400, '请选择开启或关闭');
+    if (body.enabled && !kvGet('douyin:account', '')) throw new HttpError(409, '请先读取我的作品完成账号绑定');
+    kvSetJson('douyin:browse-enabled', body.enabled);
+    return sendJson(res, 200, { ok: true, enabled: body.enabled });
+  }
+
+  if (pathname === '/api/douyin/video-notes' && method === 'GET') {
+    return sendJson(res, 200, { notes: douyinVideoNotes(), browseEnabled: kvGetJson('douyin:browse-enabled', false) === true, today: Number(kvGet(`douyin:browse-count:${shanghaiDayKey()}`, '0')) || 0 });
+  }
+
+  if (pathname === '/api/douyin/understand' && method === 'POST') {
+    const body = await readJsonBody(req);
+    return sendJson(res, 200, await understandDouyinVideo(body.videoId, { llm }));
+  }
+
+  if (pathname === '/api/social/workspace' && method === 'GET') {
+    const posts = listAllPosts(80);
+    const xFill = kvGetJson('x_last_fill', null);
+    return sendJson(res, 200, {
+      pending: posts.filter(post => post.status !== 'posted').map(post => ({
+        id: `post-${post.id}`, platform: post.kind, title: post.title || post.content.slice(0, 60), status: post.status,
+      })),
+      xDraft: xFill ? { text: String(xFill.text || '').slice(0, 300), at: xFill.at, account: xFill.handle || '', status: 'filled', source: xFill.source || null } : null,
+      images: listXhsImages().slice(0, 60).map(image => ({ name: image.name, bytes: image.bytes })),
+      videoTasks: socialVideoTasks(),
+      limits: { posts: 80, images: 60, videoTasks: 30 },
+    });
+  }
+
   if (pathname.startsWith('/api/posts/') && method === 'DELETE') {
     const id = Number(pathname.split('/').pop());
     const post = Number.isFinite(id) ? getPost(id) : null;
@@ -893,7 +990,33 @@ async function handleApi(req, res, pathname, url) {
     const body = await readJsonBody(req);
     const kind = PLATFORM_LABELS[body.kind] ? body.kind : 'qzone';
     try {
-      const post = await generatePost({ llm, kind });
+      const source = resolveSocialNewsSource(body.topic, body.sourceUrl);
+      const post = await generatePost({ llm, kind, topic: body.topic, source });
+      return sendJson(res, 200, { ok: true, post });
+    } catch (error) {
+      return sendJson(res, Number(error.status) || 500, { error: errorMessage(error) });
+    }
+  }
+
+  if (pathname === '/api/social/news' && method === 'POST') {
+    return withActionLock('social-news', async () => {
+      const cached = kvGetJson('social:news', null);
+      if (cached && Date.now() - Date.parse(cached.fetchedAt) < 30 * 60000) {
+        return sendJson(res, 200, { ...cached, cached: true });
+      }
+      const date = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Taipei' });
+      const found = await searchWeb(`AI 人工智能 官方 新模型 发布 ${date}`, { limit: 5 });
+      noteSearchEvent(found, 'social-news');
+      const result = { ok: found.ok, items: found.items || [], reason: found.reason || '', fetchedAt: new Date().toISOString() };
+      if (found.ok && result.items.length) kvSetJson('social:news', result);
+      return sendJson(res, 200, result);
+    });
+  }
+
+  const videoAction = pathname.match(/^\/api\/posts\/(\d+)\/video$/);
+  if (videoAction && method === 'POST') {
+    try {
+      const post = await renderSocialVideo(Number(videoAction[1]));
       return sendJson(res, 200, { ok: true, post });
     } catch (error) {
       return sendJson(res, Number(error.status) || 500, { error: errorMessage(error) });
@@ -1628,7 +1751,8 @@ async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/x/draft' && method === 'POST') {
     const body = await readJsonBody(req);
     const text = String(body.text || '').trim();
-    const out = text ? await fillXPost({ text }) : await draftXPost({ topic: String(body.topic || ''), llm });
+    const source = resolveSocialNewsSource(body.topic, body.sourceUrl);
+    const out = text ? await fillXPost({ text }) : await draftXPost({ topic: String(body.topic || ''), source, llm });
     if (!out.ok) throw new HttpError(409, out.reason || '这条稿子没填成');
     addEvent('x_draft', '她把一条推文填进了输入框（没发）', { chars: out.chars || text.length, fillId: out.fillId });
     return sendJson(res, 200, { ok: true, ...out, budget: xBudgetStatus() });

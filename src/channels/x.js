@@ -732,7 +732,7 @@ async function replyToTweetLocked(href, text) {
 }
 
 // 发推：只填不发。真发必须走 publishFilledXPost（界面上他点一下"发布"）。
-async function fillXPostLocked({ text = '' } = {}) {
+async function fillXPostLocked({ text = '', source = null } = {}) {
   const content = String(text || '').replace(/\s+/g, ' ').trim().slice(0, 260);
   if (!content) throw new Error('要发的内容不能为空');
   assertXAction('read');
@@ -760,7 +760,7 @@ async function fillXPostLocked({ text = '' } = {}) {
   if (normalizeTyped(readback.text) !== content) throw new Error(`内容没有真的填进去（${firstDifference(content, readback.text)}；读到：${readback.text.slice(0, 40)}）`);
   if (readback.risky) throw new Error('X 页面有限流/报错提示，这次没有填稿');
   const id = hashText(`${kvGet('x_self_handle')}|${content}`);
-  kvSetJson('x_last_fill', { id, handle: kvGet('x_self_handle'), text: content, at: nowIso() });
+  kvSetJson('x_last_fill', { id, handle: kvGet('x_self_handle'), text: content, source, at: nowIso() });
   logger.info('X 稿子已填进输入框（没发）', { chars: content.length, openedBox: Boolean(opened) });
   return { ok: true, filled: true, published: false, fillId: id, chars: content.length, ready: readback.ready, at: nowIso() };
 }
@@ -811,8 +811,8 @@ async function publishFilledXPostLocked({ fillId = '' } = {}) {
   kvSet(dayKey, String(Number(kvGet(dayKey, '0')) + 1));
   kvSet('x_last_publish_at', nowIso());
   kvSetJson('x_last_fill', null);
-  finishEffect(effectKey, { ok: true, published: true, chars: fill.text.length });
-  addEvent('x_post', '她发了一条推特', { chars: fill.text.length, verified: after.outgoing });
+  finishEffect(effectKey, { ok: true, published: true, chars: fill.text.length, source: fill.source || null });
+  addEvent('x_post', '她发了一条推特', { chars: fill.text.length, verified: after.outgoing, source: fill.source || null });
   return { ok: true, published: true, at: nowIso(), chars: fill.text.length };
 }
 

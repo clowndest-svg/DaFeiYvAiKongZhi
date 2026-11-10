@@ -308,6 +308,11 @@ function renderStatus() {
   $('#barAffection').style.width = `${Math.min(100, Math.round(Number(mood.affection) || 0))}%`;
 
   const costs = status.costs || {};
+  const socialCosts = costs.socialCosts || [];
+  const socialCostNames = { qzone: 'QQ 空间', xhs: '小红书', x: 'X', douyin: '抖音', shared: '通用评论建议' };
+  $('#socialCostBreakdown').textContent = socialCosts.length
+    ? socialCosts.map(row => `${socialCostNames[row.platform] || row.platform} ${money(row.estimatedCny)} · ${fmtNum(row.tokens)} tokens`).join('　|　')
+    : '今天暂无已记录的社交模型费用';
   $('#todayCost').textContent = money(costs.todayCostCny);
   $('#todayTokens').textContent = fmtNum(costs.todayTokens);
   renderCostBreakdown(costs);
@@ -1449,10 +1454,24 @@ function renderPosts() {
     const card = el('div', 'card post-card');
     const head = el('div', 'post-head');
     head.appendChild(el('span', `platform-chip ${post.kind}`, state.labels[post.kind] || post.kind));
-    const statusMap = { draft: '草稿', approved: '已批准', posted: '已发布' };
-    head.appendChild(el('span', `status-chip ${post.status}`, statusMap[post.status] || post.status));
+    const statusMap = { draft: '草稿', approved: '已批准', publishing: '发布中', unknown: '结果待核对', posted: '已发布' };
+    let statusLabel = statusMap[post.status] || post.status;
+    if (post.status === 'posted') {
+      statusLabel = post.meta?.publicationVerified === true ? '平台已确认' : post.meta?.publicationVerified === false ? '手动标记已发布' : '历史发布记录';
+    }
+    head.appendChild(el('span', `status-chip ${post.status}`, statusLabel));
     card.appendChild(head);
     if (post.title) card.appendChild(el('h4', '', post.title));
+    if (post.meta?.topic) card.appendChild(el('p', 'muted small', `选题：${post.meta.topic}`));
+    const sourceUrl = safeExternalUrl(post.meta?.source?.url);
+    if (sourceUrl) {
+      const source = el('a', 'link-btn', `核对来源：${post.meta.source.title || '资讯原文'}`);
+      source.href = sourceUrl;
+      source.target = '_blank';
+      source.rel = 'noopener noreferrer';
+      card.appendChild(source);
+      card.appendChild(el('p', 'muted small', `搜索时间 ${new Date(post.meta.source.fetchedAt).toLocaleString('zh-CN')} · 发布前核对原文`));
+    }
     if (post.meta?.hook) card.appendChild(el('p', 'muted small', `钩子：${post.meta.hook}`));
     card.appendChild(el('div', 'post-body', post.content));
     if (post.tags?.length) {
@@ -1462,8 +1481,32 @@ function renderPosts() {
     }
     card.appendChild(el('p', 'muted small', `${new Date(post.created_at).toLocaleString('zh-CN')} · AI 生成，发布前请确认`));
     if (post.error) card.appendChild(el('p', 'small', `上次失败：${post.error}`));
+    if (post.meta?.video?.fallbackReason) card.appendChild(el('p', 'muted small', `配音提示：${post.meta.video.fallbackReason}`));
+    if (post.meta?.video?.rvc?.attempted && !post.meta.video.rvc.ok) card.appendChild(el('p', 'muted small', `变声未完成：${post.meta.video.rvc.reason || '已使用原始语音'}`));
 
     const actions = el('div', 'post-actions');
+    if (post.kind === 'douyin' && post.status === 'approved') {
+      const video = el('button', '', '制作口播视频');
+      video.addEventListener('click', () => withBusy(video, async () => {
+        try {
+          await api(`/api/posts/${post.id}/video`, { method: 'POST' });
+          toast('视频已制作，请预览后在抖音手动发布。');
+          await loadPosts();
+        } catch (error) { toast(error.message, 'error'); }
+      }));
+      actions.appendChild(video);
+    }
+    if (/^douyin-\d+-[a-f0-9-]+\.mp4$/.test(post.meta?.video?.file || '')) {
+      const preview = el('a', 'link-btn', '预览视频');
+      preview.href = `/media/${post.meta.video.file}`;
+      preview.target = '_blank';
+      preview.rel = 'noopener noreferrer';
+      actions.appendChild(preview);
+      const download = el('a', 'link-btn', '下载视频');
+      download.href = preview.href;
+      download.download = post.meta.video.file;
+      actions.appendChild(download);
+    }
     if (post.status === 'draft') {
       const approve = el('button', '', '批准');
       approve.addEventListener('click', () => withBusy(approve, async () => {
@@ -1535,9 +1578,18 @@ function renderPosts() {
   }
 }
 
+let socialNewsSelection = null;
+
 async function generatePost(kind) {
   try {
-    await api('/api/posts/generate', { method: 'POST', body: { kind } });
+    if (kind === 'x') {
+      const topic = $('#socialTopic').value.trim();
+      const result = await api('/api/x/draft', { method: 'POST', body: { topic, sourceUrl: socialNewsSelection?.title === topic ? socialNewsSelection.url : '' } });
+      toast(result.drafted ? 'X 草稿已填入编辑器，等待发布。' : '已填入 X 编辑器，请检查后发布。');
+      return;
+    }
+    const topic = $('#socialTopic').value.trim();
+    await api('/api/posts/generate', { method: 'POST', body: { kind, topic, sourceUrl: socialNewsSelection?.title === topic ? socialNewsSelection.url : '' } });
     toast('草稿写好了，你看看。');
     await loadPosts();
   } catch (error) {
@@ -3173,6 +3225,290 @@ function bindMemory() {
 }
 
 function bindSocial() {
+  let currentDouyinDraft = null;
+  let douyinSendAvailable = false;
+  function showDouyinComment(box, comment, videoId) {
+    const row = el('div', 'card');
+    row.appendChild(el('p', 'muted small', comment.text));
+    const draft = el('button', '', '生成回复建议');
+    const suggestions = el('div', 'muted small');
+    draft.addEventListener('click', () => withBusy(draft, async () => {
+      try {
+        const result = await api('/api/social/comments', { method: 'POST', body: { platform: 'douyin', context: `请针对下面这条评论写回复：\n${comment.text}` } });
+        suggestions.textContent = '';
+        for (const text of result.comments || []) {
+          const copy = el('button', '', `复制：${text}`);
+          copy.addEventListener('click', () => copyText(text));
+          suggestions.appendChild(copy);
+          if (/^\d{5,25}$/.test(comment.id || '') && /^\d{5,25}$/.test(videoId || '')) {
+            const fill = el('button', '', '填入抖音回复框');
+            fill.addEventListener('click', () => withBusy(fill, async () => {
+              try {
+                const result = await api('/api/douyin/reply-draft', { method: 'POST', body: { videoId, commentId: comment.id, text } });
+                toast(result.ok ? '已填入后台回复框，请查看记录并核对后发送。' : result.reason || '填入失败', result.ok ? undefined : 'error');
+              } catch (error) { toast(error.message, 'error'); }
+            }));
+            suggestions.appendChild(fill);
+          }
+        }
+        if (!result.comments?.length) suggestions.textContent = '没有生成可用回复';
+      } catch (error) { toast(error.message, 'error'); }
+    }));
+    row.appendChild(draft);
+    row.appendChild(suggestions);
+    box.appendChild(row);
+  }
+  $('#douyinCommentInbox').addEventListener('click', () => withBusy($('#douyinCommentInbox'), async () => {
+    const box = $('#douyinComments');
+    try {
+      const result = await api('/api/douyin/comment-inbox');
+      currentDouyinDraft = result.draft || null;
+      douyinSendAvailable = result.sendAvailable === true;
+      $('#douyinSendDraft').disabled = !douyinSendAvailable || currentDouyinDraft?.state !== 'ready' || !currentDouyinDraft?.id;
+      $('#douyinResolveSent').disabled = currentDouyinDraft?.state !== 'attempted';
+      $('#douyinResolveUnsent').disabled = currentDouyinDraft?.state !== 'attempted';
+      $('#douyinMonitorEnabled').checked = result.monitoring === true;
+      $('#douyinMonitorEnabled').disabled = false;
+      $('#douyinAutoReply').checked = result.autoReply === true;
+      $('#douyinAutoReply').disabled = !douyinSendAvailable;
+      box.textContent = '';
+      if (result.draft) box.appendChild(el('p', 'muted small', `后台有未发送回复草稿：${result.draft.text}。清除前其他抖音读取会暂停。`));
+      for (const task of result.autoQueue || []) {
+        box.appendChild(el('p', 'muted small', `自动回复 · 视频 ${task.videoId} · 评论 ${task.commentId} · ${task.state}${task.reason ? ` · ${task.reason}` : ''}`));
+      }
+      for (const video of result.videos || []) {
+        box.appendChild(el('h4', '', `视频 ${video.videoId} · 更新于 ${new Date(video.readAt).toLocaleString('zh-CN')}`));
+        for (const comment of video.comments || []) showDouyinComment(box, comment, video.videoId);
+      }
+      if (!result.videos?.length) box.appendChild(el('p', 'muted small', '暂无已记录评论'));
+    } catch (error) { box.textContent = error.message; }
+  }));
+  $('#douyinClearDraft').addEventListener('click', () => withBusy($('#douyinClearDraft'), async () => {
+    try {
+      await api('/api/douyin/reply-draft/clear', { method: 'POST' });
+      currentDouyinDraft = null;
+      $('#douyinSendDraft').disabled = true;
+      toast('后台回复草稿已清除');
+    } catch (error) { toast(error.message, 'error'); }
+  }));
+  for (const [selector, delivered] of [['#douyinResolveSent', true], ['#douyinResolveUnsent', false]]) {
+    $(selector).addEventListener('click', async () => {
+      if (!currentDouyinDraft || !confirm(delivered ? '已在抖音确认这条回复确实发出？' : '已在抖音确认这条回复没有发出？确认后可重新填稿发送。')) return;
+      await withBusy($(selector), async () => {
+        try {
+          await api('/api/douyin/reply-draft/resolve', { method: 'POST', body: { draftId: currentDouyinDraft.id, delivered } });
+          currentDouyinDraft = null;
+          toast('核对结果已记录，可清除后台草稿');
+        } catch (error) { currentDouyinDraft = null; toast(error.message, 'error'); }
+      });
+      $('#douyinResolveSent').disabled = true;
+      $('#douyinResolveUnsent').disabled = true;
+    });
+  }
+  $('#douyinSendDraft').addEventListener('click', async () => {
+    await withBusy($('#douyinSendDraft'), async () => {
+      try {
+        if (!currentDouyinDraft || !confirm(`向 ${currentDouyinDraft.target} 回复：\n${currentDouyinDraft.text}\n\n请核对视频 ${currentDouyinDraft.videoId} 和回复内容。`)) return;
+        const result = await api('/api/douyin/reply-draft/send', { method: 'POST', body: { draftId: currentDouyinDraft.id } });
+        currentDouyinDraft = null;
+        toast(result.delivered ? '回复已通过评论回执核对' : result.reason || '请在抖音核对发送结果', result.unknown ? 'error' : undefined);
+      } catch (error) { currentDouyinDraft = null; toast(error.message, 'error'); }
+    });
+    $('#douyinSendDraft').disabled = !douyinSendAvailable || !currentDouyinDraft;
+  });
+  $('#douyinMonitorEnabled').addEventListener('change', async event => {
+    try {
+      await api('/api/douyin/monitor', { method: 'POST', body: { enabled: event.target.checked } });
+    } catch (error) { event.target.checked = !event.target.checked; toast(error.message, 'error'); }
+  });
+  $('#douyinAutoReply').addEventListener('change', async event => {
+    try { await api('/api/douyin/auto-reply', { method: 'POST', body: { enabled: event.target.checked } }); }
+    catch (error) { event.target.checked = !event.target.checked; toast(error.message, 'error'); }
+  });
+  $('#douyinReadComments').addEventListener('click', () => withBusy($('#douyinReadComments'), async () => {
+    const box = $('#douyinComments');
+    try {
+      const result = await api('/api/douyin/comments', { method: 'POST', body: { video: $('#douyinCommentVideo').value.trim() } });
+      box.textContent = '';
+      if (!result.ok) { box.textContent = result.reason || '评论读取失败'; return; }
+      for (const item of result.items || []) showDouyinComment(box, item, result.videoId);
+      if (!result.items?.length) box.textContent = '当前页面没有加载出评论';
+    } catch (error) { box.textContent = error.message; }
+  }));
+  for (const [id, login] of [['#douyinConnect', true], ['#douyinConnectionRefresh', false]]) {
+    $(id).addEventListener('click', () => withBusy($(id), async () => {
+      try {
+        const result = await api('/api/douyin/connect', { method: 'POST', body: { login } });
+        $('#douyinConnectionState').textContent = result.verification ? '抖音要求验证' : result.loginPrompt ? '请使用目标运营账号扫码登录' : '页面已读取，请核对预览中的账号状态';
+        if (/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(result.screenshot || '')) {
+          $('#douyinConnectionPreview').src = result.screenshot;
+          $('#douyinConnectionPreview').hidden = false;
+        }
+      } catch (error) { toast(error.message, 'error'); }
+    }));
+  }
+  $('#douyinReadVideos').addEventListener('click', () => withBusy($('#douyinReadVideos'), async () => {
+    const box = $('#douyinVideos');
+    try {
+      const result = await api('/api/douyin/videos', { method: 'POST' });
+      box.textContent = '';
+      if (!result.ok) { box.textContent = result.reason || '视频读取未成功'; return; }
+      for (const item of result.items || []) {
+        const url = safeExternalUrl(item.url);
+        if (!url) { box.appendChild(el('p', 'muted small', item.title || '视频卡片')); continue; }
+        const row = el('div', 'btn-row');
+        const link = el('a', 'link-btn', item.title || '打开视频');
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+        row.appendChild(link);
+        if (item.id) {
+          const understand = el('button', '', '理解这条');
+          understand.type = 'button';
+          understand.addEventListener('click', () => withBusy(understand, async () => {
+            try {
+              const outcome = await api('/api/douyin/understand', { method: 'POST', body: { videoId: item.id } });
+              if (!outcome.ok) throw new Error(outcome.reason || '理解未成功');
+              toast('这条视频看完了，笔记已保存');
+              await loadDouyinNotes();
+            } catch (error) { toast(error.message, 'error'); }
+          }));
+          row.appendChild(understand);
+        }
+        box.appendChild(row);
+      }
+      if (result.partial) box.appendChild(el('p', 'muted small', '部分卡片没有提供可识别的视频地址，当前只显示页面文字。'));
+    } catch (error) { box.textContent = error.message; }
+  }));
+  $('#douyinReadOwnVideos').addEventListener('click', () => withBusy($('#douyinReadOwnVideos'), async () => {
+    const box = $('#douyinVideos');
+    try {
+      const result = await api('/api/douyin/own-videos', { method: 'POST' });
+      box.textContent = '';
+      if (!result.ok) { box.textContent = result.reason || '作品读取未成功'; return; }
+      box.appendChild(el('p', 'muted small', `已绑定抖音号 ${result.account}，读取 ${result.items.length} 条作品`));
+      for (const item of result.items) {
+        const url = safeExternalUrl(item.url);
+        if (!url) continue;
+        const link = el('a', 'link-btn', item.title || '打开作品');
+        link.href = url; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        box.appendChild(link);
+      }
+    } catch (error) { box.textContent = error.message; }
+  }));
+  async function loadDouyinNotes() {
+    const box = $('#douyinVideoNotes');
+    const result = await api('/api/douyin/video-notes');
+    $('#douyinBrowseEnabled').checked = result.browseEnabled === true;
+    box.textContent = '';
+    box.appendChild(el('p', 'muted small', `今天已看 ${result.today || 0} 条（自动上限 6 条）`));
+    for (const note of result.notes || []) {
+      const row = el('div', 'search-row');
+      const url = safeExternalUrl(note.url);
+      const title = url ? el('a', 'link-btn', note.title || note.videoId) : el('strong', '', note.title || note.videoId);
+      if (url) { title.href = url; title.target = '_blank'; title.rel = 'noopener noreferrer'; }
+      row.appendChild(title);
+      row.appendChild(el('p', 'muted small', `${note.summary || ''}${note.playing ? '' : '（采帧时未在播放，仅看到静帧）'}`));
+      if (note.topics?.length) row.appendChild(el('p', 'muted small', `话题：${note.topics.join('、')} · ${String(note.at || '').slice(0, 16).replace('T', ' ')}`));
+      box.appendChild(row);
+    }
+    if (!result.notes?.length) box.appendChild(el('p', 'muted small', '还没有理解笔记'));
+  }
+  $('#douyinReadNotes').addEventListener('click', () => withBusy($('#douyinReadNotes'), async () => {
+    try { await loadDouyinNotes(); } catch (error) { toast(error.message, 'error'); }
+  }));
+  $('#douyinBrowseEnabled').addEventListener('change', async event => {
+    try {
+      await api('/api/douyin/browse', { method: 'POST', body: { enabled: event.target.checked } });
+      toast(event.target.checked ? '已开始自动刷视频' : '已停止自动刷视频');
+    } catch (error) {
+      event.target.checked = !event.target.checked;
+      toast(error.message, 'error');
+    }
+  });
+  $('#socialWorkspaceRefresh').addEventListener('click', () => withBusy($('#socialWorkspaceRefresh'), async () => {
+    try {
+      const result = await api('/api/social/workspace');
+      const box = $('#socialWorkspaceList');
+      const assets = $('#socialWorkspaceAssets');
+      box.textContent = '';
+      assets.textContent = '';
+      const labels = { qzone: 'QQ 空间', xhs: '小红书', douyin: '抖音' };
+      const statuses = { draft: '草稿', approved: '已批准', publishing: '发布中', unknown: '结果待核对' };
+      for (const item of result.pending || []) {
+        box.appendChild(el('p', 'muted small', `${labels[item.platform] || item.platform} · ${statuses[item.status] || item.status} · ${item.title}`));
+      }
+      if (result.xDraft) box.appendChild(el('p', 'muted small', `X · 保存的填稿记录（发布前重新核对） · ${result.xDraft.text}`));
+      const xSourceUrl = safeExternalUrl(result.xDraft?.source?.url);
+      if (xSourceUrl) {
+        const source = el('a', 'link-btn', `核对 X 草稿来源：${result.xDraft.source.title || '资讯原文'}`);
+        source.href = xSourceUrl;
+        source.target = '_blank';
+        source.rel = 'noopener noreferrer';
+        box.appendChild(source);
+      }
+      if (!result.pending?.length && !result.xDraft) box.textContent = '暂无载入的待处理记录';
+      for (const image of result.images || []) {
+        const link = el('a', 'link-btn', `${image.name} (${Math.ceil(image.bytes / 1024)} KB)`);
+        link.href = `/api/xhs/image?name=${encodeURIComponent(image.name)}`;
+        link.download = image.name;
+        assets.appendChild(link);
+      }
+      if (!result.images?.length) assets.textContent = '暂无公共配图';
+    } catch (error) { toast(error.message, 'error'); }
+  }));
+  $('#socialTasksRefresh').addEventListener('click', () => withBusy($('#socialTasksRefresh'), async () => {
+    try {
+      const result = await api('/api/social/video-tasks');
+      const box = $('#socialTasksList');
+      box.textContent = '';
+      const labels = { running: '制作中', completed: '完成', failed: '失败', interrupted: '已中断' };
+      for (const task of result.tasks || []) {
+        const row = el('div', 'card');
+        row.appendChild(el('p', '', `${task.title || `草稿 ${task.postId}`} · ${labels[task.state] || task.state} · ${task.stage || ''}`));
+        if (task.error) row.appendChild(el('p', 'muted small', task.error));
+        if (/^douyin-\d+-[a-f0-9-]+\.mp4$/.test(task.file || '')) {
+          const link = el('a', 'link-btn', '下载成片');
+          link.href = `/media/${task.file}`;
+          link.download = task.file;
+          row.appendChild(link);
+        }
+        box.appendChild(row);
+      }
+      if (!result.tasks?.length) box.textContent = '暂无视频制作记录';
+    } catch (error) { toast(error.message, 'error'); }
+  }));
+  $('#socialNewsRefresh').addEventListener('click', () => withBusy($('#socialNewsRefresh'), async () => {
+    const box = $('#socialNewsResults');
+    try {
+      const result = await api('/api/social/news', { method: 'POST' });
+      box.textContent = '';
+      if (!result.ok || !result.items?.length) {
+        box.textContent = result.reason || '暂时没有资讯候选';
+        return;
+      }
+      for (const item of result.items) {
+        const row = el('div', 'card');
+        row.appendChild(el('p', '', item.title || '资讯候选'));
+        const url = safeExternalUrl(item.url);
+        if (url) {
+          const source = el('a', 'link-btn', '核对原文');
+          source.href = url;
+          source.target = '_blank';
+          source.rel = 'noopener noreferrer';
+          row.appendChild(source);
+        }
+        const use = el('button', '', '用作选题');
+        use.addEventListener('click', () => {
+          $('#socialTopic').value = String(item.title || '').slice(0, 300);
+          socialNewsSelection = url ? { title: $('#socialTopic').value.trim(), url: String(item.url) } : null;
+          $('#socialTopic').focus();
+        });
+        row.appendChild(use);
+        box.appendChild(row);
+      }
+    } catch (error) { toast(error.message, 'error'); }
+  }));
   $$('[data-post-filter]').forEach(button => button.addEventListener('click', () => {
     state.postFilter = button.dataset.postFilter; state.postPage = 1; renderPosts();
   }));

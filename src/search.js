@@ -22,15 +22,26 @@ const MAX_BYTES = 2 * 1024 * 1024;
 // 明显在要"新鲜信息"的说法。刻意做窄：日常情绪话不该触发外网请求。
 const FRESH = /(最新|最近|这几天|这两天|今天|现在|刚刚|刚才|新闻|发布|上线|更新|出了什么|发生了什么|比分|赛果|战绩|股价|行情|汇率|天气|价格|多少钱|版本号|版本|榜单|排名|什么时候)/;
 const ASK = /(搜|查|看看|知道吗|听说|有什么|是什么|有没有|多少|几点|怎样|怎么样)/;
-const EXPLICIT = /^\s*[\/／]?\s*(搜一下|搜索|搜|查一下|查查|查|帮我查|上网查|上网搜|google)/i;
+export const EXPLICIT_SEARCH = /^\s*[\/／]?\s*(搜一下|搜索|搜|查一下|查查|查|帮我查|上网查|上网搜|google)/i;
+const EXPLICIT = EXPLICIT_SEARCH;
 // 情绪/日常话不搜：别把"想你了"发去搜索引擎。
 // 光有 ASK 词表会漏掉「最近发布了什么新东西」这种说法，所以再认"疑问句形状"：
 // 带问号，或者句尾落在疑问词上。只判断句尾是因为「最近好累啊什么都不想做」中间也有"什么"，
 // 但那是陈述自己的状态，不该被拖去上网搜。
-const QTAIL = /(什么|啥|吗|呢|多少|几点|多久|哪\S{0,2}|怎么|怎样|咋|是否|如何|有没有|是不是|能不能|几个)[!！。.,，、;；~～\s]*$/;
+const QTAIL = /(什么|啥|吗|呢|多少|几点|多久|哪\S{0,2}|怎么|怎样|咋|是否|如何|有没有|是不是|能不能|几个)(了|啊|呀|吧|嘛)?[!！。.,，、;；~～\s]*$/;
 // 问的是她本人（"你最近有没有好好吃饭"），是要陪伴不是要资料。
 const ABOUT_HER = /(你|您|你们|小知)[^我他她]{0,4}(有没有|是不是|知不知道|记不记得|想不想|要不要|爱不爱|在不在)/;
 const PERSONAL = /(想你了|想你|抱抱|亲亲|晚安|早安|爱你|生气|难过|委屈|辛苦了|在吗|在干嘛|吃了吗|嗯+|哦+|哈哈+|嘻嘻)/;
+// 他说"可以，你联网检索吧"/"搜索给我看"时，这一句本身没有主题：要接住上一轮他问的事，
+// 而不是把"可以""给我看"这种残句发去搜索引擎（真搜出过"可以"的词典页和"给"的笔画页）。
+const SEARCH_CONFIRM = /(联网|上网|搜索|搜一|搜吧|搜给|查吧|查给|检索|去查|去搜|帮我查|帮我搜)/;
+export function isSearchConfirmation(text) { return SEARCH_CONFIRM.test(String(text || '')); }
+const CONFIRM_SHELL = /^(可以|好的?|行|嗯+|对|是的?|没问题|当然|麻烦|请|那就|那你|你就|你|联网|上网|检索|搜索|吧|啊|呀|呢|哦|噢|了|吗|嘛|给我|我|看|一下|试试|去|来|呗|哈|[,，。.!！?？~～\s])+$/;
+// 确认前缀：不含单字"搜/查/搜索"，免得把"搜索引擎哪个好"这种正题咬掉。
+const CONFIRM_PREFIX = /^(搜索给我看|搜给我看|查给我看|搜索看看|搜看看|给我看看|给我看|看一下|看一看|看看|看下|联网检索吧|联网检索|联网搜吧|联网查吧|联网看看吧|联网看看|联网看|上网看看|上网查|上网搜|去搜索|去查|去搜|搜吧|查吧|那就|可以|好的?|行|嗯+|对|是的?|没问题|当然|麻烦|请|你|一下|吧|啊|呀|呢|哦|了|吗|嘛|[,，。.!！?？~～\s])+/;
+// 确认句里又点名了新主题（"可以，帮我搜一下小米股价"）：这时听新主题，不接旧话题。
+const TOPIC_COMMAND = /(帮我查|帮我搜|替我查|查一下|搜一下|查查|搜一搜|查下|搜下)/;
+const CARRY_SHELLS = /^(搜索给我看|搜给我看|查给我看|搜索看看|搜看看|给我看|给我看看|看一下|看一看|看看|看下|检索吧|联网检索吧|联网检索|联网搜吧|联网查吧|联网看看吧|联网看看|联网看|上网看看|上网查|上网搜|去搜索|去查|去搜|搜吧|查吧|搜索|搜|查|你|帮我|那就|可以|好的?|行|嗯+|麻烦|请|吧|啊|呀|呢|哦|了|吗|嘛|[,，。.!！?？~～\s])+/;
 
 function clean(value) {
   return String(value || '')
@@ -98,11 +109,12 @@ export function needsSearch(text) {
   if (value.length < 4) return false;
   if (!EXPLICIT.test(value) && (PERSONAL.test(value) || ABOUT_HER.test(value))) return false;
   if (EXPLICIT.test(value)) return true;
-  return FRESH.test(value) && (ASK.test(value) || QTAIL.test(value) || /[?？]/.test(value));
+  // "X是不是Y"这种问法疑问词在句中不在句尾，QTAIL 够不着；句首是"你"的已被 ABOUT_HER 挡掉。
+  return FRESH.test(value) && (ASK.test(value) || QTAIL.test(value) || /[?？]/.test(value) || /(是不是|能不能|会不会)/.test(value));
 }
 
 // 把口语摘成查询词：去掉称呼、语气词和"帮我"这类壳，只留信息部分。
-export function buildQuery(text) {
+export function stripQueryShells(text) {
   let value = String(text || '').replace(/\s+/g, ' ').trim();
   // 长说法必须排在短说法前面，否则「帮我查一下」会被"帮我查"先咬掉，剩个"一下"留在查询词里。
   const shells = /^(帮我查一下|帮我搜一下|替我查一下|上网查一下|上网搜一下|查一下|搜一下|搜一搜|搜索|查查|上网查|上网搜|帮我查|帮我搜|google|查|搜|那个|就是|请问|你们|你|小知|宝贝|宝宝)[:：,，\s]*/i;
@@ -120,8 +132,46 @@ export function buildQuery(text) {
   value = value.replace(/[?？!！。~～]+$/g, '');
   value = value.replace(/(啊|呀|呢|吧|嘛|哦|噢|哈)+$/g, '');
   value = value.replace(/(告诉我|说一下|看看|怎么样|如何|有没有|是什么)$/g, '');
-  value = value.trim();
+  return value.trim();
+}
+
+export function buildQuery(text) {
+  return stripQueryShells(text).slice(0, 60);
+}
+
+// 剥壳后只剩"可以""给我看"这种空壳时返回空串：这种词发出去只会搜回词典页。
+export function informativeQuery(text) {
+  const value = stripQueryShells(String(text || '').replace(CONFIRM_PREFIX, ''));
+  if (!value || CONFIRM_SHELL.test(value)) return '';
   return value.slice(0, 60);
+}
+
+// 他这一句是在答应/催促"去搜"，而不是新问题：接上一轮他问的事。
+export function resolveSearchQuery(text, previousUserTexts = []) {
+  const value = String(text || '').replace(/\s+/g, ' ').trim();
+  const confirmation = SEARCH_CONFIRM.test(value);
+  const direct = informativeQuery(value);
+  if (direct && !confirmation) return direct;
+  const previous = Array.isArray(previousUserTexts) ? previousUserTexts : [];
+  const carryPrevious = () => {
+    for (let i = previous.length - 1; i >= 0; i -= 1) {
+      const topic = String(previous[i] || '').trim();
+      if (!topic || topic === value || !needsSearch(topic)) continue;
+      const carried = informativeQuery(topic);
+      if (carried) return carried;
+    }
+    return '';
+  };
+  // 纯确认（"可以，你联网检索吧"）先接最近一轮他真问过的事；
+  // "有最新的ai咨询吗"这种残句也是旧话题的复述，不该抢在旧话题前面。
+  if (confirmation && !TOPIC_COMMAND.test(value)) {
+    const carried = carryPrevious();
+    if (carried) return carried;
+  }
+  const own = informativeQuery(value.replace(CARRY_SHELLS, ''));
+  if (own && own.length >= 4) return own;
+  if (!confirmation) return carryPrevious();
+  return '';
 }
 
 export function searchCountToday() {
@@ -193,9 +243,9 @@ export function dropDefinitionNoise(items) {
   return (items || []).filter((item) => !DEFINITION_NOISE.test(String(item.title || '')));
 }
 
-export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000 } = {}) {
+export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOverride = '' } = {}) {
   const settings = loadSettings();
-  const query = buildQuery(rawQuery);
+  const query = String(queryOverride || '').trim().slice(0, 60) || buildQuery(rawQuery);
   const blocked = gate(query, settings);
   if (!blocked.ok) return blocked;
   const cfg = settings.search || {};

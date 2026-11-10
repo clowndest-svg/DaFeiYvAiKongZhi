@@ -836,6 +836,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .platform-chip.qzone { color: #8fd8ff; border-color: rgba(143, 216, 255, 0.3); background: rgba(143, 216, 255, 0.07); }
 .platform-chip.xhs { color: #ff9fb1; border-color: rgba(255, 159, 177, 0.3); background: rgba(255, 159, 177, 0.07); }
 .platform-chip.douyin { color: #d4b2ff; border-color: rgba(212, 178, 255, 0.3); background: rgba(212, 178, 255, 0.07); }
+.douyin-connection-preview { max-width: 100%; height: auto; }
 .status-chip { font-size: 10px; color: var(--faint); }
 .status-chip.draft { color: #ffcf7a; }
 .status-chip.approved { color: var(--ok); }
