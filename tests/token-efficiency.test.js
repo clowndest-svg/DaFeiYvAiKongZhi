@@ -34,11 +34,11 @@ test('非思考后台请求受限，聊天模式可按复杂度或显式偏好�
 
 test('社交费用按平台归类，通用评论单列且不包含聊天', () => {
   const before = new Map(costSummary().socialCosts.map(row => [row.platform, row.calls]));
-  for (const kind of ['post:qzone', 'post:xhs', 'post:douyin', 'x_reply', 'xhs_reply', 'comments', 'chat']) {
+  for (const kind of ['post:qzone', 'post:xhs', 'post:douyin', 'douyin:browse', 'x_reply', 'xhs_reply', 'comments', 'chat']) {
     addCost({ model: 'social-cost-fixture', kind, costCny: 0.001, promptTokens: 10, completionTokens: 5 });
   }
   const after = new Map(costSummary().socialCosts.map(row => [row.platform, row.calls]));
-  for (const [platform, added] of [['qzone', 1], ['xhs', 2], ['douyin', 1], ['x', 1], ['shared', 1]]) {
+  for (const [platform, added] of [['qzone', 1], ['xhs', 2], ['douyin', 2], ['x', 1], ['shared', 1]]) {
     assert.equal(after.get(platform) - (before.get(platform) || 0), added);
   }
   assert.equal(after.has('chat'), false);

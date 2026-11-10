@@ -678,7 +678,7 @@ export function costSummary(days = 7) {
     CASE
       WHEN kind = 'post:qzone' OR kind GLOB 'qzone_*' THEN 'qzone'
       WHEN kind = 'post:xhs' OR kind GLOB 'xhs_*' THEN 'xhs'
-      WHEN kind = 'post:douyin' THEN 'douyin'
+      WHEN kind = 'post:douyin' OR kind GLOB 'douyin:*' THEN 'douyin'
       WHEN kind GLOB 'x_*' THEN 'x'
       WHEN kind = 'comments' THEN 'shared'
     END AS platform,
