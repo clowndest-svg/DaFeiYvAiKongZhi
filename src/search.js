@@ -10,7 +10,7 @@
 
 import { env, loadSettings } from './config.js';
 import { costBlocked } from './budget.js';
-import { addEvent, kvGet, kvSet, toolCallsToday } from './db.js';
+import { addEvent, kvGet, kvGetJson, kvSet, kvSetJson, toolCallsToday } from './db.js';
 import { logger } from './logger.js';
 import { privacyProblems } from './privacy.js';
 import { deepseekFetch, deepseekSearch, isPublicHttpUrl, PRICE_PER_REQUEST_CNY } from './search-deepseek.js';
@@ -232,12 +232,25 @@ function gate(query, settings) {
     logger.warn('联网请求被隐私闸门挡下', { problems: problems.length });
     return { ok: false, reason: '这句话里像是有你的私密信息，我不往外部服务上发', items: [], privacyBlocked: true };
   }
-  // 成串数字几乎一定是账号/手机号/QQ 号：外部服务不该知道这些，privacyProblems 也不管裸数字。
-  if (/\d{5,}/.test(query)) {
-    logger.warn('联网请求被数字串闸门挡下', { digits: (query.match(/\d{5,}/) || [''])[0].length });
+  // 成串数字几乎一定是账号/手机号/QQ 号：外部服务不该知道这些。
+  // 但 8 位且长得像 YYYYMMDD 的日期串要放行——"截至20261110"卡在这里太冤了。
+  const runs = query.match(/\d{5,}/g) || [];
+  const suspicious = runs.filter((run) => !isDateLikeRun(run));
+  if (suspicious.length) {
+    logger.warn('联网请求被数字串闸门挡下', { digits: suspicious[0].length });
     return { ok: false, reason: '这句话里有一串数字（像账号或电话），我不把它发到外部服务上', items: [], privacyBlocked: true };
   }
   return { ok: true };
+}
+
+function isDateLikeRun(run) {
+  if (!/^\d{8}$/.test(run)) return false;
+  const year = Number(run.slice(0, 4));
+  const month = Number(run.slice(4, 6));
+  const day = Number(run.slice(6, 8));
+  if (year < 2000 || year > 2099 || month < 1 || month > 12 || day < 1 || day > 31) return false;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 // 返回 { ok, engine, items, ms, reason }：任何一步失败都不抛，交给上层如实说明。
@@ -247,6 +260,112 @@ const DEFINITION_NOISE = /(汉语[^）)]{0,6}[）)]|百度百科|汉典|组词|�
 
 export function dropDefinitionNoise(items) {
   return (items || []).filter((item) => !DEFINITION_NOISE.test(String(item.title || '')));
+}
+
+// 官方一手来源加权：同一件事，官方公告比聚合站可靠。只调排序，不发额外请求。
+const OFFICIAL_HOSTS = [
+  'openai.com', 'anthropic.com', 'deepseek.com', 'deepmind.google', 'blog.google', 'ai.googleblog.com',
+  'microsoft.com', 'meta.com', 'ai.meta.com', 'nvidia.com', 'developer.nvidia.com', 'github.blog',
+  'huggingface.co', 'arxiv.org',
+];
+const WEAK_URL = /\/(tags?|search|category|categories|topics?|top|list)\//i;
+
+function hostOf(url) {
+  try { return new URL(String(url)).hostname.toLowerCase(); } catch { return ''; }
+}
+
+export function isOfficialHost(host) {
+  const value = String(host || '').toLowerCase();
+  return OFFICIAL_HOSTS.some((domain) => value === domain || value.endsWith('.' + domain));
+}
+
+// 把"发布于 X"的文字兜底解析成日期：Bing/搜狗的摘要里只有"3 小时前"，没有结构化日期。
+// 统一按上海时区落天，测试和 CI 在哪个时区跑都得到同一个答案。
+const DAY_FMT_SHANGHAI = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' });
+function shanghaiDay(date) {
+  return DAY_FMT_SHANGHAI.format(date);
+}
+export function parsePublishedDate(text, now = new Date()) {
+  const value = String(text || '');
+  let match = value.match(/(\d{4})[-/年](\d{1,2})[-/月](\d{1,2})日?/);
+  if (match) {
+    const year = Number(match[1]); const month = Number(match[2]); const day = Number(match[3]);
+    if (year >= 2000 && year <= 2099 && month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  match = value.match(/(\d{1,2})月(\d{1,2})日/);
+  if (match) {
+    const month = Number(match[1]); const day = Number(match[2]);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+      let year = Number(shanghaiDay(now).slice(0, 4));
+      const guess = new Date(`${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}T00:00:00+08:00`);
+      if (guess.getTime() - now.getTime() > 36 * 3600000) year -= 1;
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    }
+  }
+  match = value.match(/(\d+)\s*(分钟|小时|天)前/);
+  if (match) {
+    const amount = Number(match[1]);
+    const unitMs = match[2] === '分钟' ? 60000 : match[2] === '小时' ? 3600000 : 86400000;
+    return shanghaiDay(new Date(now.getTime() - amount * unitMs));
+  }
+  if (/前天/.test(value)) return shanghaiDay(new Date(now.getTime() - 2 * 86400000));
+  if (/昨天/.test(value)) return shanghaiDay(new Date(now.getTime() - 86400000));
+  return '';
+}
+
+export function annotateSources(items) {
+  for (const item of items) {
+    const host = hostOf(item.url);
+    item.official = isOfficialHost(host);
+    item.weak = WEAK_URL.test(String(item.url || ''));
+  }
+  return items;
+}
+
+export function backfillDates(items, now = new Date()) {
+  for (const item of items) {
+    if (!item.date) item.date = parsePublishedDate(`${item.title || ''} ${item.snippet || ''}`, now);
+  }
+  return items;
+}
+
+// 排序：问"最新"先按日期；同一天里官方来源优先；再按相关分。
+export function rankSearchItems(items, query) {
+  const fresh = FRESH.test(String(query || ''));
+  const stampOf = (item) => {
+    const at = Date.parse(item?.date || '');
+    return Number.isFinite(at) ? at : -1;
+  };
+  const weightOf = (item) => (item.official ? 0.6 : 0) + (item.weak ? -0.5 : 0);
+  return [...items].sort((a, b) => {
+    if (fresh) {
+      const byDate = stampOf(b) - stampOf(a);
+      if (byDate) return byDate;
+    }
+    const byWeight = weightOf(b) - weightOf(a);
+    if (byWeight) return byWeight;
+    const scoreA = a?.score == null ? -1 : Number(a.score);
+    const scoreB = b?.score == null ? -1 : Number(b.score);
+    return scoreB - scoreA;
+  });
+}
+
+// 同一问题的结果缓存 20 分钟：连着追问/重问不再重复扣搜索费；缓存命中不占当日额度。
+const SEARCH_CACHE_TTL_MS = 20 * 60 * 1000;
+const SEARCH_CACHE_KEY = 'search:cache';
+function readSearchCache(query) {
+  const stored = kvGetJson(SEARCH_CACHE_KEY, []);
+  const list = Array.isArray(stored) ? stored : [];
+  const hit = list.find((entry) => entry?.query === query && Date.now() - Number(entry.at || 0) < SEARCH_CACHE_TTL_MS);
+  return hit ? { ok: true, engine: hit.engine, items: hit.items, query, ms: 0, cached: true, cachedAt: hit.at } : null;
+}
+function writeSearchCache(query, result) {
+  if (!result?.ok || !Array.isArray(result.items) || !result.items.length) return;
+  const stored = kvGetJson(SEARCH_CACHE_KEY, []);
+  const list = Array.isArray(stored) ? stored : [];
+  kvSetJson(SEARCH_CACHE_KEY, [{ query, engine: result.engine, items: result.items, at: Date.now() }, ...list.filter((entry) => entry?.query !== query)].slice(0, 12));
 }
 
 // 搜索给的是摘要；网页版答得准是因为它真的打开了原文。没带正文的结果补读前两页。
@@ -274,21 +393,16 @@ async function enrichPages(items, { maxPages = 2 } = {}) {
   return items;
 }
 
-// 问"最新/今天"这类问题时按发布日期从新到旧排，别让旧文压着新文。
-function orderByFreshness(items, query) {
-  if (!FRESH.test(String(query || ''))) return items;
-  const stamp = (item) => {
-    const at = Date.parse(item?.date || '');
-    return Number.isFinite(at) ? at : -1;
-  };
-  return [...items].sort((a, b) => stamp(b) - stamp(a));
-}
-
 export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOverride = '' } = {}) {
   const settings = loadSettings();
   const query = String(queryOverride || '').trim().slice(0, 60) || buildQuery(rawQuery);
   const blocked = gate(query, settings);
   if (!blocked.ok) return blocked;
+  const cached = readSearchCache(query);
+  if (cached) {
+    logger.info('联网搜索命中缓存', { query: query.slice(0, 40), ageMin: Math.round((Date.now() - cached.cachedAt) / 60000) });
+    return cached;
+  }
   const cfg = settings.search || {};
   const dailyMax = Number(cfg.dailyMax ?? 20);
   const today = searchCountToday();
@@ -311,10 +425,12 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
       timeoutMs: Math.min(Number(cfg.providerTimeoutSeconds ?? 6) * 1000, timeoutMs),
     });
     if (found.ok) {
-      const items = orderByFreshness(await enrichPages(found.items), query);
+      const items = rankSearchItems(annotateSources(await enrichPages(found.items)), query);
       bumpSearchCount(requests);
       logger.info('联网搜索成功', { engine: found.engine, count: items.length, withContent: items.filter(item => item.content).length, ms: found.ms });
-      return { ok: true, engine: found.engine, items, query, ms: Date.now() - started, attempts: found.attempts };
+      const result = { ok: true, engine: found.engine, items, query, ms: Date.now() - started, attempts: found.attempts };
+      writeSearchCache(query, result);
+      return result;
     }
     if (!found.unavailable) tried.push(`deepseek:${String(found.reason).slice(0, 40)}`);
   }
@@ -323,11 +439,13 @@ export async function searchWeb(rawQuery, { limit = 5, timeoutMs = 8000, queryOv
     try {
       requests += 1;
       const html = await fetchText(engine.build(query), timeoutMs);
-      const items = orderByFreshness(await enrichPages(dropDefinitionNoise(engine.parse(html)).slice(0, want)), query);
+      const items = rankSearchItems(annotateSources(backfillDates(await enrichPages(dropDefinitionNoise(engine.parse(html)).slice(0, want)))), query);
       if (items.length) {
         bumpSearchCount(requests);
         logger.info('联网搜索成功', { engine: engine.name, count: items.length, withContent: items.filter(item => item.content).length, ms: Date.now() - started });
-        return { ok: true, engine: engine.name, items, query, ms: Date.now() - started };
+        const result = { ok: true, engine: engine.name, items, query, ms: Date.now() - started };
+        writeSearchCache(query, result);
+        return result;
       }
       tried.push(`${engine.name}:没解析出结果`);
     } catch (error) {
@@ -373,8 +491,15 @@ export function formatSearchNote(found, { now = new Date() } = {}) {
     return `【联网搜索的结果】你刚试着查「${found.query || '这件事'}」，没搜到（${why}）。如实告诉他这次没查到，别编，也别提"我这边没网"这种你没说过的话。`;
   }
   const when = now.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+  const cacheNote = found.cached && found.cachedAt ? `，用的是 ${Math.max(1, Math.round((now.getTime() - Number(found.cachedAt)) / 60000))} 分钟前缓存的结果` : '';
   const lines = found.items.map((item, i) => {
-    const extra = [item.date ? `发布 ${String(item.date).slice(0, 10)}` : '', item.score != null ? `可信度 ${item.score}/3` : '', item.site ? `站点 ${item.site}` : '']
+    const extra = [
+      item.date ? `发布 ${String(item.date).slice(0, 10)}` : '',
+      item.score != null ? `可信度 ${item.score}/3` : '',
+      item.site ? `站点 ${item.site}` : '',
+      item.official ? '官方来源' : '',
+      item.weak ? '列表/标签页，不作发布证据' : '',
+    ]
       .filter(Boolean)
       .join('，');
     const body = item.content
@@ -382,7 +507,7 @@ export function formatSearchNote(found, { now = new Date() } = {}) {
       : `   ${item.snippet || '（没有摘要）'}`;
     return `${i + 1}. ${item.title}${extra ? `（${extra}）` : ''}\n${body}\n   来源 ${item.url}`;
   });
-  return `【刚刚联网搜到的】（${found.engine}，${when}，查的是「${found.query}」）
+  return `【刚刚联网搜到的】（${found.engine}，${when}，查的是「${found.query}」${cacheNote}）
 ${lines.join('\n')}
 怎么用：这些是网上刚查到的外部信息，不是你自己记得的事。可以说"我查到…"，并挑一条把来源网址发给他；
 带"X 天前/小时前"的说明时效，别讲成刚发生；几条互相矛盾就直说不确定；观点要说是谁的观点；
@@ -440,6 +565,7 @@ export function noteSearchEvent(found, channel) {
     engine: found.engine || null,
     count: found.items?.length || 0,
     ms: found.ms || null,
+    cached: Boolean(found.cached),
     reason: found.ok ? null : String(found.reason || '').slice(0, 120),
   });
 }

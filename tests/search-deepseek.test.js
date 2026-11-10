@@ -1,12 +1,12 @@
 // DeepSeek 官方 Search / Fetch 接口的判据。全部离线跑：fetch 用替身，钱记在测试自己的台账里。
 // 唯一一份"成功响应"用的是当天真实抓取下来的 fixture，不是照文档想象写的形状。
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '../src/config.js';
 import { saveSettings } from '../src/config.js';
-import { closeDb, kvSet, toolCallsToday } from '../src/db.js';
+import { closeDb, kvSet, kvSetJson, toolCallsToday } from '../src/db.js';
 import { Companion } from '../src/chat.js';
 import { shanghaiDayKey } from '../src/util.js';
 import {
@@ -21,6 +21,8 @@ import {
 import { extractReadableUrl, formatPageNote, formatSearchNote, readWebPage, searchStatus, searchWeb } from '../src/search.js';
 
 test.after(closeDb);
+// 搜索缓存会跨用例串味儿：每个用例开始前清空，判据才是在看这次请求。
+beforeEach(() => { kvSetJson('search:cache', []); });
 
 const REAL = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'deepseek-search.sample.json'), 'utf8'));
 const NO_WAIT = async () => {};

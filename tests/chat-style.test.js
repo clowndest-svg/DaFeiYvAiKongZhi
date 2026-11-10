@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { paths } from '../src/config.js';
-import { buildChatPayload, buildPostPrompt } from '../src/prompt.js';
+import { buildChatPayload, buildPostPrompt, buildSystemPrompt } from '../src/prompt.js';
 
 const settings = { companion: { name: '小知' }, memory: {} };
 const mood = { label: '平静', valence: 0.2, energy: 0.5, affection: 30, reason: '' };
@@ -64,4 +64,15 @@ test('私聊风格不扩散到群聊、访客与公开动态', () => {
   for (const kind of ['qzone', 'xhs', 'douyin']) {
     assert.doesNotMatch(buildPostPrompt({ settings, mood, block, kind }), privateOnly);
   }
+});
+
+test('提示词稳定段不随时间/心情变化（前缀缓存命中率的前提，别被无意打掉）', () => {
+  const marker = '===== 你此刻带着的东西';
+  const build = (now, moodValue) => buildSystemPrompt({ settings, mood: moodValue, block, now, allowStickerMarker: true });
+  const a = build(new Date('2026-11-10T09:00:00+08:00'), mood);
+  const b = build(new Date('2026-11-11T23:30:00+08:00'), { ...mood, label: '烦', valence: -0.6, energy: 0.9 });
+  const prefixA = a.slice(0, a.indexOf(marker));
+  const prefixB = b.slice(0, b.indexOf(marker));
+  assert.ok(prefixA.length > 800, `稳定段只有 ${prefixA.length} 字，缓存收益会很小`);
+  assert.equal(prefixA, prefixB, '时间或心情改写了稳定段，前缀缓存会被整段打掉');
 });

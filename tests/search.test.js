@@ -1,16 +1,18 @@
 // 联网搜索的判据。全部离线跑（fetch 被替身接管），不靠真网络也能钉住行为。
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { closeDb, kvSet, addMessage, getActiveSession, getMessagesForPrompt } from '../src/db.js';
+import { closeDb, kvSet, kvSetJson, addMessage, getActiveSession, getMessagesForPrompt } from '../src/db.js';
 import { saveSettings, loadSettings } from '../src/config.js';
 import { shanghaiDayKey } from '../src/util.js';
 import { Companion } from '../src/chat.js';
 import { buildChatPayload } from '../src/prompt.js';
-import { buildQuery, dropDefinitionNoise, formatSearchNote, needsSearch, parseBing, searchWeb, resolveSearchQuery, informativeQuery } from '../src/search.js';
+import { annotateSources, backfillDates, buildQuery, dropDefinitionNoise, formatSearchNote, needsSearch, parseBing, parsePublishedDate, rankSearchItems, searchWeb, resolveSearchQuery, informativeQuery } from '../src/search.js';
 
 test.after(closeDb);
+// 搜索缓存会跨用例串味儿：每个用例开始前清空，判据才是在看这次请求。
+beforeEach(() => { kvSetJson('search:cache', []); });
 
 const BING_FIXTURE = fs.readFileSync(path.join(process.cwd(), 'tests', 'fixtures', 'bing-search.html'), 'utf8');
 
@@ -158,12 +160,14 @@ test('配额与开关：到顶不再发请求；关掉时明说是设置里关�
     const first = await searchWeb('最新手机价格');
     assert.equal(first.ok, true, '第一次应当能搜');
     kvSet(`search_day:${today}`, '5');
-    const out = await searchWeb('最新手机价格');
+    const cachedAgain = await searchWeb('最新手机价格');
+    assert.equal(cachedAgain.cached, true, '配额用完后，刚查过的问题应当还能从缓存答');
+    const out = await searchWeb('最新平板价格');
     assert.equal(out.ok, false);
     assert.equal(out.quotaOut, true, '没走配额闸门');
     assert.match(out.reason, /次数用完/);
     const before = calls;
-    await searchWeb('最新手机价格');
+    await searchWeb('最新平板价格');
     assert.equal(calls, before, '配额到顶后还在发请求');
 
     saveSettings({ search: { enabled: false, dailyMax: 20, maxResults: 5, timeoutSeconds: 8 } });
@@ -372,6 +376,8 @@ test('追问接上一轮搜索：问完 GPT 再问 Claude 也要真去查，闲�
     assert.equal(await companion.searchNoteFor({ text: '晚安', channel: 'qq' }), '', '闲聊被当成追问去搜了');
     assert.equal(seen.length, 0);
     // 旧消息只留了整段搜索说明（没有单独存查询词）也要能接上。
+    // 先清缓存：上一次调用已经把同一查询写进 20 分钟缓存，这里要验证的是查询词拼装。
+    kvSetJson('search:cache', []);
     addMessage({ sessionId: session.id, role: 'user', content: 'gpt和claude出最新模型了吗', channel: 'qq', meta: { searchNote: '【刚刚联网搜到的】（bing，11/10，查的是「gpt和claude出最新模型了吗」）\n1. 甲' } });
     seen.length = 0;
     const legacy = await companion.searchNoteFor({ text: 'Claude呢', channel: 'qq' });
@@ -386,4 +392,76 @@ test('搜索说明落库时同时记下查询词，下一轮追问才能接上',
   const prep = new Companion({ llm: { configured: true } }).prepare({ text: '查一下最新模型', channel: 'qq', extraContext: note });
   const stored = getMessagesForPrompt(session.id, 4).find((m) => m.id === prep.userMessage.id);
   assert.equal(stored.meta?.searchQuery, 'gpt claude 最新模型', '查询词没落库，追问时接不上');
+});
+
+// —— 11-10 晚：排序/兜底日期/缓存/日期闸门四件小事 ——
+
+test('排序：同一天里官方来源优先，列表/标签页降权；问最新时日期优先', () => {
+  const items = annotateSources([
+    { title: '聚合转述', url: 'https://news.example.com/a', score: 2.2, date: '2026-11-09' },
+    { title: '官方公告', url: 'https://openai.com/index/x', score: 1.9, date: '2026-11-09' },
+    { title: '标签页', url: 'https://simonwillison.net/tags/gpt/', score: 2.5, date: '2026-11-09' },
+  ]);
+  const ranked = rankSearchItems(items, 'gpt 最新模型');
+  assert.equal(ranked[0].title, '官方公告', '官方来源没置顶');
+  assert.equal(ranked.at(-1).title, '标签页', '标签页没降权');
+  const withNewer = annotateSources([
+    { title: '官方旧闻', url: 'https://anthropic.com/news', score: 2.4, date: '2026-11-08' },
+    { title: '今天的新报道', url: 'https://news.example.com/b', score: 1.8, date: '2026-11-10' },
+  ]);
+  assert.equal(rankSearchItems(withNewer, '最新模型')[0].title, '今天的新报道', '问最新没按日期排');
+  assert.equal(rankSearchItems(withNewer, '模型安全')[0].title, '官方旧闻', '非新鲜问题应优先官方');
+});
+
+test('兜底日期解析：绝对日期、月日、相对时间都能落到天，瞎写的返回空', () => {
+  const now = new Date('2026-11-10T12:00:00+08:00');
+  assert.equal(parsePublishedDate('发布于 2026-11-09', now), '2026-11-09');
+  assert.equal(parsePublishedDate('2026年11月9日 消息', now), '2026-11-09');
+  assert.equal(parsePublishedDate('11月9日 14:03 来源', now), '2026-11-09');
+  assert.equal(parsePublishedDate('11月9日', new Date('2026-01-05T12:00:00+08:00')), '2025-11-09', '跨年时未来日期应回退一年');
+  assert.equal(parsePublishedDate('3 小时前', now), '2026-11-10');
+  assert.equal(parsePublishedDate('2 天前', now), '2026-11-08');
+  assert.equal(parsePublishedDate('昨天', now), '2026-11-09');
+  assert.equal(parsePublishedDate('没有时间信息', now), '');
+  const filled = backfillDates([{ title: 't', snippet: '5 小时前 新闻', url: 'https://a.example/x' }], now);
+  assert.equal(filled[0].date, '2026-11-10', '兜底结果没回填日期');
+});
+
+test('同一问题 20 分钟内命中缓存：不再发请求、不重复扣费，说明里注明是缓存', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async (url) => {
+    if (String(url).includes('/v1/tools/search')) {
+      calls += 1;
+      return { ok: true, status: 200, text: async () => JSON.stringify({ results: [
+        { title: '缓存专用结果', url: 'https://a.example/cache', summary: '摘要', content: '正文内容', rerank_score: 2.1, date: '2026-11-10', site_name: 'test' },
+      ] }) };
+    }
+    throw new Error('不该有第二次请求');
+  };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'deepseek', dailyMax: 20, readPages: true, fetchDailyMax: 10 } });
+    kvSet(`search_day:${shanghaiDayKey()}`, '0');
+    const first = await searchWeb('缓存测试专用查询');
+    const second = await searchWeb('缓存测试专用查询');
+    assert.equal(first.ok, true);
+    assert.equal(calls, 1, `同一问题发了 ${calls} 次请求`);
+    assert.equal(second.cached, true);
+    assert.match(formatSearchNote(second), /缓存的结果/);
+  } finally { globalThis.fetch = original; }
+});
+
+test('日期形状的数字串不算隐私：20261110 放行，会员号照样挡', async () => {
+  const original = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => { calls += 1; return { ok: true, text: async () => BING_FIXTURE }; };
+  try {
+    saveSettings({ search: { enabled: true, provider: 'scrape', dailyMax: 20, readPages: false } });
+    kvSet(`search_day:${shanghaiDayKey()}`, '0');
+    const byDate = await searchWeb('截至20261110最新的模型');
+    assert.equal(byDate.ok, true, '日期形状的数字串被当成了隐私');
+    assert.ok(calls >= 1);
+    const byAccount = await searchWeb('查一下 1990000111223 这个号');
+    assert.equal(byAccount.privacyBlocked, true, '13 位号码没被挡');
+  } finally { globalThis.fetch = original; }
 });
