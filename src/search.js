@@ -170,8 +170,7 @@ export function resolveSearchQuery(text, previousUserTexts = []) {
   }
   const own = informativeQuery(value.replace(CARRY_SHELLS, ''));
   if (own && own.length >= 4) return own;
-  if (!confirmation) return carryPrevious();
-  return '';
+  return carryPrevious();
 }
 
 export function searchCountToday() {

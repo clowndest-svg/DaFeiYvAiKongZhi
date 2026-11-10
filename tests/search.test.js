@@ -240,6 +240,7 @@ test('答应去搜时接住上一轮的问题：搜的是他问的事，不是"�
     assert.ok(query.includes('gpt') && query.includes('claude') && query.includes('最新'), `「${confirm}」没接住主题：${query}`);
     assert.ok(!/^(可以|给)/.test(query), `「${confirm}」摘出了空壳词：${query}`);
   }
+  assert.ok(resolveSearchQuery('搜一下', [topic]).includes('gpt'), '只说了"搜一下"也要接上一轮的主题');
   assert.equal(resolveSearchQuery('搜索给我看', ['想你了', '晚安']), '', '上一轮是情绪话时不该硬接');
   assert.equal(resolveSearchQuery('查一下上海房价', [topic]), '上海房价', '自己带主题时不接旧话题');
 });
