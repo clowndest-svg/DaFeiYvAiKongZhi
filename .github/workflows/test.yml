@@ -19,4 +19,24 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: npm test
+      # 失败时把用例名和尾巴写进 job summary：GitHub 的原始日志要仓库权限才读得到，
+      # 这个摘要匿名可读，红了才不用靠猜。
+      - name: npm test
+        shell: bash
+        run: |
+          set -o pipefail
+          npm test 2>&1 | tee test-output.log
+      - name: Surface failing tests
+        if: failure()
+        shell: bash
+        run: |
+          {
+            echo "### npm test failed on Node ${{ matrix.node }}"
+            echo '```'
+            grep -nE '^✖|AssertionError|Test cleanup failed|failing tests|not ok' test-output.log | head -60 || echo '(no failure lines matched)'
+            echo '```'
+            echo '### tail'
+            echo '```'
+            tail -n 60 test-output.log || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
