@@ -264,17 +264,12 @@
             <div class="page-head">
               <div>
                 <h2>动态</h2>
-                <p>按她此刻的心情写点什么。发之前，你先过目。</p>
+                <p>创作、发布和各平台互动都在这里；平台的登录、开关和自动行为在「设置」里按平台分区。</p>
               </div>
             </div>
             <p class="alert-warn hidden" id="socialCostLine"></p>
-            <details class="card"><summary>抖音账号与视频发现（接入验证）</summary><div class="btn-row"><button type="button" id="douyinConnect">显示登录页面</button><button type="button" id="douyinConnectionRefresh">刷新页面预览</button><button type="button" id="douyinReadVideos">读取视频列表</button><button type="button" id="douyinReadOwnVideos">读取我的作品</button></div><p class="muted small">专用浏览器在后台运行，可在下方预览中扫码登录。预览用于查看页面，验证码操作仍需在原生页面完成。评论发送仍需实机验收。</p><p id="douyinConnectionState" role="status"></p><img id="douyinConnectionPreview" class="douyin-connection-preview" alt="抖音专用浏览器页面预览" hidden><div id="douyinVideos"></div></details>
-            <details class="card"><summary>抖音刷视频与内容理解</summary><label class="check"><input type="checkbox" id="douyinBrowseEnabled"> 自动刷视频并理解内容（每半小时一条、每天六条，走社交预算）</label><div class="btn-row"><button type="button" id="douyinReadNotes">读取理解笔记</button></div><p class="muted small">打开视频页采两帧画面，连同标题简介交给视觉模型；声音不接入。也可在上方视频列表里点「理解这条」手动看一条。笔记只保存在本机，供选题和评论参考。</p><div id="douyinVideoNotes" class="search-results"></div></details>
-            <details class="card"><summary>抖音评论读取</summary><label>视频链接或 ID<input id="douyinCommentVideo" maxlength="250" placeholder="https://www.douyin.com/video/…"></label><div class="btn-row"><button type="button" id="douyinReadComments">读取当前评论</button><button type="button" id="douyinCommentInbox">查看已记录评论</button><button type="button" id="douyinSendDraft" disabled>确认发送后台草稿</button><button type="button" id="douyinResolveSent" disabled>核对为已发送</button><button type="button" id="douyinResolveUnsent" disabled>核对为未发送</button><button type="button" id="douyinClearDraft">清除后台回复草稿</button></div><label class="check"><input type="checkbox" id="douyinMonitorEnabled" disabled> 定时检查已记录的视频评论（先查看记录以加载状态）</label><label class="check"><input type="checkbox" id="douyinAutoReply" disabled> 自动回复符合条件的新评论（待发送功能实机验收）</label><p class="muted small">每 30 分钟至多检查一个视频，失败后暂停六小时。发送尝试结果待核对时请到抖音确认。</p><div id="douyinComments"></div></details>
-            <details class="card"><summary>跨平台待处理与公共配图</summary><button type="button" id="socialWorkspaceRefresh">刷新工作区</button><p class="muted small">汇总最近 80 条动态中的待处理记录和最近保存的 X 填稿记录。公共配图可保存后用于各平台，使用前核对素材来源。</p><div id="socialWorkspaceList"></div><div id="socialWorkspaceAssets" class="btn-row"></div></details>
-            <details class="card"><summary>视频任务与成片素材</summary><button type="button" id="socialTasksRefresh">刷新任务</button><div id="socialTasksList"></div><p class="muted small">显示最近 30 次制作记录。中断或失败后可在原草稿重新制作，成片可下载后在抖音发布。</p></details>
-            <div class="card"><h3>今日社交模型费用</h3><p class="muted small" id="socialCostBreakdown">正在读取费用…</p><p class="muted small">按已记录的模型调用估算，通用评论建议单独显示；平台自身费用和待对账请求未计入。</p></div>
-            <div class="card"><div class="interaction-head"><div><h3>AI 资讯选题</h3><p class="muted small">搜索近期资讯作为候选，制作前核对原文日期与事实。查询成功后缓存 30 分钟。</p></div><button type="button" id="socialNewsRefresh">查找资讯</button></div><div id="socialNewsResults" class="search-results"></div></div>
+            <p class="social-group-label">内容创作</p>
+
             <div class="social-toolbar card">
               <div>
                 <h3>让她写一条</h3>
@@ -288,6 +283,24 @@
                 <button data-post-kind="x">X 草稿</button>
               </div>
             </div>
+
+            <div class="card"><div class="interaction-head"><div><h3>AI 资讯选题</h3><p class="muted small">搜索近期资讯作为候选，制作前核对原文日期与事实。查询成功后缓存 30 分钟。</p></div><button type="button" id="socialNewsRefresh">查找资讯</button></div><div id="socialNewsResults" class="search-results"></div></div>
+
+            <div class="card comment-lab">
+              <h3>评论区替她说话</h3>
+              <p class="muted small">把视频文案、笔记正文或链接内容贴进来，她帮你想 3 条不招人烦的评论。自动刷视频、自动发评论需要单独接管浏览器，这一步先做「她来想」，你再决定发不发。</p>
+              <div class="comment-input-row">
+                <select id="commentPlatform">
+                  <option value="douyin">抖音</option>
+                  <option value="xhs">小红书</option>
+                </select>
+                <textarea id="commentContext" rows="4" placeholder="粘贴视频标题/文案、笔记正文，或者你想评论的那段话…"></textarea>
+              </div>
+              <button id="genCommentsBtn" class="primary-btn">想三条评论</button>
+              <div class="comment-results" id="commentResults"></div>
+            </div>
+
+            <p class="social-group-label">平台互动</p>
 
             <div class="card qzone-interactions">
               <div class="interaction-head">
@@ -328,22 +341,6 @@
               <p class="muted small" id="xhsDmResult">私信状态读取中…</p>
             </div>
 
-            <section class="post-browser" aria-label="动态记录">
-              <div class="post-browser-head"><h3>动态记录</h3><p id="postResultCount" class="muted small" role="status"></p></div>
-              <div class="tabs" id="postFilters" aria-label="按平台筛选">
-                <button type="button" data-post-filter="all" aria-pressed="true">全部</button>
-                <button type="button" data-post-filter="xhs" aria-pressed="false">小红书</button>
-                <button type="button" data-post-filter="qzone" aria-pressed="false">QQ 空间</button>
-                <button type="button" data-post-filter="douyin" aria-pressed="false">抖音</button>
-              </div>
-              <div class="post-search-tools">
-                <label>搜索动态<input id="postSearch" type="search" maxlength="200" placeholder="标题、正文或标签"></label>
-                <label>发布状态<select id="postStatusFilter"><option value="all">全部状态</option><option value="draft">草稿</option><option value="approved">已批准</option><option value="posted">已发布</option></select></label>
-              </div>
-              <div class="post-grid" id="postList"></div>
-              <div class="list-pagination" id="postPagination" hidden><button type="button" id="postPrevPage">上一页</button><span id="postPageInfo" role="status"></span><button type="button" id="postNextPage">下一页</button></div>
-            </section>
-
             <div class="card xhs-note-lab">
               <div class="interaction-head">
                 <div>
@@ -369,19 +366,29 @@
               <img id="xhsNoteShot" alt="创作中心填写结果截图" hidden>
             </div>
 
-            <div class="card comment-lab">
-              <h3>评论区替她说话</h3>
-              <p class="muted small">把视频文案、笔记正文或链接内容贴进来，她帮你想 3 条不招人烦的评论。自动刷视频、自动发评论需要单独接管浏览器，这一步先做「她来想」，你再决定发不发。</p>
-              <div class="comment-input-row">
-                <select id="commentPlatform">
-                  <option value="douyin">抖音</option>
-                  <option value="xhs">小红书</option>
-                </select>
-                <textarea id="commentContext" rows="4" placeholder="粘贴视频标题/文案、笔记正文，或者你想评论的那段话…"></textarea>
+            <p class="social-group-label">内容生产与记录</p>
+
+            <details class="card"><summary>视频任务与成片素材</summary><button type="button" id="socialTasksRefresh">刷新任务</button><div id="socialTasksList"></div><p class="muted small">显示最近 30 次制作记录。中断或失败后可在原草稿重新制作，成片可下载后在抖音发布。</p></details>
+
+            <section class="post-browser" aria-label="动态记录">
+              <div class="post-browser-head"><h3>动态记录</h3><p id="postResultCount" class="muted small" role="status"></p></div>
+              <div class="tabs" id="postFilters" aria-label="按平台筛选">
+                <button type="button" data-post-filter="all" aria-pressed="true">全部</button>
+                <button type="button" data-post-filter="xhs" aria-pressed="false">小红书</button>
+                <button type="button" data-post-filter="qzone" aria-pressed="false">QQ 空间</button>
+                <button type="button" data-post-filter="douyin" aria-pressed="false">抖音</button>
               </div>
-              <button id="genCommentsBtn" class="primary-btn">想三条评论</button>
-              <div class="comment-results" id="commentResults"></div>
-            </div>
+              <div class="post-search-tools">
+                <label>搜索动态<input id="postSearch" type="search" maxlength="200" placeholder="标题、正文或标签"></label>
+                <label>发布状态<select id="postStatusFilter"><option value="all">全部状态</option><option value="draft">草稿</option><option value="approved">已批准</option><option value="posted">已发布</option></select></label>
+              </div>
+              <div class="post-grid" id="postList"></div>
+              <div class="list-pagination" id="postPagination" hidden><button type="button" id="postPrevPage">上一页</button><span id="postPageInfo" role="status"></span><button type="button" id="postNextPage">下一页</button></div>
+            </section>
+
+            <details class="card"><summary>跨平台待处理与公共配图</summary><button type="button" id="socialWorkspaceRefresh">刷新工作区</button><p class="muted small">汇总最近 80 条动态中的待处理记录和最近保存的 X 填稿记录。公共配图可保存后用于各平台，使用前核对素材来源。</p><div id="socialWorkspaceList"></div><div id="socialWorkspaceAssets" class="btn-row"></div></details>
+
+            <div class="card"><h3>今日社交模型费用</h3><p class="muted small" id="socialCostBreakdown">正在读取费用…</p><p class="muted small">按已记录的模型调用估算，通用评论建议单独显示；平台自身费用和待对账请求未计入。</p></div>
 
             <p class="disclaimer">提示：平台通常要求标注 AI 生成内容；个人账号自动化有封号风险。默认只生成草稿，发布前请你确认。</p>
           </div>
@@ -743,13 +750,38 @@
               <section class="card" id="set-card-douyin">
                 <h3>抖音（浏览器自动化）</h3>
                 <p class="muted small" id="douyinSettingsStatus">正在读取抖音状态…</p>
+                <div class="btn-row">
+                  <button type="button" id="douyinConnect">显示登录页面</button>
+                  <button type="button" id="douyinConnectionRefresh">刷新页面预览</button>
+                  <button type="button" id="douyinReadOwnVideos">读取我的作品</button>
+                </div>
+                <p class="muted small">专用浏览器在后台运行，可在下方预览中扫码登录；验证码操作仍需在原生页面完成。登录态只存本机 <code>data/douyin-profile</code>，不保存密码。</p>
+                <p id="douyinConnectionState" role="status"></p>
+                <img id="douyinConnectionPreview" class="douyin-connection-preview" alt="抖音专用浏览器页面预览" hidden>
+                <h4>自动行为（即时生效，不跟「保存」走）</h4>
                 <label class="check"><input type="checkbox" id="douyinToggleMonitor" data-immediate="1"> 定时检查已记录视频的评论（每 30 分钟至多一个，失败停 6 小时）</label>
                 <label class="check"><input type="checkbox" id="douyinToggleAutoReply" data-immediate="1"> 自动回复符合条件的新评论（发送未实机验收时只起草，不会发出）</label>
                 <label class="check"><input type="checkbox" id="douyinToggleBrowse" data-immediate="1"> 自动刷视频并理解内容（每半小时一条、每天 6 条，走社交预算）</label>
-                <p class="muted small">开关即时生效，不跟「保存」按钮走。扫码登录、读评论、看理解笔记在「动态」页的抖音卡片里。</p>
+                <h4>评论与回复</h4>
+                <label>视频链接或 ID<input id="douyinCommentVideo" maxlength="250" placeholder="https://www.douyin.com/video/…"></label>
                 <div class="btn-row">
-                  <button type="button" id="douyinToSocial">去「动态」页操作抖音</button>
+                  <button type="button" id="douyinReadComments">读取当前评论</button>
+                  <button type="button" id="douyinCommentInbox">查看已记录评论</button>
+                  <button type="button" id="douyinSendDraft" disabled>确认发送后台草稿</button>
+                  <button type="button" id="douyinResolveSent" disabled>核对为已发送</button>
+                  <button type="button" id="douyinResolveUnsent" disabled>核对为未发送</button>
+                  <button type="button" id="douyinClearDraft">清除后台回复草稿</button>
                 </div>
+                <p class="muted small">发送尝试结果待核对时请到抖音确认；实机验收前「确认发送」保持禁用。草稿未处理时其他抖音读取会暂停。</p>
+                <div id="douyinComments"></div>
+                <h4>刷视频与内容理解</h4>
+                <div class="btn-row">
+                  <button type="button" id="douyinReadVideos">读取视频列表</button>
+                  <button type="button" id="douyinReadNotes">读取理解笔记</button>
+                </div>
+                <p class="muted small">打开视频页采两帧画面，连同标题简介交给视觉模型；声音不接入。在视频列表里点「理解这条」也能手动看一条，笔记只保存在本机。</p>
+                <div id="douyinVideos"></div>
+                <div id="douyinVideoNotes" class="search-results"></div>
               </section>
               <section class="card" id="set-card-sentinel">
                 <h3>异机哨兵（备份 + 报平安）</h3>

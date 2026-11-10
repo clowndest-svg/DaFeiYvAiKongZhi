@@ -1829,27 +1829,24 @@ async function loadLatestXhsDraft() {
 
 let settingsSection = 'identity';
 let rvcLibraryPage = 0;
-// 抖音三个开关在「动态」页和设置页各有一份，永远按同一份服务端状态同步，避免两边显示不一致。
+// 抖音的开关、登录、评论和翻视频全部收在「设置 → 抖音」；这里只负责按服务端快照刷新界面。
 let douyinSwitchSnapshot = {};
 function applyDouyinSwitchState(data = {}) {
   douyinSwitchSnapshot = { ...douyinSwitchSnapshot, ...data };
   const snapshot = douyinSwitchSnapshot;
-  const pairs = [
-    ['monitoring', ['#douyinMonitorEnabled', '#douyinToggleMonitor']],
-    ['autoReply', ['#douyinAutoReply', '#douyinToggleAutoReply']],
-    ['browse', ['#douyinBrowseEnabled', '#douyinToggleBrowse']],
-  ];
-  for (const [key, selectors] of pairs) {
+  for (const [key, selector] of [['monitoring', '#douyinToggleMonitor'], ['autoReply', '#douyinToggleAutoReply'], ['browse', '#douyinToggleBrowse']]) {
     if (typeof snapshot[key] !== 'boolean') continue;
-    for (const selector of selectors) { const node = $(selector); if (node) node.checked = snapshot[key]; }
+    const node = $(selector);
+    if (node) node.checked = snapshot[key];
   }
   if (typeof snapshot.sendAvailable === 'boolean') {
-    for (const selector of ['#douyinAutoReply', '#douyinToggleAutoReply']) { const node = $(selector); if (node) node.disabled = !snapshot.sendAvailable; }
+    const node = $('#douyinToggleAutoReply');
+    if (node) node.disabled = !snapshot.sendAvailable;
   }
   const status = $('#douyinSettingsStatus');
   if (status && (typeof snapshot.account === 'string' || typeof snapshot.sendAvailable === 'boolean')) {
     const parts = [
-      snapshot.account ? `已绑定抖音号 ${snapshot.account}` : '还没绑定抖音号（先去「动态」页读取我的作品）',
+      snapshot.account ? `已绑定抖音号 ${snapshot.account}` : '还没绑定抖音号（先点上方「读取我的作品」）',
       snapshot.sendAvailable ? '发送已开闸' : '发送未实机验收（自动回复只起草）',
       `评论监控：${snapshot.monitoring ? '开' : '关'}`,
       `自动回复：${snapshot.autoReply ? '开' : '关'}`,
@@ -3302,7 +3299,6 @@ function bindSocial() {
       $('#douyinSendDraft').disabled = !douyinSendAvailable || currentDouyinDraft?.state !== 'ready' || !currentDouyinDraft?.id;
       $('#douyinResolveSent').disabled = currentDouyinDraft?.state !== 'attempted';
       $('#douyinResolveUnsent').disabled = currentDouyinDraft?.state !== 'attempted';
-      $('#douyinMonitorEnabled').disabled = false;
       applyDouyinSwitchState({ monitoring: result.monitoring, autoReply: result.autoReply, sendAvailable: result.sendAvailable, account: result.account });
       box.textContent = '';
       if (result.draft) box.appendChild(el('p', 'muted small', `后台有未发送回复草稿：${result.draft.text}。清除前其他抖音读取会暂停。`));
@@ -3348,18 +3344,6 @@ function bindSocial() {
       } catch (error) { currentDouyinDraft = null; toast(error.message, 'error'); }
     });
     $('#douyinSendDraft').disabled = !douyinSendAvailable || !currentDouyinDraft;
-  });
-  $('#douyinMonitorEnabled').addEventListener('change', async event => {
-    try {
-      await api('/api/douyin/monitor', { method: 'POST', body: { enabled: event.target.checked } });
-      applyDouyinSwitchState({ monitoring: event.target.checked });
-    } catch (error) { event.target.checked = !event.target.checked; toast(error.message, 'error'); }
-  });
-  $('#douyinAutoReply').addEventListener('change', async event => {
-    try {
-      await api('/api/douyin/auto-reply', { method: 'POST', body: { enabled: event.target.checked } });
-      applyDouyinSwitchState({ autoReply: event.target.checked });
-    } catch (error) { event.target.checked = !event.target.checked; toast(error.message, 'error'); }
   });
   $('#douyinReadComments').addEventListener('click', () => withBusy($('#douyinReadComments'), async () => {
     const box = $('#douyinComments');
@@ -3435,7 +3419,7 @@ function bindSocial() {
   async function loadDouyinNotes() {
     const box = $('#douyinVideoNotes');
     const result = await api('/api/douyin/video-notes');
-    $('#douyinBrowseEnabled').checked = result.browseEnabled === true;
+    applyDouyinSwitchState({ browse: result.browseEnabled === true, today: result.today });
     box.textContent = '';
     box.appendChild(el('p', 'muted small', `今天已看 ${result.today || 0} 条（自动上限 6 条）`));
     for (const note of result.notes || []) {
@@ -3453,16 +3437,6 @@ function bindSocial() {
   $('#douyinReadNotes').addEventListener('click', () => withBusy($('#douyinReadNotes'), async () => {
     try { await loadDouyinNotes(); } catch (error) { toast(error.message, 'error'); }
   }));
-  $('#douyinBrowseEnabled').addEventListener('change', async event => {
-    try {
-      await api('/api/douyin/browse', { method: 'POST', body: { enabled: event.target.checked } });
-      applyDouyinSwitchState({ browse: event.target.checked });
-      toast(event.target.checked ? '已开始自动刷视频' : '已停止自动刷视频');
-    } catch (error) {
-      event.target.checked = !event.target.checked;
-      toast(error.message, 'error');
-    }
-  });
   for (const [selector, endpoint, key, label] of [
     ['#douyinToggleMonitor', '/api/douyin/monitor', 'monitoring', '评论定时检查'],
     ['#douyinToggleAutoReply', '/api/douyin/auto-reply', 'autoReply', '自动回复'],
@@ -3479,12 +3453,6 @@ function bindSocial() {
       }
     });
   }
-  $('#douyinToSocial').addEventListener('click', () => {
-    switchView('social');
-    for (const id of ['douyinConnect', 'douyinCommentInbox', 'douyinReadNotes']) {
-      $('#' + id)?.closest('details')?.setAttribute('open', '');
-    }
-  });
   $('#socialWorkspaceRefresh').addEventListener('click', () => withBusy($('#socialWorkspaceRefresh'), async () => {
     try {
       const result = await api('/api/social/workspace');

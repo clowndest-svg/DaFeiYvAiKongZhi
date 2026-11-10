@@ -788,6 +788,8 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .letter-open { flex: 0 0 auto; color: var(--cyan); font-size: var(--font-xs); }
 
 .social-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.social-group-label { margin: var(--space-6) 0 calc(-1 * var(--space-2)); color: var(--faint); font-size: var(--font-xs); font-weight: 650; letter-spacing: .14em; }
+.social-group-label:first-of-type { margin-top: var(--space-4); }
 .qzone-interactions { margin-bottom: 16px; }
 .interaction-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .interaction-head p { margin-top: 4px; }
@@ -851,7 +853,7 @@ a.link-btn:hover { border-color: var(--line-strong); color: var(--cyan); }
 .post-actions .del { color: var(--faint); }
 .post-actions .del:hover { color: var(--danger); }
 .comment-lab { margin-top: 8px; }
-.comment-input-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 10px; margin: 12px 0; }
+.comment-input-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: start; gap: 10px; margin: 12px 0; }
 .comment-input-row textarea { min-height: 96px; }
 .comment-results { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
 .comment-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 12px; border-radius: 11px; background: rgba(255, 255, 255, 0.035); border: 1px solid var(--line); }
