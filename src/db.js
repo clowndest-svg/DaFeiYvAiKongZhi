@@ -761,6 +761,24 @@ export function listEvents(limit = 40) {
     .map((row) => ({ ...row, data: parseJson(row.data, {}) }));
 }
 
+// 她事后反思写下的心里话挂在对应回复的 meta 里；取最近几条给控制台看。
+export function listThoughts(limit = 30) {
+  return getDb()
+    .prepare("SELECT id, session_id, channel, content, meta, created_at FROM messages WHERE role = 'assistant' AND meta LIKE '%innerThought%' ORDER BY id DESC LIMIT ?")
+    .all(Math.min(200, Math.max(1, Number(limit) || 30)))
+    .map((row) => {
+      const meta = parseJson(row.meta, {}) || {};
+      return {
+        id: row.id,
+        sessionId: row.session_id,
+        channel: row.channel,
+        at: row.created_at,
+        thought: String(meta.innerThought || '').slice(0, 400),
+        reply: String(row.content || '').slice(0, 200),
+      };
+    });
+}
+
 export function countUsers() {
   const row = getDb().prepare("SELECT COUNT(DISTINCT session_id) AS n FROM messages WHERE role = 'user'").get();
   return Number(row?.n || 0);

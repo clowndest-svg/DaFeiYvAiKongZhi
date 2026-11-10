@@ -209,6 +209,7 @@ function switchView(name) {
   if (targetView && previousView !== name) targetView.scrollTop = 0;
   if (name === 'chat') scrollMessages(true);
   if (name === 'memory') loadMemory().catch((error) => toast(error.message, 'error'));
+  if (name === 'logs') loadLogs().catch((error) => toast(error.message, 'error'));
   if (name === 'social') {
     loadPosts().catch((error) => toast(error.message, 'error'));
     loadQzoneFeed().catch(() => {});
@@ -3187,6 +3188,80 @@ async function loadEvents() {
   }
 }
 
+/* ---------------- logs view ---------------- */
+
+function renderSelfNotes(data) {
+  const meta = $('#selfNotesMeta');
+  const text = $('#selfNotesText');
+  const body = String(data?.text || '').trim();
+  meta.textContent = body
+    ? `她自己写的，最近改动于 ${new Date(data.updatedAt || Date.now()).toLocaleString('zh-CN')} · 累计 ${data.versions || 0} 个版本`
+    : '她还没写过。她会在事后反思时自己写，也会自己改。';
+  text.textContent = body || '（空）';
+  text.classList.toggle('muted', !body);
+}
+
+function renderThoughts(items) {
+  const box = $('#logsThoughts');
+  box.innerHTML = '';
+  if (!items.length) { box.appendChild(el('p', 'muted small', '还没有思考记录。聊几句、等一轮反思完成后会出现在这里。')); return; }
+  for (const item of items) {
+    const row = el('div', 'search-row');
+    const head = `${new Date(item.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${item.channel === 'qq' ? 'QQ' : item.channel === 'web' ? '网页' : item.channel || ''}`;
+    row.appendChild(el('p', 'muted small', head));
+    row.appendChild(el('p', 'thought-text', item.thought));
+    if (item.reply) row.appendChild(el('p', 'muted small', `她当时回的是：「${item.reply.slice(0, 80)}${item.reply.length > 80 ? '…' : ''}」`));
+    box.appendChild(row);
+  }
+}
+
+function renderLogEvents(items) {
+  const box = $('#logsEvents');
+  box.innerHTML = '';
+  if (!items.length) { box.appendChild(el('p', 'muted small', '还没有运行事件。')); return; }
+  for (const item of items) {
+    const row = el('div', 'search-row');
+    row.appendChild(el('p', 'muted small', `${new Date(item.created_at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} · ${item.type}`));
+    row.appendChild(el('p', '', item.message || item.type));
+    box.appendChild(row);
+  }
+}
+
+async function loadServerLog(file = 'app') {
+  const data = await api(`/api/logs/server?file=${file === 'out' ? 'out' : 'app'}&lines=150`);
+  const pre = $('#logsServer');
+  pre.textContent = data.text ? data.text.split('\n').slice(-150).join('\n') : '（日志为空或还没写）';
+  pre.scrollTop = pre.scrollHeight;
+  $('#logsFileMeta').textContent = file === 'out'
+    ? '进程输出 server.out 的末尾 150 行（自动脱敏）。'
+    : '今天的应用日志，读取末尾 150 行（自动脱敏，保留 14 天）。';
+}
+
+async function loadLogs() {
+  await Promise.all([
+    api('/api/self-notes').then(renderSelfNotes),
+    api('/api/logs/thoughts?limit=30').then((data) => renderThoughts(data.thoughts || [])),
+    api('/api/events').then((data) => renderLogEvents(data.events || [])),
+    loadServerLog('app'),
+  ]);
+}
+
+function bindLogs() {
+  $('#logsRefresh').addEventListener('click', () => withBusy($('#logsRefresh'), async () => {
+    try { await loadLogs(); toast('日志已刷新'); } catch (error) { toast(error.message, 'error'); }
+  }));
+  $('#logsFileApp').addEventListener('click', () => loadServerLog('app').catch((error) => toast(error.message, 'error')));
+  $('#logsFileOut').addEventListener('click', () => loadServerLog('out').catch((error) => toast(error.message, 'error')));
+  $('#selfNotesClear').addEventListener('click', async () => {
+    if (!confirm('清空她写给自己的话？她自己之后还能重新写。')) return;
+    try {
+      await api('/api/self-notes/clear', { method: 'POST' });
+      await loadLogs();
+      toast('已清空，她会重新开始写');
+    } catch (error) { toast(error.message, 'error'); }
+  });
+}
+
 /* ---------------- bindings ---------------- */
 
 function bindChat() {
@@ -5115,6 +5190,7 @@ async function init() {
   bindChat();
   bindMemory();
   bindSocial();
+  bindLogs();
   bindSettings();
   bindModal();
   bindPresence();

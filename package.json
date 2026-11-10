@@ -10,7 +10,7 @@
     "test": "node --import ./tools/project-env.mjs tools/test.mjs",
     "test:local": "node --import ./tools/project-env.mjs tools/test.mjs --local",
     "check": "node --import ./tools/project-env.mjs tools/check.mjs",
-    "test:browser": "node --import ./tools/project-env.mjs --test --test-concurrency=1 tests/browser.e2e.js tests/presence.e2e.js tests/settings-layout.e2e.js tests/layout-toolbar.e2e.js tests/douyin-comments.e2e.js tests/social-news.e2e.js",
+    "test:browser": "node --import ./tools/project-env.mjs --test --test-concurrency=1 tests/browser.e2e.js tests/presence.e2e.js tests/settings-layout.e2e.js tests/layout-toolbar.e2e.js tests/douyin-comments.e2e.js tests/social-news.e2e.js tests/logs-view.e2e.js",
     "audit:ui": "node tools/ui-audit.mjs",
     "tts:install-local": "node tools/install-local-tts.mjs",
     "smoke": "node tools/smoke-llm.js"

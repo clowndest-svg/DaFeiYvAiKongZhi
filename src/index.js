@@ -51,9 +51,11 @@ import {
   listMemories,
   listMoods,
   listPosts,
+  listThoughts,
   maintenance,
 } from './db.js';
 import { logger } from './logger.js';
+import { clearHerSelfNotes, getHerSelfNotes, selfNotesVersions } from './self.js';
 import { DeepSeek } from './llm.js';
 import { Companion, chatActivity } from './chat.js';
 import { drainReflections } from './reflect.js';
@@ -364,6 +366,20 @@ function sendJson(res, status, value) {
     'Cache-Control': 'no-store',
   });
   res.end(body);
+}
+
+// 只读日志尾巴：最多读最后 256KB，按行截取，输出前再过一遍脱敏。
+function tailLogFile(file, lines) {
+  try {
+    const stat = fs.statSync(file);
+    const size = Math.min(stat.size, 256 * 1024);
+    const fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(size);
+    try { fs.readSync(fd, buffer, 0, size, stat.size - size); } finally { fs.closeSync(fd); }
+    return logger.redact(buffer.toString('utf8').split('\n').filter(Boolean).slice(-lines).join('\n'));
+  } catch {
+    return '';
+  }
 }
 
 function errorMessage(error) {
@@ -1156,6 +1172,25 @@ async function handleApi(req, res, pathname, url) {
 
   if (pathname === '/api/events' && method === 'GET') {
     return sendJson(res, 200, { events: listEvents(60) });
+  }
+
+  if (pathname === '/api/self-notes' && method === 'GET') {
+    return sendJson(res, 200, { ...getHerSelfNotes(), versions: selfNotesVersions().length });
+  }
+
+  if (pathname === '/api/self-notes/clear' && method === 'POST') {
+    return sendJson(res, 200, clearHerSelfNotes({ source: 'owner' }));
+  }
+
+  if (pathname === '/api/logs/thoughts' && method === 'GET') {
+    const limit = Math.min(200, Math.max(1, Number(url.searchParams.get('limit')) || 30));
+    return sendJson(res, 200, { thoughts: listThoughts(limit) });
+  }
+
+  if (pathname === '/api/logs/server' && method === 'GET') {
+    const file = url.searchParams.get('file') === 'out' ? 'server.out' : `app-${shanghaiDayKey()}.log`;
+    const lines = Math.min(400, Math.max(20, Number(url.searchParams.get('lines')) || 150));
+    return sendJson(res, 200, { file, text: tailLogFile(path.join(paths.logs, file), lines) });
   }
 
   if (pathname === '/api/actions/proactive' && method === 'POST') {

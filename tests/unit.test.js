@@ -121,12 +121,16 @@ test('拼出的 system prompt 包含人设、核心记忆与边界', () => {
   assert.equal(last.content[1].type, 'image_url');
 });
 
-test('说话方式的硬约束还钉在提示词里（形状靠这几条维持，删了就回到机器腔）', () => {
+test('说话方式保留防机器腔的形状约束，但把表达自由还给她', () => {
   const source = fs.readFileSync(path.join(process.cwd(), 'src', 'prompt.js'), 'utf8');
   assert.match(source, /分成几段写/, '连发（分段）的口径没了');
   assert.match(source, /每一段当成一条独立消息/, '没告诉她分段会被拆成几条消息');
-  assert.match(source, /十句里最多一两句/, '括号小动作没限量');
   assert.match(source, /他发几个字，你也别写成一整段/, '长度没跟他挂钩');
+  // 11-10 起：微观管束（括号动作配额）降成参考，她自己拿主意；底线只剩诚实、隐私、尊重。
+  assert.match(source, /不是锁/, '没写清说话方式只是参考');
+  assert.match(source, /以你写的为准/, '她自己的自我档案没有更高优先级');
+  assert.match(source, /括号里的小动作，用不用、用多少由你自己定/, '括号动作还锁着配额');
+  assert.doesNotMatch(source, /十句里最多一两句/, '旧的括号动作硬配额还在');
 });
 
 test('动态 prompt 要求 JSON 且包含隐私边界', () => {

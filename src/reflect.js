@@ -15,6 +15,7 @@ import { noteBrainLink } from './brain.js';
 import { applyNeuroEvent } from './neuro.js';
 import { addSense } from './senses.js';
 import { addIntention, listIntentions, completeIntention } from './intentions.js';
+import { getHerSelfNotes, updateHerSelfNotes } from './self.js';
 import { buildReflectionPrompt } from './prompt.js';
 import { logger } from './logger.js';
 import { costBlocked } from './budget.js';
@@ -86,7 +87,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
       },
       {
         role: 'user',
-        content: buildReflectionPrompt({ settings, mood, transcript, coreMemories: core, openIntentions }),
+        content: buildReflectionPrompt({ settings, mood, transcript, coreMemories: core, openIntentions, selfNotes: getHerSelfNotes().text }),
       },
     ],
     {
@@ -117,6 +118,12 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
     const innerThought = String(data.inner_thought || '').trim().slice(0, 300);
     if (innerThought && assistantMessageId) {
       updateMessageMeta(assistantMessageId, { innerThought });
+    }
+
+    // 她自己改自己：只动她自写的档案层，底线规则和代码不在她能改的范围内。
+    let selfUpdated = false;
+    if (data.self_update && typeof data.self_update === 'object' && !Array.isArray(data.self_update)) {
+      selfUpdated = Boolean(updateHerSelfNotes(data.self_update, { source: 'reflect', transaction: false }));
     }
 
     const moodUpdate = data.mood || {};
@@ -244,7 +251,7 @@ export async function reflect({ llm, sessionId, assistantMessageId, settings, me
     }
     onApplied?.();
     db.exec('COMMIT');
-    return { innerThought, added: added.length, intentions: intentionAdded, senses: senseAdded };
+    return { innerThought, added: added.length, intentions: intentionAdded, senses: senseAdded, selfUpdated };
   } catch (error) {
     db.exec('ROLLBACK');
     throw error;

@@ -43,6 +43,10 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg>
           <span>动态</span>
         </button>
+        <button class="rail-btn" data-view="logs" title="日志">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h9l4 4v14H6z"/><path d="M9 9h6M9 13h6M9 17h4"/></svg>
+          <span>日志</span>
+        </button>
         <button class="rail-btn" data-view="settings" title="设置">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.8v2.4M12 18.8v2.4M2.8 12h2.4M18.8 12h2.4M5.5 5.5l1.7 1.7M16.8 16.8l1.7 1.7M18.5 5.5l-1.7 1.7M7.2 16.8l-1.7 1.7"/></svg>
           <span>设置</span>
@@ -391,6 +395,53 @@
             <div class="card"><h3>今日社交模型费用</h3><p class="muted small" id="socialCostBreakdown">正在读取费用…</p><p class="muted small">按已记录的模型调用估算，通用评论建议单独显示；平台自身费用和待对账请求未计入。</p></div>
 
             <p class="disclaimer">提示：平台通常要求标注 AI 生成内容；个人账号自动化有封号风险。默认只生成草稿，发布前请你确认。</p>
+          </div>
+        </section>
+
+        <section class="view" id="view-logs">
+          <div class="page">
+            <div class="page-head">
+              <div>
+                <h2>日志</h2>
+                <p>她的思考、运行事件和本机日志。思考是她事后写下的心里话，不是聊天记录。</p>
+              </div>
+              <button type="button" id="logsRefresh">刷新</button>
+            </div>
+            <div class="card">
+              <div class="interaction-head">
+                <div>
+                  <h3>她写给自己的话</h3>
+                  <p class="muted small" id="selfNotesMeta">正在读取…</p>
+                </div>
+                <div class="btn-row">
+                  <button type="button" id="selfNotesClear">清空重来</button>
+                </div>
+              </div>
+              <div id="selfNotesText" class="self-notes muted">还没有。她会在事后反思时自己写，也会自己改。</div>
+            </div>
+            <div class="card">
+              <h3>她的思考</h3>
+              <p class="muted small">每轮对话结束后她写下的内心独白，挂在对应回复上；这里看最近 30 条。</p>
+              <div id="logsThoughts" class="search-results"></div>
+            </div>
+            <div class="card">
+              <h3>运行事件</h3>
+              <p class="muted small">主动消息、记忆整理、平台动作和失败记录。最新 60 条。</p>
+              <div id="logsEvents" class="search-results"></div>
+            </div>
+            <div class="card">
+              <div class="interaction-head">
+                <div>
+                  <h3>服务日志</h3>
+                  <p class="muted small" id="logsFileMeta">今天的应用日志，读取末尾 150 行（自动脱敏，保留 14 天）。</p>
+                </div>
+                <div class="btn-row">
+                  <button type="button" id="logsFileApp">应用日志</button>
+                  <button type="button" id="logsFileOut">进程输出</button>
+                </div>
+              </div>
+              <pre id="logsServer" class="logs-pre">点「刷新」读取日志。</pre>
+            </div>
           </div>
         </section>
 
