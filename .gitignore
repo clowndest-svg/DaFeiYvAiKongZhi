@@ -34,6 +34,8 @@ __pycache__/
 # Local editor / Claude state
 .claude/*
 !.claude/launch.json
+# WorkBuddy 项目数据与工作区记忆（不是临时缓存，绝不进公开仓库）
+.workbuddy-ai/
 .vscode/
 .DS_Store
 Thumbs.db

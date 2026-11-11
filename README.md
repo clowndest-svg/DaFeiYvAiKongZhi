@@ -149,6 +149,21 @@ QQ 是可选通道，不接也能用网页聊天。**本项目实机验证与默
 - 机器人只登**小号**；大号（主人）私聊她才会以女朋友身份回复，陌生人私聊/群聊按设置与隐私边界处理。
 - 首次接入后在设置里确认主人身份，别把主号当机器人号扫码。
 
+### 冻结 QQ 版本（接了 SnowLuma 建议必做）
+
+QQ 每小时自己查一次热更新，没有官方关闭开关；一换版本，协议端可能就注不进去，而 **SnowLuma 上游已不再公开维护**，
+没人会来适配新版。项目用一条可逆的目录 ACL 把这件事堵上：
+
+```bash
+node tools/freeze-qq-update.mjs --show       # 只读查看规则与当前 QQ 版本
+node tools/freeze-qq-update.mjs --freeze     # 冻结（本机 2026-11-11 已执行）
+node tools/freeze-qq-update.mjs --unfreeze   # 要手动升级 QQ 时先放行，升完再冻回去
+```
+
+只拒绝在 `安装目录/versions/` 下**新建文件与目录**，不删文件、不结束 QQ、不动登录态，也不影响已有的配置文件写入。
+`tools/hold-qq-update.mjs` 仍保留，但它只是把已下载的包改名扣住，挡不住腾讯云控重下，不能替代冻结。
+边界、备份位置、回退命令和 SnowLuma 离线资产清单见 `docs/QQ_FREEZE_AND_CAPABILITY_GAPS_20261111.md`。
+
 ## 8. 接入小红书 / X / 抖音 / QQ 空间
 
 所有平台都用**专用浏览器 + 扫码登录**，不保存密码；登录态存在本机 `data/` 下。入口统一在**设置页对应分区**。
@@ -236,6 +251,8 @@ QQ 是可选通道，不接也能用网页聊天。**本项目实机验证与默
 | `npm run check` | 静态检查 |
 | `npm run audit:ui` | 界面体检（隔离演示实例，多视口检查） |
 | `node tools/demo.mjs` | 隔离演示（端口 7790，模拟模型，密码 `demo-password`） |
+| `node tools/freeze-qq-update.mjs --show` | 查看 QQ 版本冻结状态；`--freeze` / `--unfreeze` 冻结与放行 |
+| `node tools/hold-qq-update.mjs --show` | 查看并扣住 QQ 已下载的待装包（一次性，不替代冻结） |
 | `npm run smoke -- --confirm-cost` | 在线模型冒烟测试（会花钱） |
 | `npm run tts:install-local` | 下载本地离线音色（约 130MB，仅本机自用，注意模型许可） |
 
@@ -293,6 +310,8 @@ snowluma/ napcat/   QQ 接入端安装目录（不提交）
 - **不是实时通话**：陪伴视图是摄像头 + 麦克风 + 语音合成 + 字幕，没有 WebRTC；"视线跟随"是鼠标视差。QQ 语音只能发语音消息，不能打断、不能撤回已提交的语音。
 - **不是"赛博永生"**：记忆是"资料库 + 按需读取"，不会改变模型权重。
 - **平台自动化天生脆弱**：网页结构一变就可能读不到；所有"未知结果"都会停下等人核对，不假装成功。
+- **QQ 版本冻结不是永久免疫**：冻结只挡 QQ 自己在 `versions/` 里放热更新包；手动运行完整安装包、腾讯强制最低版本不受此控制。SnowLuma 上游已停止公开维护，升级前先按 `docs/qq-provider-migration.md` 核对版本组合与回退方案。
+- **低余额会让"她什么都不做"**：`cost.lowBalanceCny` 默认 5 元，低于它会熔断语音、周记、反思和 X / 抖音 / 小红书 / 空间的自动运营；这不是功能坏了，去设置页调阈值或充值即可。
 - **账号风险**：QQ / 小红书 / X / 抖音自动化违反平台规则可能导致限流或封号，请只用小号、低频、人工确认公开内容。
 - **公开内容**：有自动隐私检查，但不是绝对保证，重要内容请自己过目。
 - **费用**：本地台账是估算；余额未知时每日上限仍然生效。
@@ -306,6 +325,7 @@ snowluma/ napcat/   QQ 接入端安装目录（不提交）
 - `docs/HUMAN_STYLE_AND_SEARCH_20261101.md` — 说话风格与联网搜索实测
 - `docs/XHS_PUBLISH_20261101.md` — 小红书发布链路
 - `docs/QQ_RECOVERY_PLAN_20261102.md` — QQ 掉线恢复判据与实测
+- `docs/QQ_FREEZE_AND_CAPABILITY_GAPS_20261111.md` — QQ 版本冻结、SnowLuma 停更离线资产、聊天里「做不到」的归因
 - `docs/qq-provider-migration.md` — QQ 接入端迁移与回退
 - `docs/douyin-and-social-platform-plan.md` — 抖音与跨平台运营方案
 - `docs/settings-layout-acceptance.md` — 设置页布局验收
