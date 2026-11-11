@@ -35,6 +35,7 @@ import { isWithinWindow, localHour, nextShanghaiClock, nowIso, parseJsonLoose, p
 import { processXhsExplore, processXhsOwnComments } from './channels/xhs-actions.js';
 import { checkNapcatVersions, lastVersionReport, versionCheckDue } from './napcat-versions.js';
 import { qqProvider } from './qq-provider.js';
+import { ownerContext, socialMemory } from './owner-tools.js';
 
 function localDayKey(date = new Date()) {
   return shanghaiDayKey(date);
@@ -191,7 +192,7 @@ export class Scheduler {
         kvSet('douyin:browse-next', String(Date.now() + 30 * 60000));
         return { skipped: true, reason: '这批视频都看过了' };
       }
-      const result = await understandDouyinVideo(selected.id, { llm: this.llm });
+      const result = await understandDouyinVideo(selected.id, { llm: this.llm, title: selected.title });
       kvSet('douyin:browse-next', String(Date.now() + (result.ok ? 30 * 60000 : 6 * 3600000)));
       if (!result.ok) addEvent('douyin_browse_waiting', '抖音刷视频暂停六小时', { reason: result.reason });
       return result;
@@ -286,7 +287,7 @@ export class Scheduler {
   async pollXLocked() {
     const settings = loadSettings();
     if (!settings.social?.xEnabled) return null;
-    if (this.costGate('xAuto', 'X 自动互动')) return null;
+    if (settings.social.xReadOnly ? this.costGate('search', 'X 只读浏览') : this.costGate('xAuto', 'X 自动互动')) return null;
     if (!isWithinWindow(settings.social.activeStart, settings.social.activeEnd)) return null;
     if (Date.parse(kvGet('x_cooldown_until') || '') > Date.now()) return null;
     if (Date.now() < (this.xRetryAt || 0)) return null;
@@ -311,6 +312,14 @@ export class Scheduler {
     if (this.xBusy) return null;
     this.xBusy = true;
     try {
+      if (settings.social.xReadOnly) {
+        if (!settings.social.xAutoBrowse) return null;
+        const { readXTimeline, recordXActivity } = await import('./channels/x.js');
+        const posts = await readXTimeline({ limit: 6 });
+        for (const post of posts) recordXActivity({ type: 'read', text: post.text, target: post.handle, note: post.href });
+        addEvent('x_read', '她只读浏览了 X 时间线', { count: posts.length });
+        return { read: posts.length, readOnly: true };
+      }
       const { draftXPost, processXExplore, processXOwnReplies, xBudgetStatus } = await import('./channels/x-actions.js');
       const replies = await processXOwnReplies({ llm: this.llm }).catch((error) => {
         this.lastXError = error.message;
@@ -1243,6 +1252,8 @@ export class Scheduler {
     const deliveryBot = settings.qq.botAccount;
     const block = getMemoryBlock({ query: '他最近怎么样 现在在做什么 心情', settings });
     block.xhsActivity = getRecentXhsActivity({ hours: 48, limit: 6 });
+    block.socialActivity = socialMemory();
+    block.capabilities = ownerContext();
     block.intentions = listIntentions({ limit: 4, forPrompt: true });
     if (settings.presence?.neuroEnabled) block.neuro = neuroStatus(settings);
     if (settings.presence?.sensesEnabled) block.senses = listSenses({ limit: 6 });

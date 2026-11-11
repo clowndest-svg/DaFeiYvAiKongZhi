@@ -54,6 +54,7 @@ function windowsCommandLineForPort(port) {
       windowsHide: true,
       timeout: 8000,
       maxBuffer: 1024 * 1024,
+      env: { ...process.env, PSModulePath: undefined },
     });
     return String(out || '').trim();
   } catch (error) {
@@ -96,7 +97,7 @@ export function chromeHoldingProfile(profileDir) {
       encoding: 'utf8',
       timeout: 20000,
       windowsHide: true,
-      env: { ...process.env, BIZHI_PROFILE_MATCH: String(profileDir) },
+      env: { ...process.env, PSModulePath: undefined, BIZHI_PROFILE_MATCH: String(profileDir) },
     });
     rows = String(out)
       .split(/\r?\n/)

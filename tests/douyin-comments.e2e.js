@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { chromium } from 'playwright';
-import { extractDouyinPageComments, extractDouyinVideoContext, openDouyinReplyTarget, probeDouyinReplySubmit } from '../src/channels/douyin.js';
+import { extractDouyinFeed, extractDouyinPageComments, extractDouyinVideoContext, openDouyinReplyTarget, probeDouyinReplySubmit } from '../src/channels/douyin.js';
 
 test('嵌套回复按自己的评论 ID 定位，父评论不会包含子评论正文', async t => {
   const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(fs.existsSync);
@@ -60,4 +60,25 @@ test('视频页提取：标题简介齐全，验证页和无视频页都如实�
   const blocked = await page.evaluate(extractDouyinVideoContext);
   assert.equal(blocked.verification, true);
   assert.equal(blocked.hasVideo, false);
+  await page.setContent('<video id="placeholder"></video><video id="active"></video>');
+  await page.evaluate(() => {
+    const active = document.querySelector('#active');
+    Object.defineProperty(active, 'readyState', { value: 4 });
+    Object.defineProperty(active, 'paused', { value: false });
+  });
+  assert.equal((await page.evaluate(extractDouyinVideoContext)).playing, true);
+});
+
+test('抖音精选卡片没有链接时仍能读取标题，验证码页不冒充浏览成功', async t => {
+  const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(fs.existsSync);
+  const browser = await chromium.launch({ executablePath, headless: true });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  await page.setContent('<div><div><div><div><img width="300" height="180" alt="精选视频标题"></div></div></div></div><img width="32" height="32" alt="头像">');
+  const feed = await page.evaluate(extractDouyinFeed);
+  assert.equal(feed.items.length, 1);
+  assert.equal(feed.items[0].title, '精选视频标题');
+  assert.equal(feed.items[0].id, '');
+  await page.locator('body').evaluate(body => body.append('请完成下列验证'));
+  assert.equal((await page.evaluate(extractDouyinFeed)).verification, true);
 });

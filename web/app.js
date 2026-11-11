@@ -669,6 +669,8 @@ function appendMessage(message, { images = [] } = {}) {
 
   const wrap = el('div', 'bubble-wrap');
   const bubble = el('div', 'bubble', message.content || '');
+  const attachments = (message.meta?.attachments || []).filter(item => /^\/media\/owner-[a-f0-9-]+\.(?:png|jpg|webp|gif)$/.test(item?.url || ''));
+  images = [...images, ...attachments.map(item => item.url)];
   if (images.length) {
     for (const src of images) {
       const img = el('img');
@@ -2270,6 +2272,7 @@ function fillSettings() {
   $('#setXhsEnabled').checked = Boolean(settings.social?.xhsEnabled);
   $('#setXEnabled').checked = Boolean(settings.social?.xEnabled);
   $('#setXAutoBrowse').checked = Boolean(settings.social?.xAutoBrowse);
+  $('#setXReadOnly').checked = Boolean(settings.social?.xReadOnly);
   $('#setXAutoReply').checked = settings.social?.xAutoReply !== false;
   $('#setXAutoLike').checked = Boolean(settings.social?.xAutoLike);
   $('#setXAutoRetweet').checked = Boolean(settings.social?.xAutoRetweet);
@@ -2307,6 +2310,10 @@ function fillSettings() {
   $('#setXhsDmMaxPerDay').value = settings.social?.xhsDmMaxPerDay ?? 3;
   $('#setXhsDmMaxPerTarget').value = settings.social?.xhsDmMaxPerTarget ?? 1;
   $('#setLowBalanceCny').value = settings.cost?.lowBalanceCny ?? 5;
+  $('#setOwnerToolsEnabled').checked = settings.ownerTools?.enabled === true;
+  $('#setOwnerDesktop').checked = settings.ownerTools?.desktop === true;
+  $('#setOwnerSourceWrite').checked = settings.ownerTools?.sourceWrite === true;
+  $('#setOwnerMaxSteps').value = settings.ownerTools?.maxSteps ?? 12;
   $('#setStopBalanceCny').value = settings.cost?.stopBalanceCny ?? 1.5;
   $('#setMaxDailyCostCny').value = settings.cost?.maxDailyCostCny ?? 3;
   $('#setAutoSpeak').checked = Boolean(settings.ui?.autoSpeak);
@@ -2449,6 +2456,7 @@ function collectSettings() {
       douyinAutoPost: $('#setDouyinAuto').checked,
       xEnabled: $('#setXEnabled').checked,
       xAutoBrowse: $('#setXAutoBrowse').checked,
+      xReadOnly: $('#setXReadOnly').checked,
       xAutoReply: $('#setXAutoReply').checked,
       xAutoLike: $('#setXAutoLike').checked,
       xAutoRetweet: $('#setXAutoRetweet').checked,
@@ -2486,6 +2494,12 @@ function collectSettings() {
       xhsDmAutoOwner: $('#setXhsDmAutoOwner').checked,
       xhsDmMaxPerDay: Number($('#setXhsDmMaxPerDay').value) || 0,
       xhsDmMaxPerTarget: Number($('#setXhsDmMaxPerTarget').value) || 1,
+    },
+    ownerTools: {
+      enabled: $('#setOwnerToolsEnabled').checked,
+      desktop: $('#setOwnerDesktop').checked,
+      sourceWrite: $('#setOwnerSourceWrite').checked,
+      maxSteps: numField($('#setOwnerMaxSteps'), 12),
     },
     cost: {
       ...(prev.cost || {}),
@@ -3349,6 +3363,16 @@ function bindChat() {
 }
 
 function bindMemory() {
+  $('#ownerScreenshotBtn').addEventListener('click', async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const result = await api('/api/qq/screenshot', { method: 'POST', body: {} });
+      toast(result.ok ? '截图已发送到主人 QQ' : '截图尚未发送，请检查 QQ 连接');
+    } catch (error) { toast(error.message, 'error'); }
+    finally { button.disabled = false; }
+  });
+
   $('#memoryTabs').addEventListener('click', (event) => {
     const button = event.target.closest('button[data-tab]');
     if (button) setMemoryTab(button.dataset.tab);

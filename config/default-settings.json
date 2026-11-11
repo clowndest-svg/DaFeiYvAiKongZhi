@@ -86,6 +86,7 @@
     "xhsPollHoursMax": 3.5,
     "xEnabled": false,
     "xAutoBrowse": false,
+    "xReadOnly": false,
     "xAutoReply": true,
     "xAutoLike": true,
     "xAutoRetweet": true,
@@ -145,6 +146,12 @@
     "neuroStrength": 0.35,
     "forgettingCurve": false,
     "sensesEnabled": false
+  },
+  "ownerTools": {
+    "enabled": false,
+    "desktop": false,
+    "sourceWrite": false,
+    "maxSteps": 12
   },
   "cost": {
     "lowBalanceCny": 5,

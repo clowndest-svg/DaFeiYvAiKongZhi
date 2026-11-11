@@ -4,6 +4,8 @@
 
 ## 使用与接入（现行）
 
+- `OWNER_TOOLS_DELIVERY_20261111.md` — 主人聊天工具、桌面操作、源码读改、跨平台阅读与本轮验收
+
 - `SENTINEL_SERVER_SETUP.md` — 用自己的服务器做异地备份（可选，不需要服务器时用本机备份）
 - `qq-provider-migration.md` — QQ 接入端迁移与回退（SnowLuma 为主、NapCat 备选）
 

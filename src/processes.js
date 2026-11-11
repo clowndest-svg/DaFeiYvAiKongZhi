@@ -7,12 +7,12 @@ import { qqProvider, providerInfo } from './qq-provider.js';
 import { verifySnowLumaFiles, validateSnowLumaConfig } from './snowluma-package.js';
 
 function windowsQuery(script) {
-  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, stdio:['ignore','pipe','ignore'] });
+  return execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, stdio:['ignore','pipe','ignore'], env: { ...process.env, PSModulePath: undefined } });
 }
 // 定时任务里必须用异步版：同步版会把事件循环卡住近一秒，正在回的消息都被拖慢。
 function windowsQueryAsync(script) {
   return new Promise((resolve, reject) => {
-    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024 }, (error, stdout) => {
+    execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')], { encoding:'utf8', windowsHide:true, timeout:10000, maxBuffer:1024*1024, env: { ...process.env, PSModulePath: undefined } }, (error, stdout) => {
       if (error) reject(error);
       else resolve(stdout);
     });

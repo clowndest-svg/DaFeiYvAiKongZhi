@@ -161,6 +161,11 @@ export class DeepSeek {
     if (thinking !== undefined) body.thinking = { type: thinking ? 'enabled' : 'disabled' };
     if (opts.reasoningEffort && thinking !== false) body.reasoning_effort = opts.reasoningEffort;
     if (opts.responseFormat) body.response_format = opts.responseFormat;
+    if (opts.tools?.length) {
+      body.tools = opts.tools;
+      body.tool_choice = opts.toolChoice || 'auto';
+      body.parallel_tool_calls = false;
+    }
     if (opts.stream) body.stream_options = { include_usage: true };
     return body;
   }
@@ -168,6 +173,9 @@ export class DeepSeek {
   async request(messages, opts = {}) {
     this.assertConfigured();
     const body = this.buildBody(messages, { ...opts, stream: false });
+    const accountedMessages = opts.tools?.length
+      ? [...messages, { role: 'system', content: JSON.stringify({ tools: opts.tools, calls: messages.filter(message => message.tool_calls).map(message => message.tool_calls) }) }]
+      : messages;
     const requestId = opts.requestId || crypto.randomUUID();
     const bounded = boundedBackground(opts.kind);
     const maxAttempts = bounded ? 2 : 3;
@@ -177,7 +185,7 @@ export class DeepSeek {
     for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
       const requestedAt = new Date();
       const reservationId = reserveCost({ model: body.model, kind: opts.kind, requestId, attempt: attempt + 1, sessionId: opts.sessionId,
-        estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(messages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
+        estimate: usageCostCny({ prompt_tokens: estimateMessagesTokens(accountedMessages), completion_tokens: body.max_tokens || 4096 }, body.model, requestedAt) });
       try {
         const res = await fetch(runtimeBaseUrl(this.baseUrl) + '/chat/completions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + runtimeApiKey(this.apiKey) },
@@ -192,7 +200,9 @@ export class DeepSeek {
         const content = message.content || '';
         const reasoning = message.reasoning_content || '';
         const finish = String(data.choices?.[0]?.finish_reason || 'unknown');
-        const result = { content, reasoning, ...streamResult(messages, content, reasoning, data.usage, data.model || body.model, requestedAt) };
+        const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+        const billableContent = content + (toolCalls.length ? JSON.stringify(toolCalls) : '');
+        const result = { content, reasoning, toolCalls, ...streamResult(accountedMessages, billableContent, reasoning, data.usage, data.model || body.model, requestedAt) };
         let invalidJson = false;
         if (bounded && opts.responseFormat?.type === 'json_object' && content && finish !== 'length') {
           try {
@@ -201,12 +211,12 @@ export class DeepSeek {
           } catch { invalidJson = true; }
         }
         this.recordCost(result, { ...opts, reservationId, requestId, attempt: attempt + 1,
-          outcome: finish === 'length' ? 'truncated' : invalidJson ? 'invalid_json' : content ? 'completed' : 'empty' });
+          outcome: finish === 'length' ? 'truncated' : invalidJson ? 'invalid_json' : content || toolCalls.length ? 'completed' : 'empty' });
         if (bounded && finish === 'length') {
           throw new LlmError('后台任务输出达到上限，已保留费用记录和来源', { code: 'BACKGROUND_OUTPUT_LIMIT' });
         }
         if (invalidJson) throw new LlmError('后台任务的 JSON 未通过校验，来源已保留', { code: 'BACKGROUND_INVALID_JSON' });
-        if (!result.content) {
+        if (!result.content && !(opts.tools?.length && toolCalls.length)) {
           // 上游过载时实测两种形状：503，或者 200 但正文空、只有推理。第二种以前被报成"没有产出有效回复"，
           // 既没说清是上游的问题，也不会重试——她就这样一声不吭。
           const reasoningTokens = Number(data.usage?.completion_tokens_details?.reasoning_tokens || 0);

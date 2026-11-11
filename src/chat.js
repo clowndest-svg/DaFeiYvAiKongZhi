@@ -14,6 +14,7 @@ import { scheduleReflection, reflectionBusy } from './reflect.js';
 import { chatThinking } from './llm-policy.js';
 import { extractReadableUrl, formatPageNote, formatSearchNote, informativeQuery, isCasualTalk, needsSearch, notePageRead, noteSearchEvent, readWebPage, searchWeb, resolveSearchQuery, isSearchConfirmation, EXPLICIT_SEARCH } from './search.js';
 import { estimateTokens, stripWrappingQuotes, truncate } from './util.js';
+import { runOwnerTools, ownerContext, socialMemory } from './owner-tools.js';
 
 const maintenanceQueue = new LatestTaskQueue({ onError: error => logger.warn('会话维护失败', { error: error.message }) });
 export function chatActivity() {
@@ -77,7 +78,7 @@ export class Companion {
     this.completedDeferredTurns = new WeakSet();
   }
 
-  prepare({ text = '', images = [], channel = 'web', sessionId = null, displayName = '', extraContext = '', deliveryMeta = {} }) {
+  prepare({ text = '', images = [], channel = 'web', sessionId = null, displayName = '', extraContext = '', deliveryMeta = {}, ownerToolNote = '', toolAttachments = [] }) {
     const settings = loadSettings();
     if (!this.llm.configured && process.env.LLM_MOCK !== '1') {
       throw new LlmError('还没有配置 DeepSeek API Key，请先编辑 .env 里的 DEEPSEEK_API_KEY。', { code: 'NO_KEY' });
@@ -107,7 +108,7 @@ export class Companion {
       role: 'user',
       content: cleanText || '（发来了一张图片）',
       channel,
-      meta: { ...inputDeliveryMeta, hasImage: cleanImages.length > 0, displayName },
+      meta: { ...inputDeliveryMeta, hasImage: cleanImages.length > 0, displayName, ...(ownerToolNote ? { ownerToolNote: ownerToolNote.slice(0, 12000) } : {}) },
       tokens: estimateTokens(cleanText) + cleanImages.length * 900,
     });
 
@@ -143,6 +144,8 @@ export class Companion {
       : getMemoryBlock({ query: cleanText, settings, sessionId: active.id, excludeQuoteIds: history.map((m) => m.id) });
     if (!restricted) {
       block.xhsActivity = getRecentXhsActivity({ hours: 48, limit: 8 });
+      block.socialActivity = socialMemory();
+      block.capabilities = ownerContext();
       block.intentions = listIntentions({ limit: 5, forPrompt: true });
       if (settings.presence?.neuroEnabled) block.neuro = neuroStatus(settings);
       if (settings.presence?.sensesEnabled) block.senses = listSenses({ limit: 8 });
@@ -170,6 +173,20 @@ export class Companion {
       restricted,
       text: cleanText,
       images: cleanImages,
+      toolAttachments,
+    };
+  }
+
+  async prepareReplyOptions(opts) {
+    const tools = await runOwnerTools(opts, this.llm);
+    opts.assertActive?.();
+    opts.signal?.throwIfAborted();
+    const note = tools ? tools.context : await this.searchNoteFor(opts);
+    return {
+      ...opts,
+      extraContext: [opts.extraContext, note].filter(Boolean).join('\n'),
+      ownerToolNote: tools?.context || '',
+      toolAttachments: tools?.attachments || [],
     };
   }
 
@@ -181,8 +198,7 @@ export class Companion {
 
   async *streamReplyLocked(opts) {
     opts.signal?.throwIfAborted();
-    const note = await this.searchNoteFor(opts);
-    const prep = this.prepare(note ? { ...opts, extraContext: [opts.extraContext, note].filter(Boolean).join('\n') } : opts);
+    const prep = this.prepare(await this.prepareReplyOptions(opts));
     let content = '';
     let usage = null;
     let model = prep.settings.model.name;
@@ -205,6 +221,7 @@ export class Companion {
           usage,
           costCny,
           streamed: true,
+          attachments: prep.toolAttachments,
           latencyMs: Date.now() - startedAt,
           aborted: false,
           stickerHint: parsed.hint || null,
@@ -353,8 +370,7 @@ export class Companion {
 
   async replyLocked(opts) {
     opts.signal?.throwIfAborted();
-    const note = await this.searchNoteFor(opts);
-    const prep = this.prepare(note ? { ...opts, extraContext: [opts.extraContext, note].filter(Boolean).join('\n') } : opts);
+    const prep = this.prepare(await this.prepareReplyOptions(opts));
     const startedAt = Date.now();
     const { temperature, maxTokens } = generationProfile(prep.settings);
     const result = await this.llm.chat(prep.payload.messages, {
@@ -387,6 +403,7 @@ export class Companion {
         costCny: result.costCny,
         latencyMs: Date.now() - startedAt,
         streamed: false,
+        attachments: prep.toolAttachments,
         stickerHint: parsed.hint || null,
         voice: parsed.voice || null,
       },

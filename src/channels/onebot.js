@@ -966,6 +966,11 @@ export class OneBotChannel {
     }
 
     const command = isOwnerPrivate ? parseOwnerCommand(text) : null;
+    if (isOwnerPrivate && /^(?:停止|停下|取消)(?:任务|操作|执行)?[！!。\s]*$/.test(text) && this.ownerTaskController) {
+      this.ownerTaskController.abort(new DOMException('主人要求停止任务', 'AbortError'));
+      await this.sendToTarget(target, '好，后续步骤已经停下。正在提交的动作会以实际回执为准。');
+      return;
+    }
     if (command) {
       this.lastInboundAt.set(conversationKey, Date.now());
       this.cancelFollowUp(conversationKey);
@@ -1292,6 +1297,8 @@ ${history}
 
     let replyMessageId = null;
     let bodySent = false;
+    const taskController = isOwnerPrivate ? new AbortController() : null;
+    if (taskController) this.ownerTaskController = taskController;
     try {
       const replyArgs = {
         text: messageText,
@@ -1302,6 +1309,10 @@ ${history}
         extraContext,
         deliveryMeta: { qqReceiptKeys: buffer.receiptKeys || [], qqDelivery: 'pending' },
         deferAfterTurn: true,
+        ownerAuthorized: isOwnerPrivate,
+        assertActive: () => this.assertCurrentWork(),
+        sendImage: isOwnerPrivate ? image => this.sendImageToOwner(image) : undefined,
+        signal: taskController?.signal,
       };
       const result = callScope
         ? await this.outboundScope.run(callScope, () => this.companion.reply(replyArgs))
@@ -1425,6 +1436,11 @@ ${history}
         });
       }
     } catch (error) {
+      if (taskController?.signal.aborted) {
+        if (replyMessageId && !bodySent) updateMessageMeta(replyMessageId, { qqDelivery: 'cancelled' });
+        addEvent('owner_task_cancelled', '主人停止了正在执行的任务', {});
+        return;
+      }
       if (replyMessageId) updateMessageMeta(replyMessageId, bodySent
         ? { qqExtras: error.code === 'DELIVERY_UNKNOWN' ? 'unknown' : 'failed' }
         : { qqDelivery: error.code === 'DELIVERY_UNKNOWN' ? 'unknown' : 'failed' });
@@ -1443,6 +1459,8 @@ ${history}
         catch { /* 通道已断开 */ }
       }
       throw error;
+    } finally {
+      if (this.ownerTaskController === taskController) this.ownerTaskController = null;
     }
   }
 
@@ -1907,6 +1925,19 @@ ${history}
   }
 
   stickerKey(target) { return target.type === 'private' ? 'private:' + target.userId : 'group:' + target.groupId; }
+  async sendImageToOwner(dataUrl) {
+    this.assertCurrentWork();
+    const owner = kvGet('qq_owner_id');
+    if (!owner || !this.clients.size || this.maintenance) return false;
+    const match = String(dataUrl || '').match(/^data:image\/(?:png|jpeg|webp|gif);base64,([A-Za-z0-9+/=]+)$/);
+    if (!match || match[1].length > 10 * 1024 * 1024) throw new Error('图片格式不支持或超过发送限制');
+    const result = await this.sendAction('send_private_msg', {
+      user_id: Number(owner), message: [{ type: 'image', data: { file: `base64://${match[1]}` } }],
+    });
+    addEvent('owner_image_sent', '已把主人请求的图片发到主人私聊', { bytes: Math.floor(match[1].length * 0.75) });
+    return result || true;
+  }
+
   assertStickerEnabled() {
     this.assertCurrentWork();
     if (loadSettings().qq.sendStickers === false) throw new Error('表情发送开关已关闭');
@@ -2167,6 +2198,7 @@ ${history}
   }
 
   cancelPending() {
+    this.ownerTaskController?.abort(new DOMException('账号或任务归属已改变', 'AbortError'));
     this.generation = (this.generation || 0) + 1;
     for (const key of [...this.followUpTimers.keys()]) this.cancelFollowUp(key);
     for (const buffer of this.buffers.values()) if (buffer.timer) clearTimeout(buffer.timer);
@@ -2196,6 +2228,7 @@ ${history}
 
   destroy() {
     this.destroyed = true;
+    this.ownerTaskController?.abort(new DOMException('通道已关闭', 'AbortError'));
     clearInterval(this.heartbeat);
     this.voiceCall.end('channel_destroyed');
     for (const key of [...this.followUpTimers.keys()]) this.cancelFollowUp(key);

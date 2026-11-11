@@ -786,6 +786,7 @@
                 <p class="muted small">X 在这台机器上直连不通（实测直连超时、走本机代理 200），必须走 <code>X_PROXY_URL</code>（默认 <code>http://127.0.0.1:7897</code>）。代理没起来时她不动手，也不会把这件事说成"页面打不开"。登录窗口不带自动化旗子（Google 就是看这个才拒绝授权的）：登完直接点「验证登录」，不用关窗口。登录态只存本机 <code>data/x-profile</code>，不保存密码。</p>
                 <label class="check"><input type="checkbox" id="setXEnabled"> 启用 X（推特）互动</label>
                 <label class="check"><input type="checkbox" id="setXAutoBrowse"> 自动逛时间线并回别人的推文</label>
+                <label class="check"><input type="checkbox" id="setXReadOnly"> 自动浏览只读（记录内容，暂停自动互动与草稿）</label>
                 <label class="check"><input type="checkbox" id="setXAutoReply"> 自动回复别人在她推文下的评论</label>
                 <label class="check"><input type="checkbox" id="setXAutoLike"> 顺手点赞</label>
                 <label class="check"><input type="checkbox" id="setXAutoRetweet"> 顺手转推</label>
@@ -946,6 +947,16 @@
                 <h3>人设（config/persona.md）</h3>
                 <textarea id="setPersona" rows="18" spellcheck="false"></textarea>
                 <button id="savePersonaBtn" class="primary-btn">保存人设</button>
+              </section>
+
+              <section class="card wide" id="set-card-owner-tools">
+                <h3>主人聊天工具</h3>
+                <label class="check"><input id="setOwnerToolsEnabled" type="checkbox">允许在主人 QQ 私聊与网页聊天中执行任务</label>
+                <label class="check"><input id="setOwnerDesktop" type="checkbox">允许桌面截图、窗口、鼠标和键盘操作</label>
+                <label class="check"><input id="setOwnerSourceWrite" type="checkbox">允许修改项目源码（自动备份，检查 JS/JSON 语法）</label>
+                <label>每次任务最多执行几步<input id="setOwnerMaxSteps" type="number" min="1" max="30" step="1"></label>
+                <button type="button" id="ownerScreenshotBtn">截图发到我的 QQ</button>
+                <p class="muted small">可直接说“去看看推特”“刷一条抖音”“把电脑截图发给我”“打开记事本输入你好”或“看看 src/chat.js”。源码修改记录与工具执行结果保存在本机日志中，改动服务代码后需要重启才会加载。</p>
               </section>
 
               <section class="card wide" id="set-card-data">

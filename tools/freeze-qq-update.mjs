@@ -106,7 +106,7 @@ export function runPowerShell(script) {
   const encoded = Buffer.from(script, 'utf16le').toString('base64');
   const stdout = execFileSync('powershell.exe',
     ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded],
-    { encoding: 'utf8', windowsHide: true, timeout: 30000 });
+    { encoding: 'utf8', windowsHide: true, timeout: 30000, env: { ...process.env, PSModulePath: undefined } });
   return JSON.parse(String(stdout).replace(/^\uFEFF/, '').trim());
 }
 

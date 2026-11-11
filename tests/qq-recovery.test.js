@@ -308,5 +308,5 @@ test('重复实例要被发现并报警一次，单实例不打扰', async () =>
 
 test.after(() => {
   closeDb();
-  fs.rmSync(dataDir, { recursive: true, force: true });
+  fs.rmSync(dataDir, { recursive: true, force: true, maxRetries: 12, retryDelay: 100 });
 });

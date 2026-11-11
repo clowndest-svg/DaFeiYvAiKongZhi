@@ -59,6 +59,8 @@ import { clearHerSelfNotes, getHerSelfNotes, selfNotesVersions } from './self.js
 import { API_KEY_MASK, maskSettingsKey, resolveModelRuntime, restoreMaskedKey } from './model-config.js';
 import { DeepSeek } from './llm.js';
 import { Companion, chatActivity } from './chat.js';
+import { ownerCapabilities, socialMemory } from './owner-tools.js';
+import { desktopAction } from './desktop.js';
 import { drainReflections } from './reflect.js';
 import { recoverReflections, reflectionWorkStatus, retryFailedReflections } from './reflection-work.js';
 import { Scheduler } from './scheduler.js';
@@ -561,6 +563,7 @@ function handleLogout(req, res) {
 
 const actionLocks = new Set();
 const EXPENSIVE_API = new Set([
+  '/api/qq/screenshot',
   '/api/chat',
   '/api/posts/generate',
   '/api/social/comments',
@@ -736,6 +739,7 @@ async function handleApi(req, res, pathname, url) {
       health: healthAlerts(),
       runtime: { pid: process.pid, uptimeSeconds: Math.round(process.uptime()), memory: process.memoryUsage() },
       cost: readCostState(),
+      ownerTools: ownerCapabilities(),
     });
   }
 
@@ -781,7 +785,7 @@ async function handleApi(req, res, pathname, url) {
     const wantsStream = String(req.headers.accept || '').includes('text/event-stream');
     if (!wantsStream) {
       try {
-        const result = await companion.reply({ text, images, channel: 'web' });
+        const result = await companion.reply({ text, images, channel: 'web', ownerAuthorized: true });
         return sendJson(res, 200, {
           ok: true,
           message: result.message,
@@ -814,7 +818,7 @@ async function handleApi(req, res, pathname, url) {
     res.on('close', cancel);
     send({ type: 'start', sessionId: getActiveSession().id });
     try {
-      const gen = companion.streamReply({ text, images, channel: 'web', signal: controller.signal });
+      const gen = companion.streamReply({ text, images, channel: 'web', signal: controller.signal, ownerAuthorized: true });
       for await (const event of gen) {
         if (clientGone) {
           await gen.return();
@@ -2344,6 +2348,16 @@ async function handleApi(req, res, pathname, url) {
     }
   }
 
+  if (pathname === '/api/qq/screenshot' && method === 'POST') {
+    const settings = loadSettings();
+    if (!settings.ownerTools.enabled || !settings.ownerTools.desktop) return sendJson(res, 409, { error: '请先开启主人聊天工具和桌面操作' });
+    const status = onebot?.status();
+    if (!status?.connected || !status.identityOk || !kvGet('qq_owner_id')) return sendJson(res, 409, { error: 'QQ 尚未连接、身份未核实或主人尚未绑定' });
+    const shot = await desktopAction({ action: 'screenshot' });
+    const sent = await onebot.sendImageToOwner(shot.image);
+    return sendJson(res, 200, { ok: Boolean(sent), attachment: shot.attachment, bounds: shot.bounds });
+  }
+
   if (pathname === '/api/qq/test' && method === 'POST') {
     try {
       const sent = await onebot.sendToOwner('我在的，测试一下。');
@@ -2773,6 +2787,8 @@ async function main() {
           `今天：主动找你了 ${st.todayProactive || 0} 次，小红书评论 ${kvGet(`xhs_comment_day:${shanghaiDay()}`) || 0} 条、发笔记 ${kvGet(`xhs_publish_day:${shanghaiDay()}`) || 0} 条`,
           `下一次主动找你：${st.nextProactiveAt ? new Date(st.nextProactiveAt).toLocaleString('zh-CN', { hour12: false }) : '还没排上'}`,
           `自动运营：${s2.social.xhsEnabled ? '开着' : '关着'}${cooling ? `（风控冷却到 ${cooldown.slice(11, 16)}）` : ''}`,
+          `X 自动浏览${s2.social.xAutoBrowse ? '开着' : '关闭'}；抖音自动浏览${kvGetJson('douyin:browse-enabled', false) ? '开着' : '关闭'}。${readCostState().reasons.join('；')}`,
+          `主人聊天工具${s2.ownerTools.enabled ? '已开启' : '未开启'}，桌面操作${s2.ownerTools.desktop ? '已开启' : '未开启'}，源码修改${s2.ownerTools.sourceWrite ? '已开启' : '未开启'}`,
           '可以跟我说：状态 / 今天做了啥 / 逛一下 / 发一条 / 自动运营 开|关',
         ].join('\n');
       }
@@ -2796,8 +2812,11 @@ async function main() {
       }
       if (name === 'today') {
         const acts = getRecentXhsActivity({ hours: 16, limit: 8 });
-        if (!acts.length) return '今天我在小红书上没做什么事';
-        return `今天到现在：${acts.map((a) => `${a.type}·${(a.note || a.text || '').slice(0, 18)}`).join('；')}`;
+        const history = socialMemory();
+        const since = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' });
+        const today = entry => new Date(entry.at).toLocaleDateString('en-CA', { timeZone: 'Asia/Shanghai' }) === since;
+        const x = history.x.filter(today), douyin = history.douyin.filter(today);
+        return `今天的小红书记录 ${acts.filter(today).length} 条，最近 X 记录 ${x.length} 条、抖音理解 ${douyin.length} 条。${douyin[0]?.summary || x[0]?.text || acts.find(today)?.text || '暂时没有可分享的浏览内容。'}${readCostState().level === 'low' ? `\n${readCostState().reasons.join('；')}` : ''}`;
       }
       return '';
     },

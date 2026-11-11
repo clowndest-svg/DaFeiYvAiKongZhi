@@ -179,40 +179,63 @@ export function douyinConnection({ login = false } = {}) {
   });
 }
 
+export function extractDouyinFeed() {
+  const text = document.body?.innerText || '';
+  const verification = /请完成下列验证|拖动滑块|安全验证|访问过于频繁/.test(text);
+  const items = [];
+  const seen = new Set();
+  for (const link of document.querySelectorAll('a[href*="/video/"]')) {
+    const url = new URL(link.href, location.href);
+    const match = url.pathname.match(/^\/video\/(\d+)\/?$/);
+    if (url.hostname !== 'www.douyin.com' || !match || seen.has(match[1])) continue;
+    seen.add(match[1]);
+    items.push({ id: match[1], url: `https://www.douyin.com/video/${match[1]}`, title: String(link.innerText || link.getAttribute('aria-label') || '视频').trim().slice(0, 200) });
+    if (items.length >= 12) break;
+  }
+  if (!items.length) {
+    for (const image of document.querySelectorAll('img')) {
+      const rect = image.getBoundingClientRect();
+      if (rect.width < 150 || rect.height < 80) continue;
+      const card = image.parentElement?.parentElement?.parentElement?.parentElement;
+      const title = String(image.alt || card?.innerText || '').trim().slice(0, 200);
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      items.push({ id: '', url: '', title });
+      if (items.length >= 12) break;
+    }
+  }
+  return { verification, items };
+}
+
 export function readDouyinVideos() {
   return queue.run('browser', async () => {
     requireNoReplyDraft();
     await browser.ensure({ visible: false });
     await browser.navigate('https://www.douyin.com/', { waitMs: 4000 });
-    const page = await browser.evaluateFunction(() => {
-      const text = document.body?.innerText || '';
-      const verification = /请完成下列验证|拖动滑块|安全验证|访问过于频繁/.test(text);
-      const items = [];
-      const seen = new Set();
-      for (const link of document.querySelectorAll('a[href*="/video/"]')) {
-        const url = new URL(link.href, location.href);
-        const match = url.pathname.match(/^\/video\/(\d+)\/?$/);
-        if (url.hostname !== 'www.douyin.com' || !match || seen.has(match[1])) continue;
-        seen.add(match[1]);
-        items.push({ id: match[1], url: `https://www.douyin.com/video/${match[1]}`, title: String(link.innerText || link.getAttribute('aria-label') || '视频').trim().slice(0, 200) });
-        if (items.length >= 12) break;
-      }
-      if (!items.length) {
-        for (const image of document.querySelectorAll('img')) {
-          const rect = image.getBoundingClientRect();
-          if (rect.width < 150 || rect.height < 80) continue;
-          const card = image.parentElement?.parentElement?.parentElement?.parentElement;
-          const title = String(card?.innerText || '').trim().slice(0, 200);
-          if (!title || seen.has(title)) continue;
-          seen.add(title);
-          items.push({ id: '', url: '', title });
-          if (items.length >= 12) break;
-        }
-      }
-      return { verification, items };
-    });
+    const page = await browser.evaluateFunction(extractDouyinFeed);
     if (page.verification) return { ok: false, items: [], reason: '抖音要求验证，浏览已停止' };
     if (!page.items.length) return { ok: false, items: [], reason: '未读取到视频链接，需要检查登录状态或页面加载情况' };
+    // 精选页的卡片是 div 点击事件，没有 /video/ 链接；实际打开卡片后从地址核实视频 ID。
+    if (!page.items.some(item => item.id)) {
+      const seenTitles = new Set(douyinVideoNotes().map(note => note.title));
+      const candidate = page.items.find(item => !seenTitles.has(item.title)) || page.items[0];
+      const opened = await browser.evaluateFunction(title => {
+        const image = [...document.querySelectorAll('img')].find(image => image.alt === title && image.getBoundingClientRect().width >= 150);
+        if (!image) return false;
+        image.click(); return true;
+      }, [candidate.title]);
+      if (opened) {
+        for (let attempt = 0; attempt < 6; attempt += 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          const href = await browser.evaluateFunction(() => location.href);
+          const url = new URL(href);
+          const id = url.searchParams.get('modal_id') || url.pathname.match(/^\/video\/(\d+)/)?.[1];
+          if (url.hostname === 'www.douyin.com' && /^\d{5,25}$/.test(id || '')) {
+            candidate.id = id; candidate.url = `https://www.douyin.com/video/${id}`; break;
+          }
+        }
+      }
+    }
     return { ok: true, items: page.items, readAt: new Date().toISOString(), partial: page.items.some(item => !item.url) };
   });
 }
@@ -222,7 +245,8 @@ export function readDouyinVideos() {
 export function extractDouyinVideoContext() {
   const text = document.body?.innerText || '';
   const verification = /请完成下列验证|拖动滑块|安全验证|访问过于频繁/.test(text);
-  const video = document.querySelector('video');
+  const videos = [...document.querySelectorAll('video')];
+  const video = videos.find(video => video.readyState >= 2) || videos[0];
   const title = String(document.querySelector('h1')?.innerText || document.title || '').trim().slice(0, 200);
   const desc = String(document.querySelector('[data-e2e="video-desc"]')?.innerText || '').trim().slice(0, 500);
   return { verification, hasVideo: Boolean(video), playing: Boolean(video && !video.paused && video.readyState >= 2), title, desc };
@@ -262,7 +286,7 @@ export async function summarizeDouyinVideo(llm, { title, desc, frames }) {
   return { ok: true, summary, topics: (Array.isArray(data.topics) ? data.topics : []).map(topic => String(topic).trim()).filter(Boolean).slice(0, 5), tone: String(data.tone || '').trim().slice(0, 20) };
 }
 
-export function understandDouyinVideo(videoId, { llm }) {
+export function understandDouyinVideo(videoId, { llm, title = '' }) {
   const id = String(videoId || '').trim().match(/^(\d{5,25})$/)?.[1];
   if (!id) throw Object.assign(new Error('视频 ID 不合法'), { status: 400 });
   return queue.run('browser', async () => {
@@ -276,7 +300,8 @@ export function understandDouyinVideo(videoId, { llm }) {
     }
     if (!page.hasVideo) return { ok: false, reason: '视频没有加载，可能已删除或需要登录' };
     await browser.evaluateFunction(() => {
-      const video = document.querySelector('video');
+      const videos = [...document.querySelectorAll('video')];
+      const video = videos.find(video => video.readyState >= 2) || videos[0];
       if (video) { video.muted = true; video.play()?.catch?.(() => {}); }
     });
     const frames = [];
@@ -285,17 +310,19 @@ export function understandDouyinVideo(videoId, { llm }) {
       const shot = await browser.send('Page.captureScreenshot', { format: 'jpeg', quality: 70 }, 20000);
       frames.push(`data:image/jpeg;base64,${shot.data}`);
     }
-    const understood = await summarizeDouyinVideo(llm, { title: page.title, desc: page.desc, frames });
+    const videoTitle = title || page.title;
+    const understood = await summarizeDouyinVideo(llm, { title: videoTitle, desc: page.desc, frames });
     if (!understood.ok) return understood;
     const playing = await browser.evaluateFunction(() => {
-      const video = document.querySelector('video');
+      const videos = [...document.querySelectorAll('video')];
+      const video = videos.find(video => video.readyState >= 2) || videos[0];
       return Boolean(video && !video.paused && video.readyState >= 2);
     });
-    const note = { videoId: id, url: `https://www.douyin.com/video/${id}`, title: page.title, summary: understood.summary, topics: understood.topics, tone: understood.tone, playing, at: new Date().toISOString() };
+    const note = { videoId: id, url: `https://www.douyin.com/video/${id}`, title: videoTitle, summary: understood.summary, topics: understood.topics, tone: understood.tone, playing, at: new Date().toISOString() };
     storeDouyinVideoNote(kvGet('douyin:account', ''), note);
     const countKey = `douyin:browse-count:${shanghaiDayKey()}`;
     kvSet(countKey, String((Number(kvGet(countKey, '0')) || 0) + 1));
-    addEvent('douyin_browse', '她看了一条抖音视频', { videoId: id, title: page.title.slice(0, 80) });
+    addEvent('douyin_browse', '她看了一条抖音视频', { videoId: id, title: videoTitle.slice(0, 80) });
     return { ok: true, note };
   });
 }

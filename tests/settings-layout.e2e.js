@@ -123,9 +123,14 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   await page.locator('.rail-btn[data-view="settings"]').click();
   await page.getByRole('tab', { name: '界面与系统', exact: true }).click();
   assert.equal(await page.locator('#setAutoSpeak').isChecked(), !autoSpeak);
+  await page.locator('#setOwnerToolsEnabled').check();
+  await page.locator('#setOwnerDesktop').check();
+  await page.locator('#setOwnerSourceWrite').check();
+  await page.locator('#setOwnerMaxSteps').fill('9');
   await page.locator('#saveSectionBtn').click();
   await page.waitForFunction(() => !document.querySelector('#saveSectionBtn').disabled);
   assert.equal((await current()).settings.ui.autoSpeak, !autoSpeak);
+  assert.deepEqual((await current()).settings.ownerTools, { enabled: true, desktop: true, sourceWrite: true, maxSteps: 9 });
   assert.notEqual((await current()).settings.companion.name, '分区切换保留草稿');
   await page.waitForFunction(() => document.querySelector('#toast').className === 'toast');
   const shots = path.resolve('data/browser-verification'); fs.mkdirSync(shots, { recursive: true });
