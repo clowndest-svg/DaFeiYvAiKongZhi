@@ -2,10 +2,22 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
-import { fetchSafeImage, isPublicAddress } from '../src/net.js';
+import { fetchSafeImage, isPublicAddress, resolveQqImageHost } from '../src/net.js';
 import { buildSapiScript } from '../src/tts.js';
 
 const publicDns = async () => [{ address: '8.8.8.8', family: 4 }];
+test('QQ CDN 假 IP 经真实 DNS 回退，普通域名及真实内网结果保留拦截', async () => {
+  let queries = 0;
+  const fake = [{ address: '198.18.0.1', family: 4 }];
+  const deps = { resolveSystem: async () => fake, fetchDns: async () => { queries++; return { ok: true, json: async () => ({ Answer: [{ type: 1, data: '8.8.8.8' }] }) }; } };
+  assert.deepEqual(await resolveQqImageHost('multimedia.nt.qq.com.cn', { all: true }, deps), await publicDns());
+  assert.deepEqual(await resolveQqImageHost('evil.example', { all: true }, deps), fake);
+  assert.equal(queries, 1);
+  assert.deepEqual(await resolveQqImageHost('multimedia.nt.qq.com.cn', {}, { ...deps, resolveSystem: publicDns }), await publicDns());
+  assert.equal(queries, 1, '正常公网 DNS 不需要代理兼容回退');
+  assert.deepEqual(await resolveQqImageHost('multimedia.nt.qq.com.cn', {}, { ...deps, resolveSystem: async () => [{ address: '127.0.0.1', family: 4 }] }), [{ address: '127.0.0.1', family: 4 }]);
+  await assert.rejects(resolveQqImageHost('gchat.qpic.cn', {}, { ...deps, fetchDns: async () => ({ ok: true, json: async () => ({ Answer: [{ type: 1, data: '10.0.0.1' }] }) }) }), /公网/);
+});
 function fixtureRequest({ headers = {}, status = 200, chunks = [], lookupCheck = () => {} } = {}) {
   return (_url, options, callback) => {
     const req = new EventEmitter();

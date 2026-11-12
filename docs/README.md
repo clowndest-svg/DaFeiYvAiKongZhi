@@ -4,6 +4,8 @@
 
 ## 使用与接入（现行）
 
+- `QQ_IMAGE_REPAIR_20261112.md` — QQ 表情包下载与 Clash TUN Fake-IP 兼容修复
+
 - `OPTIMIZATION_PLAN_20261112.md` / `OPTIMIZATION_DELIVERY_20261112.md` — 视频音轨、任务进度、空间兼容读取的优化方案及验收
 
 - `SENTINEL_SERVER_SETUP.md` — 用自己的服务器做异地备份（可选，不需要服务器时用本机备份）

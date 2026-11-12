@@ -77,11 +77,11 @@ function isLocalHostname(hostname) {
 }
 
 export { assertSafeImageUrl, fetchSafeImage } from '../net.js';
-import { fetchSafeImage, imageType as detectImageType } from '../net.js';
+import { fetchSafeImage, resolveQqImageHost, imageType as detectImageType } from '../net.js';
 
 async function imageUrlToDataUrl(url) {
   if (!/^https?:\/\//i.test(url || '')) return null;
-  const buf = await fetchSafeImage(url, { timeoutMs: 20000 });
+  const buf = await fetchSafeImage(url, { timeoutMs: 20000, resolveHost: resolveQqImageHost });
   const type = detectImageType(buf);
   if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(type)) {
     throw new Error('图片内容不是支持的格式');

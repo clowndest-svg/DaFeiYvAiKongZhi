@@ -43,6 +43,18 @@ export function imageType(buffer) {
   return '';
 }
 
+export async function resolveQqImageHost(host, options, { resolveSystem = lookup, fetchDns = fetch } = {}) {
+  const addresses = await resolveSystem(host, options);
+  const qqHost = host === 'multimedia.nt.qq.com.cn' || host === 'qpic.cn' || host.endsWith('.qpic.cn');
+  if (!qqHost || !addresses.length || !addresses.every(item => /^198\.(?:18|19)\./.test(item.address))) return addresses;
+  const response = await fetchDns(`https://dns.google/resolve?name=${encodeURIComponent(host)}&type=A`, { signal: AbortSignal.timeout(8000) });
+  if (!response.ok) throw new Error('QQ 图片真实 DNS 查询失败');
+  const data = await response.json();
+  const resolved = (data.Answer || []).filter(item => item.type === 1).map(item => ({ address: item.data, family: 4 }));
+  if (!resolved.length || resolved.some(item => !isPublicAddress(item.address))) throw new Error('QQ 图片真实 DNS 未返回公网地址');
+  return resolved;
+}
+
 function requestImage(url, addresses, { signal, maxBytes, extraHeaders, request }) {
   return new Promise((resolve, reject) => {
     const transport = request || (url.protocol === 'https:' ? https.request : http.request);

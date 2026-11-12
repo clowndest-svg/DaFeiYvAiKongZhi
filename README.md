@@ -275,6 +275,8 @@ node tools/freeze-qq-update.mjs --unfreeze   # 要手动升级 QQ 时先放行�
 
 ## 14. 排错 FAQ
 
+QQ 图片下载兼容代理 Fake-IP DNS。已知 QQ 图片 CDN 解析为 198.18/15 时，通过 Google DNS over HTTPS 查询真实公网地址并固定连接目标，其他域名和内网地址继续拒绝。查询只包含图片域名。
+
 **启动报 `EADDRINUSE`**：改 `.env` 的 `PORT`，或先关掉占用 7788 的旧进程。
 
 **控制台提示"需要登录控制台"**：访问 `127.0.0.1:7788`，密码是 `CONSOLE_PASSWORD`；改密码后旧会话失效。
