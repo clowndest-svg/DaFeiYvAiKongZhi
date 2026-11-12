@@ -46,7 +46,7 @@ function syntaxCheck(file, content) {
     if (checked.error || checked.status !== 0) throw new Error(`语法检查失败，文件未修改：${String(checked.stderr || checked.error?.message).slice(0, 1500)}`);
   }
   if (file.endsWith('.py')) {
-    const checked = spawnSync(env.edgePython || 'python', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], { input: content, encoding: 'utf8', windowsHide: true, timeout: 10000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
+    const checked = spawnSync(env.edgePython || 'python', ['-c', 'import ast,sys; ast.parse(sys.stdin.read())'], { input: content.replace(/^\uFEFF/, ''), encoding: 'utf8', windowsHide: true, timeout: 10000, env: { ...process.env, PYTHONIOENCODING: 'utf-8' } });
     if (checked.error || checked.status !== 0) throw new Error(`Python 语法检查失败，文件未修改：${String(checked.stderr || checked.error?.message).slice(0, 1500)}`);
   }
   if (file.endsWith('.ps1')) {
@@ -67,6 +67,7 @@ export function replaceSourceText({ path: input, oldText, newText, expectedHash 
 }
 
 function writeSourceVersion(file, relative, before, after) {
+  if (file.endsWith('.ps1') && before.startsWith('\uFEFF') && !after.startsWith('\uFEFF')) after = '\uFEFF' + after;
   if (Buffer.byteLength(after) > 512 * 1024) throw new Error('修改后文件超过 512 KB');
   syntaxCheck(file, after);
   if (fs.readFileSync(file, 'utf8') !== before) throw new Error('语法检查期间文件发生变化，请重新读取再修改');

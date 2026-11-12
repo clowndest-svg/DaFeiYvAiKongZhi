@@ -758,7 +758,7 @@
                 <label>只回最近多少小时内的评论 <input id="setQzoneAutoReplyAge" type="number" min="1" max="168"></label>
                 <p class="muted small">主人评论必回（在时限内）；其他人按内容/心情判断，广告、辱骂、敏感、刷屏不回。</p>
                 <label class="check"><input type="checkbox" id="setDouyinAuto" disabled> 抖音自动发布（未实现，仅草稿）</label>
-                <p class="muted small">抖音目前支持文案草稿和评论建议。刷视频、发送评论、视频制作及自动发布尚未接入，发布需在抖音手动完成。</p>
+                <p class="muted small">抖音支持文案草稿，视频理解与评论管理位于抖音分区。视频制作和发布需在抖音完成。</p>
                 <details class="qzone-cookie-box settings-group">
                   <summary>QQ 空间 Cookie（自动发说说用）</summary>
                   <p class="muted small">用机器人小号登录 <code>user.qzone.qq.com</code>，F12 → Network → 刷新 → 点 user.qzone.qq.com 请求 → 复制整个 <code>Cookie</code> 请求头（不要只抄四个字段）。只保存在本机 <code>data/qzone-cookie.json</code>，不会上传。</p>
@@ -848,11 +848,13 @@
                 <p class="muted small">发送尝试结果待核对时请到抖音确认；实机验收前「确认发送」保持禁用。草稿未处理时其他抖音读取会暂停。</p>
                 <div id="douyinComments"></div>
                 <h4>刷视频与内容理解</h4>
+                <label class="check"><input type="checkbox" id="setDouyinAudioEnabled"> 采样视频音轨并在本机识别语音</label>
+                <label>每条音轨采样秒数<input id="setDouyinAudioSeconds" type="number" min="4" max="30"></label>
                 <div class="btn-row">
                   <button type="button" id="douyinReadVideos">读取视频列表</button>
                   <button type="button" id="douyinReadNotes">读取理解笔记</button>
                 </div>
-                <p class="muted small">打开视频页采两帧画面，连同标题简介交给视觉模型；声音不接入。在视频列表里点「理解这条」也能手动看一条，笔记只保存在本机。</p>
+                <p class="muted small">采两帧画面和一段音轨，本地语音识别后连同标题简介交给视觉模型。笔记显示采样范围及转写，静音、无音轨或识别不可用时记录原因。音轨设置点击保存后生效。</p>
                 <div id="douyinVideos"></div>
                 <div id="douyinVideoNotes" class="search-results"></div>
               </section>
@@ -956,6 +958,9 @@
                 <label class="check"><input id="setOwnerSourceWrite" type="checkbox">允许修改项目源码（自动备份，检查 JS/JSON 语法）</label>
                 <label>每次任务最多执行几步<input id="setOwnerMaxSteps" type="number" min="1" max="30" step="1"></label>
                 <button type="button" id="ownerScreenshotBtn">截图发到我的 QQ</button>
+                <h4>最近任务</h4>
+                <button type="button" id="ownerTasksRefresh">刷新任务进度</button>
+                <div id="ownerTasksList" aria-live="polite"></div>
                 <p class="muted small">可直接说“去看看推特”“刷一条抖音”“把电脑截图发给我”“打开记事本输入你好”或“看看 src/chat.js”。源码修改记录与工具执行结果保存在本机日志中，改动服务代码后需要重启才会加载。</p>
               </section>
 

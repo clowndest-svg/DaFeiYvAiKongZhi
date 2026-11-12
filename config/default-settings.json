@@ -57,6 +57,8 @@
     "dailyPostMax": 2,
     "qzoneAutoPost": false,
     "douyinAutoPost": false,
+    "douyinAudioEnabled": true,
+    "douyinAudioSeconds": 15,
     "qzoneAutoReply": true,
     "qzoneAutoReplyMaxPerHour": 3,
     "qzoneAutoReplyMaxPerDay": 10,

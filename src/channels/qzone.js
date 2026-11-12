@@ -234,6 +234,8 @@ export function saveQzoneCookie(input) {
   writeCookieFile(parsed, 'manual');
   if (!previous || previous.uin !== parsed.uin) clearAccountCache();
   msglistDisabledUntil = 0;
+  kvSet('qzone_msglist_retry_after', '0');
+  kvSetJson('qzone_read_state', null);
   kvSet('qzone_cookie_bad', '');
   kvSet('qzone_cookie_ok_at', '');
   kvSet('qzone_cookie_checked_at', '');
@@ -270,6 +272,7 @@ export function qzoneStatus() {
     identityOk: checkBotIdentity({ selfId: stored.uin, ownerId: kvGet('qq_owner_id'), botAccount: loadSettings().qq.botAccount }).ok,
     expiredNotice: kvGet('qzone_cookie_bad') || '',
     autoRenew: true,
+    reading: kvGetJson('qzone_read_state', null),
   };
 }
 
@@ -291,11 +294,18 @@ export async function verifyQzoneCookie() {
 function qzoneError(data, prefix = 'QQ空间请求失败') {
   const code = data?.code ?? data?.ret ?? 'unknown';
   const message = data?.message || data?.msg || (data?._empty ? '响应为空' : '没有返回数据');
-  const authCodes = [-3000, -10000, -10001, -10006, 1401];
-  if (authCodes.includes(Number(code))) {
-    return new Error('QQ 空间 Cookie 可能失效或触发风控，请重新登录空间复制完整 Cookie');
+  const kind = classifyQzoneResponse(data);
+  if (kind === 'auth') {
+    return Object.assign(new Error('QQ 空间认证失效，请重新登录空间复制完整 Cookie'), { code, kind });
   }
-  return new Error(`${prefix}：${message}（code=${code}）`);
+  return Object.assign(new Error(`${prefix}：${message}（code=${code}）`), { code, kind });
+}
+
+export function classifyQzoneResponse(data) {
+  const message = String(data?.message || data?.msg || '');
+  if (/人数过多|繁忙|稍后再试|频繁|限流|服务器忙|busy|rate.?limit/i.test(message)) return 'busy';
+  if (/登录|认证|cookie|身份失效|log.?in|auth/i.test(message) || [-3000, -10001, -10006, 1401].includes(Number(data?.code ?? data?.ret))) return 'auth';
+  return 'platform';
 }
 
 function timestampToIso(value) {
@@ -377,15 +387,32 @@ function mapLike(raw) {
 }
 
 export async function fetchQzonePosts({ num = 20 } = {}) {
-  if (Date.now() >= msglistDisabledUntil) {
+  const attemptedAt = nowIso();
+  const prior = kvGetJson('qzone_read_state', null) || {};
+  let primary = prior.primary || null;
+  if (Date.now() >= Math.max(msglistDisabledUntil, Number(kvGet('qzone_msglist_retry_after', '0')) || 0)) {
     try {
-      return await fetchQzonePostsViaMsglist({ num });
+      const data = await fetchQzonePostsViaMsglist({ num });
+      const reading = { state: 'ok', source: 'msglist', degraded: false, attemptedAt, lastSuccessAt: data.fetchedAt, primary: null };
+      kvSet('qzone_msglist_retry_after', '0');
+      kvSetJson('qzone_read_state', reading);
+      return { ...data, source: 'msglist', degraded: false };
     } catch (error) {
       msglistDisabledUntil = Date.now() + 6 * 3600000;
+      kvSet('qzone_msglist_retry_after', String(msglistDisabledUntil));
+      primary = { kind: error.kind || 'network', code: error.code ?? null, reason: error.message, failedAt: nowIso(), retryAt: new Date(msglistDisabledUntil).toISOString() };
       logger.warn('msglist 读取失败，6 小时内直接走 feeds3', { error: error.message });
     }
   }
-  return fetchQzonePostsViaFeeds3({ num });
+  try {
+    const data = await fetchQzonePostsViaFeeds3({ num });
+    const reading = { state: 'ok', source: 'feeds3', degraded: true, attemptedAt, lastSuccessAt: data.fetchedAt, primary, notice: primary?.kind === 'busy' ? '主接口繁忙，兼容读取成功' : '已通过兼容接口读取' };
+    kvSetJson('qzone_read_state', reading);
+    return { ...data, source: 'feeds3', degraded: true };
+  } catch (error) {
+    kvSetJson('qzone_read_state', { ...prior, state: 'failed', attemptedAt, primary, lastError: error.message, cachedAt: kvGetJson('qzone_feed', null)?.fetchedAt || null });
+    throw error;
+  }
 }
 
 async function fetchQzonePostsViaMsglist({ num = 20 } = {}) {
@@ -613,6 +640,8 @@ async function fetchQzonePostsViaFeeds3({ num = 20 } = {}) {
       throw new Error('QQ 空间 Cookie 可能失效或触发风控，请重新登录空间复制完整 Cookie');
     }
     const envelope = parseJsonp(raw);
+    const responseCode = envelope?.code ?? envelope?.ret;
+    if (responseCode !== undefined && ![0, '0'].includes(responseCode)) throw qzoneError(envelope, 'QQ 空间兼容读取失败');
     const data = envelope?.data;
     const explicitEmpty = [0, '0'].includes(envelope?.code ?? envelope?.ret) && (
       Array.isArray(envelope.msglist) && envelope.msglist.length === 0 ||

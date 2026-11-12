@@ -115,6 +115,14 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   assert.notEqual((await current()).settings.social.xDailyLikeMax, 17);
   await page.getByRole('tab', { name: 'X / 推特', exact: true }).click();
   assert.equal(await page.locator('#setXDailyLike').inputValue(), '17');
+  await page.getByRole('tab', { name: '抖音', exact: true }).click();
+  await page.locator('#setDouyinAudioEnabled').uncheck();
+  await page.locator('#setDouyinAudioSeconds').fill('22');
+  await page.locator('#saveSectionBtn').click();
+  await page.waitForFunction(() => !document.querySelector('#saveSectionBtn').disabled);
+  assert.equal((await current()).settings.social.douyinAudioEnabled, false);
+  assert.equal((await current()).settings.social.douyinAudioSeconds, 22);
+  assert.notEqual((await current()).settings.social.xDailyLikeMax, 17);
   await page.getByRole('tab', { name: '角色与称呼', exact: true }).click();
   assert.equal(await page.locator('#setName').inputValue(), '分区切换保留草稿');
   const autoSpeak = (await current()).settings.ui.autoSpeak;
@@ -131,6 +139,13 @@ test('设置分区、分页音色库、草稿及独立保存关联在真实浏�
   await page.waitForFunction(() => !document.querySelector('#saveSectionBtn').disabled);
   assert.equal((await current()).settings.ui.autoSpeak, !autoSpeak);
   assert.deepEqual((await current()).settings.ownerTools, { enabled: true, desktop: true, sourceWrite: true, maxSteps: 9 });
+  const taskId = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  await page.route('**/api/owner-tasks', route => route.fulfill({ json: { tasks: [{ id: taskId, text: '查看src/' + '路径'.repeat(90), state: 'running', phase: 'executing', steps: 2, maxSteps: 9 }] } }));
+  let cancelled = '';
+  await page.route(`**/api/owner-tasks/${taskId}/cancel`, route => { cancelled = route.request().method(); return route.fulfill({ json: { ok: true } }); });
+  await page.locator('#ownerTasksRefresh').click();
+  await page.locator('#ownerTasksList button').click();
+  assert.equal(cancelled, 'POST');
   assert.notEqual((await current()).settings.companion.name, '分区切换保留草稿');
   await page.waitForFunction(() => document.querySelector('#toast').className === 'toast');
   const shots = path.resolve('data/browser-verification'); fs.mkdirSync(shots, { recursive: true });

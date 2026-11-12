@@ -61,6 +61,7 @@ import { DeepSeek } from './llm.js';
 import { Companion, chatActivity } from './chat.js';
 import { ownerCapabilities, socialMemory } from './owner-tools.js';
 import { desktopAction } from './desktop.js';
+import { listOwnerTasks, ownerTask, cancelOwnerTask, recoverOwnerTasks } from './owner-tasks.js';
 import { drainReflections } from './reflect.js';
 import { recoverReflections, reflectionWorkStatus, retryFailedReflections } from './reflection-work.js';
 import { Scheduler } from './scheduler.js';
@@ -710,11 +711,22 @@ function maskQq(value) {
 async function handleApi(req, res, pathname, url) {
   const method = req.method || 'GET';
   if (onebot?.maintenance && !['GET', 'HEAD'].includes(method)
-      && !['/api/qq/maintenance', '/api/qq/journal/resolve', '/api/qq/stop', '/api/qq/capabilities/check'].includes(pathname)) {
+      && !['/api/qq/maintenance', '/api/qq/journal/resolve', '/api/qq/stop', '/api/qq/capabilities/check'].includes(pathname)
+      && !/^\/api\/owner-tasks\/[a-f0-9-]{20,64}\/cancel$/.test(pathname)) {
     return sendJson(res, 503, { error: '正在维护，新的写入和外部动作已暂停；请结束维护后重试' });
   }
 
   if (pathname === '/api/health') return sendJson(res, 200, { ok: true, version: appInfo.version });
+
+  if (pathname === '/api/owner-tasks' && method === 'GET') return sendJson(res, 200, { tasks: listOwnerTasks() });
+  const ownerTaskRoute = pathname.match(/^\/api\/owner-tasks\/([a-f0-9-]{20,64})(\/cancel)?$/);
+  if (ownerTaskRoute) {
+    if (ownerTaskRoute[2] && method === 'POST') return sendJson(res, 200, cancelOwnerTask(ownerTaskRoute[1]));
+    if (!ownerTaskRoute[2] && method === 'GET') {
+      const task = ownerTask(ownerTaskRoute[1]);
+      return sendJson(res, task ? 200 : 404, task ? { task } : { error: '任务不存在' });
+    }
+  }
 
   if (pathname === '/api/status' && method === 'GET') {
     return sendJson(res, 200, {
@@ -740,6 +752,7 @@ async function handleApi(req, res, pathname, url) {
       runtime: { pid: process.pid, uptimeSeconds: Math.round(process.uptime()), memory: process.memoryUsage() },
       cost: readCostState(),
       ownerTools: ownerCapabilities(),
+      ownerTasks: listOwnerTasks({ limit: 3 }),
     });
   }
 
@@ -2845,6 +2858,7 @@ async function main() {
   server.listen(env.port, '127.0.0.1', () => {
     onebot.initializeJournal();
     recoverCostReservations();
+    recoverOwnerTasks();
     recoverReflections();
     if (!env.testMode) {
       const reflectionTimer = setInterval(() => {

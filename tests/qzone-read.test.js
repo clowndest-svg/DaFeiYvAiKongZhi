@@ -9,6 +9,7 @@ fs.mkdirSync(dataDir, { recursive: true });
 process.env.BIZHI_DATA_DIR = dataDir;
 
 let captured = null;
+let primaryBusy = false, fallbackFailure = false, primaryCalls = 0;
 const server = http.createServer((req, res) => {
   let body = '';
   req.on('data', (chunk) => {
@@ -16,6 +17,11 @@ const server = http.createServer((req, res) => {
   });
   req.on('end', () => {
     if (req.url.includes('emotion_cgi_msglist_v6')) {
+      primaryCalls++;
+      if (primaryBusy) {
+        res.end(JSON.stringify({ code: -10000, message: '使用人数过多，请稍后再试' }));
+        return;
+      }
       res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
       res.end(
         JSON.stringify({
@@ -35,6 +41,10 @@ const server = http.createServer((req, res) => {
           ],
         }),
       );
+      return;
+    }
+    if (req.url.includes('feeds3_html_more')) {
+      res.end(JSON.stringify(fallbackFailure ? { code: -10000, message: '服务器繁忙，请稍后再试' } : { code: 0, data: { html: '' } }));
       return;
     }
     if (req.url.includes('emotion_cgi_re_feeds')) {
@@ -95,6 +105,38 @@ test('feeds3 转义 HTML 能解析、去重评论和制表符', () => {
   assert.equal(posts[0].comments[0].replies.length, 1);
   assert.equal(posts[0].comments[0].replies[0].uin, '333');
   assert.equal(posts[0].comments[0].replies[0].content, '我错啦');
+});
+
+test('空间繁忙按实际内容分类，兼容读取持久化退避，失败保留上次成功缓存', async () => {
+  const { kvGet, kvSet, kvSetJson } = await import('../src/db.js');
+  assert.equal(qz.classifyQzoneResponse({ code: -10000, message: '使用人数过多，请稍后再试' }), 'busy');
+  assert.equal(qz.classifyQzoneResponse({ code: -10000, message: '请先登录' }), 'auth');
+  assert.equal(qz.classifyQzoneResponse({ code: -10000, message: '未知错误' }), 'platform');
+  primaryBusy = true;
+  const compatible = await qz.refreshQzoneFeed();
+  assert.equal(compatible.source, 'feeds3');
+  assert.equal(qz.qzoneStatus().reading.primary.kind, 'busy');
+  assert.ok(Number(kvGet('qzone_msglist_retry_after')) > Date.now());
+  const count = primaryCalls;
+  // 新模块实例模拟重启后的内存，退避仍从数据库读取。
+  const restarted = await import(`../src/channels/qzone.js?restart=${Date.now()}`);
+  await restarted.refreshQzoneFeed();
+  assert.equal(primaryCalls, count);
+  const cache = qz.getQzoneFeedCache();
+  fallbackFailure = true;
+  await assert.rejects(restarted.refreshQzoneFeed(), /服务器繁忙/);
+  assert.deepEqual(qz.getQzoneFeedCache(), cache);
+  assert.equal(qz.qzoneStatus().reading.state, 'failed');
+  assert.equal(qz.qzoneStatus().reading.cachedAt, cache.fetchedAt);
+  assert.doesNotMatch(qz.qzoneStatus().reading.lastError, /Cookie/);
+  // 手动换新认证后允许重新验证主接口。
+  kvSet('qzone_msglist_retry_after', String(Date.now() + 3600000));
+  qz.saveQzoneCookie('uin=o123456789; skey=abc; p_skey=new; p_uin=o123456789');
+  assert.equal(kvGet('qzone_msglist_retry_after'), '0');
+  assert.equal(qz.qzoneStatus().reading, null);
+  primaryBusy = false;
+  fallbackFailure = false;
+  kvSetJson('qzone_read_state', null);
 });
 
 test.after(async () => {

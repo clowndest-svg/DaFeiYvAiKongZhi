@@ -7,7 +7,9 @@ import { paths, saveSettings } from '../src/config.js';
 import { closeDb, kvSetJson, kvGetJson, addMessage, getActiveSession } from '../src/db.js';
 import { DeepSeek } from '../src/llm.js';
 import { Companion } from '../src/chat.js';
-import { runOwnerTools, ownerCapabilities, wantsOwnerTools } from '../src/owner-tools.js';
+import { runOwnerTools, ownerCapabilities, wantsOwnerTools, directOwnerAction } from '../src/owner-tools.js';
+import { ownerTask, listOwnerTasks, cancelOwnerTask, startOwnerTask, releaseOwnerTask, noteOwnerTaskStep, recoverOwnerTasks } from '../src/owner-tasks.js';
+import { randomUUID } from 'node:crypto';
 import { readSourceFile, replaceSourceText, restoreSourceEdit, resolveSourceFile } from '../src/source-access.js';
 import { recordXActivity } from '../src/channels/x.js';
 import { storeDouyinVideoNote } from '../src/channels/douyin.js';
@@ -64,7 +66,7 @@ test('顺序调用、多次观察与失败回执进入最终上下文，同一 Q
     assert.ok(messages.some(m => m.role === 'tool' && m.content.includes('awaiting_final_send')));
     return { content: '截图已送达' };
   } };
-  const options = { text: '把电脑截图发给我', channel: 'qq', ownerAuthorized: true, deliveryMeta: { qqReceiptKeys: ['unique-owner-tools-shot'] }, sendImage: async () => { actions++; return true; } };
+  const options = { text: '先截图，再截一张，把最终电脑截图发给我', channel: 'qq', ownerAuthorized: true, deliveryMeta: { qqReceiptKeys: ['unique-owner-tools-shot'] }, sendImage: async () => { actions++; return true; } };
   const deps = { executeTool: async () => ({ ok: true, image: 'data:image/png;base64,aGVsbG8=', attachment: { url: '/media/owner-test.png' } }) };
   const first = await runOwnerTools(options, llm, deps);
   const second = await runOwnerTools(options, llm, deps);
@@ -211,4 +213,89 @@ test('网页普通与 SSE 入口持久化工具回执，系统分区保存工具
   const streamed = await fetch(`${server.base}/api/chat`, { method: 'POST', headers: { ...headers, Accept: 'text/event-stream' }, body: JSON.stringify({ text: '看看源码' }) });
   assert.match(await streamed.text(), /"type":"done"/);
   assert.equal(ownerCapabilities().toolsEnabled, true);
+  const tasks = await (await fetch(`${server.base}/api/owner-tasks`)).json();
+  assert.equal(tasks.tasks.length, 2);
+  const taskId = tasks.tasks.find(task => task.text === '你有什么权限').id;
+  assert.equal((await (await fetch(`${server.base}/api/owner-tasks/${taskId}`)).json()).task.state, 'completed');
+  await fetch(`${server.base}/api/qq/maintenance`, { method: 'POST', headers, body: JSON.stringify({ enabled: true }) });
+  const cancel = await fetch(`${server.base}/api/owner-tasks/${taskId}/cancel`, { method: 'POST', headers, body: '{}' });
+  assert.equal(cancel.status, 200);
+  assert.equal((await cancel.json()).ok, false);
+});
+
+test('能力、截图和明确源码读取省去规划调用，费用硬熔断时仍可读取本地状态', async () => {
+  saveSettings({ ownerTools: { maxSteps: 1 } });
+  kvSetJson('cost_state', { balanceCny: 0, at: new Date().toISOString() });
+  const llm = { chat: async () => { throw new Error('不应调用规划模型'); } };
+  const local = await runOwnerTools({ text: '你有什么权限', channel: 'web', ownerAuthorized: true }, llm);
+  assert.equal(ownerTask(local.taskId).state, 'completed');
+  assert.match(local.context, /capabilities/);
+  const read = await runOwnerTools({ text: '读取 src/owner-tools.js 第2到5行', channel: 'web', ownerAuthorized: true }, llm);
+  assert.match(read.context, /source_read/);
+  let screenshots = 0;
+  const shot = await runOwnerTools({ text: '截图发给我', channel: 'web', ownerAuthorized: true }, llm, { executeTool: async () => { screenshots++; return { ok: true }; } });
+  assert.equal(ownerTask(shot.taskId).state, 'completed');
+  assert.equal(screenshots, 1);
+  for (const text of ['不要截图', '你能截图吗', '怎么截图', '先截图然后点击', '修改 src/index.js', '读取 D:/src/index.js']) assert.equal(directOwnerAction(text), null);
+  assert.deepEqual(directOwnerAction('看看 src/index.js 前3行').args, { path: 'src/index.js', startLine: 1, lineCount: 3 });
+});
+
+test('任务可取消并保留执行回执，失败不能标记为全部完成', async () => {
+  let started;
+  const entered = new Promise(resolve => { started = resolve; });
+  const resultPromise = runOwnerTools({ text: '先看桌面窗口再点击', channel: 'web', ownerAuthorized: true }, {
+    chat: async (_messages, { signal }) => {
+      started();
+      await new Promise((resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }));
+    },
+  });
+  await entered;
+  const running = listOwnerTasks()[0];
+  assert.equal(running.state, 'running');
+  assert.equal(cancelOwnerTask(running.id).ok, true);
+  await resultPromise;
+  assert.equal(ownerTask(running.id).state, 'cancelled');
+  assert.equal(cancelOwnerTask(running.id).ok, false);
+  const failure = await runOwnerTools({ text: '读取 src/index.js', channel: 'web', ownerAuthorized: true }, {}, { executeTool: async () => ({ ok: false, reason: '读取失败' }) });
+  assert.equal(ownerTask(failure.taskId).state, 'failed');
+  assert.match(failure.context, /"complete":false/);
+});
+
+test('进程重启恢复未完成任务，完成步骤保留，旧消息不会重新执行', async () => {
+  const id = randomUUID();
+  startOwnerTask(id, { text: '桌面输入', maxSteps: 6 }, new AbortController());
+  noteOwnerTaskStep(id, { tool: 'desktop_action', result: { ok: true, action: 'type' } });
+  assert.equal(recoverOwnerTasks(), 0);
+  releaseOwnerTask(id);
+  assert.equal(recoverOwnerTasks(), 1);
+  const task = ownerTask(id);
+  assert.equal(task.state, 'interrupted');
+  assert.equal(task.receipts.length, 1);
+  assert.match(task.context, /不要重复执行/);
+});
+
+test('PowerShell 全文替换保留已有 UTF8 BOM，恢复保持原字节', { skip: process.platform !== 'win32' }, () => {
+  const relative = `tools/owner-bom-test-${process.pid}.ps1`;
+  const file = path.join(paths.root, relative);
+  const before = '\uFEFF$label = "中文"\r\n';
+  fs.writeFileSync(file, before, { flag: 'wx' });
+  try {
+    const source = readSourceFile({ path: relative });
+    const edit = replaceSourceText({ path: relative, expectedHash: source.hash, oldText: before, newText: '$label = "你好"\r\n' });
+    assert.equal(fs.readFileSync(file, 'utf8'), '\uFEFF$label = "你好"\r\n');
+    restoreSourceEdit({ editId: edit.editId });
+    assert.equal(fs.readFileSync(file, 'utf8'), before);
+  } finally { fs.unlinkSync(file); }
+});
+
+test('图片发送超时保留未知回执，相同 QQ 消息重放时不会再次发送', async () => {
+  let sends = 0;
+  const opts = { text: '截图发给我', channel: 'qq', ownerAuthorized: true, deliveryMeta: { qqReceiptKeys: ['unknown-image-delivery'] }, sendImage: async () => { sends++; throw new Error('协议超时'); } };
+  const deps = { executeTool: async () => ({ ok: true, image: 'data:image/png;base64,aGVsbG8=', attachment: { url: '/media/test.png' } }) };
+  const first = await runOwnerTools(opts, {}, deps);
+  assert.equal(ownerTask(first.taskId).state, 'partial');
+  assert.match(first.context, /unknown/);
+  assert.match(ownerTask(first.taskId).lastError, /待核对/);
+  assert.equal((await runOwnerTools(opts, {}, deps)).context, first.context);
+  assert.equal(sends, 1);
 });

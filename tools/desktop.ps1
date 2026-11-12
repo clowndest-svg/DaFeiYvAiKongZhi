@@ -17,10 +17,9 @@ public class BizhiDesktop {
   [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
   [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
   [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hwnd);
-  [DllImport("user32.dll")] public static extern bool BringWindowToTop(IntPtr hwnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr hwnd, int command);
   [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
   [DllImport("user32.dll")] public static extern bool AttachThreadInput(uint first, uint second, bool attach);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hwnd, int command);
   [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [StructLayout(LayoutKind.Sequential)] public struct Mouse { public int x,y; public uint data,flags,time; public UIntPtr extra; }
@@ -34,12 +33,18 @@ public class BizhiDesktop {
   public static void MouseInput(uint flags,int data=0) { var i=new Input();i.input.mouse.flags=flags;i.input.mouse.data=unchecked((uint)data);Send(i); }
   public static void MouseInput(uint flags) { MouseInput(flags,0); }
   public static void Focus(IntPtr hwnd) {
-    uint unused; uint foreground=GetWindowThreadProcessId(GetForegroundWindow(),out unused);
-    uint current=GetCurrentThreadId(); bool attached=false;
+    ShowWindowAsync(hwnd,9);
+    if (GetForegroundWindow() == hwnd || SetForegroundWindow(hwnd)) return;
+    uint unused;
+    uint foreground = GetWindowThreadProcessId(GetForegroundWindow(),out unused);
+    uint current = GetCurrentThreadId();
+    bool attached = false;
     try {
-      if(foreground!=current && foreground!=0) attached=AttachThreadInput(current,foreground,true);
-      ShowWindow(hwnd,9); BringWindowToTop(hwnd); SetForegroundWindow(hwnd);
-    } finally { if(attached) AttachThreadInput(current,foreground,false); }
+      if (foreground != 0 && foreground != current) attached = AttachThreadInput(current,foreground,true);
+      SetForegroundWindow(hwnd);
+    } finally {
+      if (attached) AttachThreadInput(current,foreground,false);
+    }
   }
 }
 '@
@@ -85,7 +90,7 @@ switch ($request.action) {
     $handle = [IntPtr]([long]$request.window)
     if (-not [BizhiDesktop]::IsWindow($handle)) { throw '窗口已关闭，请重新读取窗口列表' }
     [BizhiDesktop]::Focus($handle)
-    Start-Sleep -Milliseconds 250
+    for ($attempt=0; $attempt -lt 10 -and [BizhiDesktop]::GetForegroundWindow() -ne $handle; $attempt++) { Start-Sleep -Milliseconds 100 }
     if ([BizhiDesktop]::GetForegroundWindow() -ne $handle) { throw 'Windows 未允许切换到目标窗口' }
   }
   'click' {

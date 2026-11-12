@@ -1623,3 +1623,5 @@ body.mode-pet .presence-row { justify-content: center; }
   .library-pagination { bottom: -14px; }
   .settings-page .save-bar #saveHint { flex: 1 1 100%; margin-left: 0; }
 }
+#ownerTasksList { overflow-wrap: anywhere; }
+#ownerTasksList > .card { margin-top: 8px; padding: 12px; }

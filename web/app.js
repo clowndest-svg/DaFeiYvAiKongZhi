@@ -285,6 +285,7 @@ async function loadStatus() {
 function renderStatus() {
   const status = state.status;
   if (!status) return;
+  if (status.ownerTasks) renderOwnerTasks(status.ownerTasks);
   const companion = status.companion || {};
   const mood = status.mood || {};
   const qq = status.qq || {};
@@ -773,6 +774,11 @@ function hideTyping() {
 
 function setStreaming(value) {
   state.streaming = value;
+  if (state.ownerTaskTimer) clearInterval(state.ownerTaskTimer);
+  if (value) {
+    loadOwnerTasks().catch(() => {});
+    state.ownerTaskTimer = setInterval(() => loadOwnerTasks().catch(() => {}), 2000);
+  } else loadOwnerTasks().catch(() => {});
   const sendBtn = $('#sendBtn');
   sendBtn.textContent = value ? '停止' : '发送';
   sendBtn.classList.toggle('warn', value);
@@ -2269,6 +2275,8 @@ function fillSettings() {
   $('#setQzoneAutoReplyDaily').value = settings.social?.qzoneAutoReplyMaxPerDay ?? 10;
   $('#setQzoneAutoReplyAge').value = settings.social?.qzoneAutoReplyMaxAgeHours ?? 48;
   $('#setDouyinAuto').checked = Boolean(settings.social?.douyinAutoPost);
+  $('#setDouyinAudioEnabled').checked = settings.social?.douyinAudioEnabled !== false;
+  $('#setDouyinAudioSeconds').value = settings.social?.douyinAudioSeconds ?? 15;
   $('#setXhsEnabled').checked = Boolean(settings.social?.xhsEnabled);
   $('#setXEnabled').checked = Boolean(settings.social?.xEnabled);
   $('#setXAutoBrowse').checked = Boolean(settings.social?.xAutoBrowse);
@@ -2454,6 +2462,8 @@ function collectSettings() {
       qzoneAutoReplyMaxPerDay: Number($('#setQzoneAutoReplyDaily').value) || 10,
       qzoneAutoReplyMaxAgeHours: Number($('#setQzoneAutoReplyAge').value) || 48,
       douyinAutoPost: $('#setDouyinAuto').checked,
+      douyinAudioEnabled: $('#setDouyinAudioEnabled').checked,
+      douyinAudioSeconds: Number($('#setDouyinAudioSeconds').value) || 15,
       xEnabled: $('#setXEnabled').checked,
       xAutoBrowse: $('#setXAutoBrowse').checked,
       xReadOnly: $('#setXReadOnly').checked,
@@ -3025,6 +3035,11 @@ async function loadQzoneStatus() {
   }
   const time = data.updatedAt ? new Date(data.updatedAt).toLocaleString('zh-CN') : '';
   box.textContent = `已配置 · QQ ${data.uin}${time ? ` · ${time}` : ''}${data.hasPskey ? '' : ' · 缺少 p_skey，可能无法发布'}`;
+  if (data.reading) {
+    const reading = data.reading;
+    box.textContent += ` · ${reading.state === 'failed' ? `读取失败：${reading.lastError}` : reading.notice || `读取来源 ${reading.source}`}`;
+    if (reading.lastSuccessAt) box.textContent += ` · 上次成功 ${new Date(reading.lastSuccessAt).toLocaleString('zh-CN')}`;
+  }
 }
 
 async function saveQzoneCookie() {
@@ -3280,12 +3295,48 @@ async function loadServerLog(file = 'app') {
     : '今天的应用日志，读取末尾 150 行（自动脱敏，保留 14 天）。';
 }
 
+const ownerTaskStates = { running: '执行中', completed: '已完成', partial: '部分完成', cancelled: '已取消', failed: '未完成', interrupted: '曾中断，需核对' };
+const ownerTaskPhases = { planning: '正在安排步骤', executing: '正在操作', delivering: '正在发送图片', cancelling: '正在停止', finished: '已结束', stopped: '已停止' };
+function renderOwnerTasks(tasks) {
+  const box = $('#ownerTasksList');
+  if (!box) return;
+  box.replaceChildren();
+  if (!tasks.length) { box.appendChild(el('p', 'muted small', '暂无任务记录')); return; }
+  for (const task of tasks.slice(0, 12)) {
+    const row = el('div', 'card');
+    row.appendChild(el('p', '', task.text || '主人任务'));
+    row.appendChild(el('p', 'muted small', `${ownerTaskStates[task.state] || task.state} · ${ownerTaskPhases[task.phase] || ''} · ${task.steps || 0}/${task.maxSteps || 0} 步`));
+    if (task.lastError) row.appendChild(el('p', 'muted small', task.lastError.slice(0, 240)));
+    if (task.state === 'running') {
+      const cancel = el('button', '', '停止任务');
+      cancel.type = 'button';
+      cancel.addEventListener('click', async () => {
+        cancel.disabled = true;
+        try {
+          const result = await api(`/api/owner-tasks/${task.id}/cancel`, { method: 'POST', body: {} });
+          toast(result.ok ? '已请求停止后续步骤' : result.reason);
+          await loadOwnerTasks();
+        } catch (error) { toast(error.message, 'error'); }
+      });
+      row.appendChild(cancel);
+    }
+    box.appendChild(row);
+  }
+  const latest = tasks.find(task => task.state === 'running');
+  if (latest && state.streaming) showTyping(`${ownerTaskPhases[latest.phase] || '正在执行任务'} · 已执行 ${latest.steps || 0} 步`);
+}
+async function loadOwnerTasks() {
+  const result = await api('/api/owner-tasks');
+  renderOwnerTasks(result.tasks || []);
+}
+
 async function loadLogs() {
   await Promise.all([
     api('/api/self-notes').then(renderSelfNotes),
     api('/api/logs/thoughts?limit=30').then((data) => renderThoughts(data.thoughts || [])),
     api('/api/events').then((data) => renderLogEvents(data.events || [])),
     loadServerLog('app'),
+    loadOwnerTasks(),
   ]);
 }
 
@@ -3363,6 +3414,7 @@ function bindChat() {
 }
 
 function bindMemory() {
+  $('#ownerTasksRefresh').addEventListener('click', () => loadOwnerTasks().catch(error => toast(error.message, 'error')));
   $('#ownerScreenshotBtn').addEventListener('click', async event => {
     const button = event.currentTarget;
     button.disabled = true;
@@ -3557,6 +3609,11 @@ function bindSocial() {
       if (url) { title.href = url; title.target = '_blank'; title.rel = 'noopener noreferrer'; }
       row.appendChild(title);
       row.appendChild(el('p', 'muted small', `${note.summary || ''}${note.playing ? '' : '（采帧时未在播放，仅看到静帧）'}`));
+      if (note.audio) {
+        const audio = note.audio;
+        const range = `${Number(audio.startSeconds || 0).toFixed(1)} 秒起，采样 ${Number(audio.durationSeconds || 0).toFixed(1)} 秒`;
+        row.appendChild(el('p', 'muted small', audio.text ? `音轨转写（${range}）：${audio.text}` : `音轨：${audio.reason || audio.status || '未采集'}`));
+      }
       if (note.topics?.length) row.appendChild(el('p', 'muted small', `话题：${note.topics.join('、')} · ${String(note.at || '').slice(0, 16).replace('T', ' ')}`));
       box.appendChild(row);
     }

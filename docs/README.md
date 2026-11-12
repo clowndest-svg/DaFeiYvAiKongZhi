@@ -4,12 +4,14 @@
 
 ## 使用与接入（现行）
 
-- `OWNER_TOOLS_DELIVERY_20261111.md` — 主人聊天工具、桌面操作、源码读改、跨平台阅读与本轮验收
+- `OPTIMIZATION_PLAN_20261112.md` / `OPTIMIZATION_DELIVERY_20261112.md` — 视频音轨、任务进度、空间兼容读取的优化方案及验收
 
 - `SENTINEL_SERVER_SETUP.md` — 用自己的服务器做异地备份（可选，不需要服务器时用本机备份）
 - `qq-provider-migration.md` — QQ 接入端迁移与回退（SnowLuma 为主、NapCat 备选）
 
 ## 设计与验收记录（历史）
+
+- `OWNER_TOOLS_DELIVERY_20261111.md` — 主人聊天工具与桌面、源码能力的上一轮验收
 
 - `OPTIMIZATION_PLAN.md` / `OPTIMIZATION_REVIEW_20261101.md` / `OPTIMIZATION_DELIVERY_20261101.md` — 总优化方案与实施记录
 - `VERIFICATION.md` / `UI_VERIFICATION.md` / `VOICE_VERIFICATION.md` / `PRESENCE_VERIFICATION.md` — 各轮验收报告

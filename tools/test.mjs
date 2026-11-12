@@ -9,7 +9,7 @@ const full = process.argv.includes('--local');
 const isolate = pathToFileURL(path.join(root, 'tests', 'helpers', 'isolate.mjs')).href;
 const files = fs.readdirSync(path.join(root, 'tests')).filter((name) => name.endsWith('.test.js')).sort();
 const before = new Set(fs.existsSync(path.join(root, 'data')) ? fs.readdirSync(path.join(root, 'data')) : []);
-const child = spawn(process.execPath, ['--test', ...files.map((name) => path.join(root, 'tests', name))], {
+const child = spawn(process.execPath, ['--test', '--test-concurrency=4', ...files.map((name) => path.join(root, 'tests', name))], {
   cwd: root,
   windowsHide: true,
   env: {

@@ -9,7 +9,12 @@ export function settingsScopePatch(values, scope) {
   const domains = { identity: ['companion'], chat: ['model', 'memory', 'search'], voice: ['tts', 'presence'], qq: ['qq'], system: ['ui', 'cost', 'ownerTools'] };
   const patch = Object.fromEntries((domains[scope] || []).map(key => [key, values[key]]));
   if (scope === 'chat' || scope === 'proactive') patch.proactive = Object.fromEntries(Object.entries(values.proactive).filter(([key]) => ['dreamEnabled', 'dreamHour'].includes(key) === (scope === 'chat')));
-  if (['social', 'x', 'xhs'].includes(scope)) patch.social = Object.fromEntries(Object.entries(values.social).filter(([key]) => scope === 'xhs' ? key.startsWith('xhs') : scope === 'x' ? key.startsWith('x') && !key.startsWith('xhs') : !key.startsWith('x')));
+  if (['social', 'x', 'xhs', 'douyin'].includes(scope)) patch.social = Object.fromEntries(Object.entries(values.social).filter(([key]) => {
+    if (scope === 'xhs') return key.startsWith('xhs');
+    if (scope === 'x') return key.startsWith('x') && !key.startsWith('xhs');
+    if (scope === 'douyin') return key.startsWith('douyin');
+    return !key.startsWith('x') && !key.startsWith('douyin');
+  }));
   return patch;
 }
 

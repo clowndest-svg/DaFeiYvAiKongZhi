@@ -2,7 +2,38 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import { chromium } from 'playwright';
+import { captureMediaAudioPage, pcmAudioToWav } from '../src/video-audio.js';
 import { extractDouyinFeed, extractDouyinPageComments, extractDouyinVideoContext, openDouyinReplyTarget, probeDouyinReplySubmit } from '../src/channels/douyin.js';
+
+test('浏览器采集静音播放的真实音轨，识别静音并释放取消资源', async t => {
+  const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(fs.existsSync);
+  const browser = await chromium.launch({ executablePath, headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  t.after(() => browser.close());
+  const page = await browser.newPage();
+  const pcm = Buffer.alloc(16000 * 2 * 5);
+  for (let i = 0; i < pcm.length / 2; i++) pcm.writeInt16LE(Math.round(10000 * Math.sin(2 * Math.PI * 440 * i / 16000)), i * 2);
+  const load = async data => {
+    const wav = pcmAudioToWav({ sampleRate: 16000, pcmBase64: data.toString('base64') });
+    await page.setContent(`<audio muted loop src="data:audio/wav;base64,${wav.toString('base64')}"></audio>`);
+    await page.waitForFunction(() => document.querySelector('audio').readyState >= 2);
+  };
+  await load(pcm);
+  const sample = await page.evaluate(captureMediaAudioPage, { token: '__audioTest', seconds: 1 });
+  assert.equal(sample.ok, true, JSON.stringify(sample));
+  assert.ok(sample.peak > 0.1);
+  assert.ok(sample.durationSeconds > 0.5 && sample.durationSeconds < 2);
+  assert.equal(await page.evaluate(() => '__audioTest' in globalThis), false);
+  await load(Buffer.alloc(pcm.length));
+  assert.equal((await page.evaluate(captureMediaAudioPage, { token: '__silentTest', seconds: 1 })).status, 'silent');
+  await load(pcm);
+  const cancelled = page.evaluate(captureMediaAudioPage, { token: '__cancelAudioTest', seconds: 15 });
+  await page.waitForFunction(() => typeof globalThis.__cancelAudioTest === 'function');
+  await page.evaluate(() => globalThis.__cancelAudioTest());
+  assert.equal((await cancelled).status, 'cancelled');
+  assert.equal(await page.evaluate(() => '__cancelAudioTest' in globalThis), false);
+  await page.setContent('<p>没有播放器</p>');
+  assert.equal((await page.evaluate(captureMediaAudioPage, { token: '__missingAudioTest', seconds: 1 })).status, 'unavailable');
+});
 
 test('嵌套回复按自己的评论 ID 定位，父评论不会包含子评论正文', async t => {
   const executablePath = ['C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(fs.existsSync);

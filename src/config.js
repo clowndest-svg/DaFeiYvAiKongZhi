@@ -164,6 +164,7 @@ export function normalizeSettings(settings) {
   s.companion.userName = String(s.companion.userName || '').trim().slice(0, 20);
   s.companion.nickname = String(s.companion.nickname || '').trim().slice(0, 20);
   s.ownerTools.maxSteps = Math.max(1, Math.min(30, Math.trunc(Number(s.ownerTools.maxSteps) || 12)));
+  s.social.douyinAudioSeconds = Math.max(4, Math.min(30, Math.trunc(Number(s.social.douyinAudioSeconds) || 15)));
   s.companion.intro = String(s.companion.intro || '').trim().slice(0, 80);
 
   s.model.name = String(s.model.name || env.defaultModel).trim().slice(0, 80);

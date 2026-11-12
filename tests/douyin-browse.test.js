@@ -48,7 +48,7 @@ test('内容理解真的把画面帧发给模型：标题简介进文字，两�
   const seen = [];
   const llm = { chat: async (messages, opts) => { seen.push({ messages, opts }); return { content: JSON.stringify({ summary: '在做菜', topics: ['美食', '厨房'], tone: '轻松' }) }; } };
   const frames = ['data:image/jpeg;base64,AAA', 'data:image/jpeg;base64,BBB'];
-  const result = await summarizeDouyinVideo(llm, { title: '家常菜教程', desc: '三步做好', frames });
+  const result = await summarizeDouyinVideo(llm, { title: '家常菜教程', desc: '三步做好', frames, audio: { status: 'transcribed', text: '先把鸡蛋炒熟', startSeconds: 4, durationSeconds: 15 } });
   assert.equal(result.ok, true);
   assert.equal(result.summary, '在做菜');
   assert.deepEqual(result.topics, ['美食', '厨房']);
@@ -57,6 +57,10 @@ test('内容理解真的把画面帧发给模型：标题简介进文字，两�
   assert.equal(parts.filter(part => part.type === 'image_url').length, 2);
   assert.match(parts[0].text, /家常菜教程/);
   assert.match(parts[0].text, /三步做好/);
+  assert.match(parts[0].text, /先把鸡蛋炒熟/);
+  assert.match(parts[0].text, /起点 4 秒，长度 15 秒/);
+  assert.match(parts[0].text, /采样不代表整段音轨/);
+  assert.equal(seen[0].opts.thinking, false);
   assert.deepEqual(seen[0].opts.responseFormat, { type: 'json_object' });
 });
 

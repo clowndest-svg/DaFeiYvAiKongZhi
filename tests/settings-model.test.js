@@ -20,3 +20,9 @@ test('音色目录搜索、过滤后修正页码，空结果和末页不丢记�
   assert.equal(catalogPage(models, { filter: 'selected', selected: '12' }).items[0].id, '12');
   assert.deepEqual(catalogPage(models, { query: '无结果' }).items, []);
 });
+
+test('抖音音轨分区独立保存，动态分区不会覆盖未保存的音轨草稿', () => {
+  const social = { enabled: true, qzoneAutoReply: true, douyinAudioEnabled: false, douyinAudioSeconds: 22, xEnabled: true };
+  assert.deepEqual(settingsScopePatch({ social }, 'douyin'), { social: { douyinAudioEnabled: false, douyinAudioSeconds: 22 } });
+  assert.deepEqual(settingsScopePatch({ social }, 'social'), { social: { enabled: true, qzoneAutoReply: true } });
+});

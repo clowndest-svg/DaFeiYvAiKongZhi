@@ -100,14 +100,16 @@ function toTargetRate(wave) {
   return resampler.flush(wave.samples);
 }
 
-export async function transcribeWav(file, { locked = false } = {}) {
-  if (!locked) return asrQueue.run('asr', () => transcribeWav(file, { locked: true }));
+export async function transcribeWav(file, { locked = false, signal } = {}) {
+  signal?.throwIfAborted();
+  if (!locked) return asrQueue.run('asr', () => transcribeWav(file, { locked: true, signal }), { signal });
   const abs = String(file || '');
   if (!abs || !fs.existsSync(abs)) return { text: '', engine: 'none', error: '没有语音文件' };
   const bytes = fs.statSync(abs).size;
   if (bytes < 200) return { text: '', engine: 'none', error: '语音文件是空的' };
   if (bytes > MAX_BYTES) return { text: '', engine: 'none', error: '语音太长，先不解' };
   const engine = await ensureRecognizer();
+  signal?.throwIfAborted();
   if (!engine) return { text: '', engine: 'none', error: loadError || '识别模型没就绪' };
   const startedAt = Date.now();
   try {
@@ -115,11 +117,13 @@ export async function transcribeWav(file, { locked = false } = {}) {
     const stream = engine.createStream();
     stream.acceptWaveform({ sampleRate: SAMPLE_RATE, samples: toTargetRate(wave) });
     const result = await engine.decodeAsync(stream);
+    signal?.throwIfAborted();
     lastHeardAt = Date.now();
     const text = String(result?.text || '').replace(TAGS, '').trim();
     logger.info('本地语音识别完成', { chars: text.length, ms: lastHeardAt - startedAt });
     return { text: text.slice(0, 500), engine: 'sensevoice', emotion: result?.emotion || '' };
   } catch (error) {
+    if (signal?.aborted) throw error;
     loadError = error.message;
     logger.warn('本地语音识别失败', { error: error.message });
     return { text: '', engine: 'none', error: error.message };

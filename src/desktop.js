@@ -25,6 +25,8 @@ export async function desktopAction(input, { signal } = {}) {
       if (failure) reject(failure); else resolve(result);
     }
     child.on('error', failure => finish(failure));
+    child.stdout.setEncoding('utf8');
+    child.stderr.setEncoding('utf8');
     child.stdin.on('error', () => {});
     child.stdout.on('data', chunk => { output += chunk.toString('utf8'); });
     child.stderr.on('data', chunk => { error += chunk.toString('utf8'); });
